@@ -1,0 +1,2 @@
+export const TEAM_SYNC_INTERVAL_MS = 60_000;
+export const MARKET_REFRESH_INTERVAL_MS = 60_000;
