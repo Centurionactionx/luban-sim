@@ -1,0 +1,45 @@
+{
+  "name": "luban-sim",
+  "version": "0.1.0",
+  "description": "A collaborative, real-market-data paper-trading simulator for student teams.",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Centurionactionx/luban-sim.git"
+  },
+  "homepage": "https://github.com/Centurionactionx/luban-sim#readme",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint . --max-warnings=0",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "pnpm build && playwright test",
+    "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm test:e2e"
+  },
+  "dependencies": {
+    "next": "16.3.3",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
+    "@playwright/test": "^1.62.1",
+    "@types/node": "^24.13.3",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitest/coverage-v8": "^4.1.11",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.3",
+    "tsx": "^4.23.12",
+    "typescript": "^5",
+    "vitest": "^4.1.11"
+  },
+  "packageManager": "pnpm@11.19.0"
+}
