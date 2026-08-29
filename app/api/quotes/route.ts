@@ -1,10 +1,12 @@
 import {
-  listQuotes,
   normalizeMarketSymbol,
-  refreshAllQuotes,
-  refreshQuote,
-  searchMarketInstruments,
 } from "@/lib";
+import {
+  listRuntimeQuotes,
+  refreshAllRuntimeQuotes,
+  refreshRuntimeQuote,
+  searchRuntimeMarketInstruments,
+} from "@/lib/server/runtime";
 
 import {
   ApiError,
@@ -42,7 +44,7 @@ export async function GET(request: Request): Promise<Response> {
         );
       }
 
-      const quote = await refreshQuote(symbol);
+      const quote = await refreshRuntimeQuote(symbol);
       return json({ results: quote ? [quote] : [] });
     }
 
@@ -56,11 +58,11 @@ export async function GET(request: Request): Promise<Response> {
         );
       }
 
-      return json({ results: await searchMarketInstruments(query) });
+      return json({ results: await searchRuntimeMarketInstruments(query) });
     }
 
-    await refreshAllQuotes();
-    return json({ results: listQuotes().slice(0, 25) });
+    await refreshAllRuntimeQuotes();
+    return json({ results: (await listRuntimeQuotes()).slice(0, 25) });
   } catch (error) {
     return handleRouteError(error);
   }

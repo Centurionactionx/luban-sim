@@ -1,10 +1,12 @@
 import {
   QUOTE_RANGES,
-  getQuoteHistory,
   normalizeMarketSymbol,
-  refreshQuote,
   type QuoteRange,
 } from "@/lib";
+import {
+  getRuntimeQuoteHistory,
+  refreshRuntimeQuote,
+} from "@/lib/server/runtime";
 
 import {
   ApiError,
@@ -40,7 +42,7 @@ export async function GET(request: Request): Promise<Response> {
       );
     }
 
-    const quote = await refreshQuote(symbol);
+    const quote = await refreshRuntimeQuote(symbol);
     if (!quote) {
       throw new ApiError(
         404,
@@ -49,7 +51,10 @@ export async function GET(request: Request): Promise<Response> {
         "symbol",
       );
     }
-    const history = await getQuoteHistory(symbol, rangeValue as QuoteRange);
+    const history = await getRuntimeQuoteHistory(
+      symbol,
+      rangeValue as QuoteRange,
+    );
     return json({ quote, history });
   } catch (error) {
     return handleRouteError(error);

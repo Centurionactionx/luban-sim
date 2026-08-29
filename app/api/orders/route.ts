@@ -1,12 +1,14 @@
 import { z } from "zod";
 
 import {
-  listOrders,
   normalizeMarketSymbol,
-  placeOrder,
-  refreshQuote,
-  replayOrder,
 } from "@/lib";
+import {
+  listRuntimeOrders,
+  placeRuntimeOrder,
+  refreshRuntimeQuote,
+  replayRuntimeOrder,
+} from "@/lib/server/runtime";
 
 import {
   ApiError,
@@ -40,7 +42,7 @@ export async function GET(request: Request): Promise<Response> {
     const user = await requireAuthenticatedUser();
     const limit = parseLimit(request, { defaultValue: 25, maximum: 100 });
 
-    return json({ orders: listOrders(user.id, limit) });
+    return json({ orders: await listRuntimeOrders(user.id, limit) });
   } catch (error) {
     return handleRouteError(error);
   }
@@ -58,11 +60,11 @@ export async function POST(request: Request): Promise<Response> {
       side: order.side,
       symbol: order.symbol,
     };
-    const replay = replayOrder(input);
+    const replay = await replayRuntimeOrder(input);
     if (replay) {
       return json({ ok: true, ...replay }, { status: 201 });
     }
-    const quote = await refreshQuote(order.symbol);
+    const quote = await refreshRuntimeQuote(order.symbol);
     if (!quote) {
       throw new ApiError(
         404,
@@ -78,7 +80,7 @@ export async function POST(request: Request): Promise<Response> {
         "Trading is paused because the latest market quote could not be refreshed.",
       );
     }
-    const receipt = placeOrder(input);
+    const receipt = await placeRuntimeOrder(input, quote);
 
     return json({ ok: true, ...receipt }, { status: 201 });
   } catch (error) {

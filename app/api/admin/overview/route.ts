@@ -1,4 +1,7 @@
-import { getAdminOverview, refreshAllQuotes } from "@/lib";
+import {
+  getRuntimeAdminOverview,
+  refreshAllRuntimeQuotes,
+} from "@/lib/server/runtime";
 
 import {
   handleRouteError,
@@ -11,8 +14,8 @@ export const dynamic = "force-dynamic";
 export async function GET(): Promise<Response> {
   try {
     const user = await requireHostUser();
-    await refreshAllQuotes();
-    return json(getAdminOverview(user.id));
+    await refreshAllRuntimeQuotes();
+    return json(await getRuntimeAdminOverview(user.id));
   } catch (error) {
     return handleRouteError(error);
   }

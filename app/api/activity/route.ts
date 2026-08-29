@@ -1,4 +1,4 @@
-import { listActivity } from "@/lib";
+import { listRuntimeActivity } from "@/lib/server/runtime";
 
 import {
   handleRouteError,
@@ -14,7 +14,7 @@ export async function GET(request: Request): Promise<Response> {
     const user = await requireAuthenticatedUser();
     const limit = parseLimit(request, { defaultValue: 30, maximum: 100 });
 
-    return json({ activity: listActivity(user.id, limit) });
+    return json({ activity: await listRuntimeActivity(user.id, limit) });
   } catch (error) {
     return handleRouteError(error);
   }

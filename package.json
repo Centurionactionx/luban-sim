@@ -13,8 +13,10 @@
   },
   "scripts": {
     "dev": "next dev",
+    "prebuild": "tsx scripts/migrate-postgres.ts",
     "build": "next build",
     "start": "next start",
+    "db:migrate:remote": "tsx scripts/migrate-postgres.ts --remote",
     "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -24,12 +26,14 @@
   },
   "dependencies": {
     "next": "16.3.3",
+    "postgres": "^3.4.9",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",
+    "@electric-sql/pglite": "^0.5.8",
     "@playwright/test": "^1.62.1",
     "@types/node": "^24.13.3",
     "@types/react": "^19",

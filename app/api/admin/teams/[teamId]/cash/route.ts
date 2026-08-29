@@ -1,6 +1,10 @@
 import { z } from "zod";
 
-import { MAX_TEAM_CASH_CENTS, refreshAllQuotes, setTeamCash } from "@/lib";
+import { MAX_TEAM_CASH_CENTS } from "@/lib";
+import {
+  refreshAllRuntimeQuotes,
+  setRuntimeTeamCash,
+} from "@/lib/server/runtime";
 
 import {
   ApiError,
@@ -32,8 +36,8 @@ export async function PATCH(
     }
 
     const { cashCents } = cashSchema.parse(await parseJson(request));
-    await refreshAllQuotes();
-    const overview = setTeamCash({
+    await refreshAllRuntimeQuotes();
+    const overview = await setRuntimeTeamCash({
       actorUserId: user.id,
       teamId,
       cashCents,

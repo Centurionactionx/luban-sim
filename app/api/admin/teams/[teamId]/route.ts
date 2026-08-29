@@ -1,6 +1,9 @@
 import { z } from "zod";
 
-import { refreshAllQuotes, setTeamStatus } from "@/lib";
+import {
+  refreshAllRuntimeQuotes,
+  setRuntimeTeamStatus,
+} from "@/lib/server/runtime";
 
 import {
   ApiError,
@@ -41,8 +44,8 @@ export async function PATCH(
     }
 
     const { status } = statusSchema.parse(await parseJson(request));
-    await refreshAllQuotes();
-    const overview = setTeamStatus({
+    await refreshAllRuntimeQuotes();
+    const overview = await setRuntimeTeamStatus({
       actorUserId: user.id,
       status,
       teamId,

@@ -35,11 +35,16 @@ Browser session (Johnny / Menon / Radin / Joe as Host)
           └── cached MarketDataProvider interface ──► Yahoo search + chart feeds
                  │                                    (prototype only)
                  ▼
-      Node 24 SQLite, WAL journal mode
-      data/luban.sqlite (local, regenerable)
+       Explicit persistence selector
+          ├── Local / tests / Vercel Preview
+          │      Node 24 SQLite + WAL
+          │      data/luban.sqlite (regenerable)
+          └── Vercel Production
+                 Supabase PostgreSQL
+                 pooled server-only POSTGRES_URL
 ```
 
-The browser never computes or writes the authoritative balance. The order route refreshes its market quote before opening a database transaction. `placeOrder` then starts a SQLite `BEGIN IMMEDIATE` transaction, rechecks idempotency and the latest durable balances, applies the cash and position change, records the order, ledger entry, activity event, and portfolio version, then commits them together. SQLite serializes competing writers; an idempotent replay is returned without depending on the external market feed.
+The browser never computes or writes the authoritative balance. The order route refreshes its market quote before opening a database transaction. Local execution uses SQLite `BEGIN IMMEDIATE`; Vercel Production uses a PostgreSQL transaction with an idempotency advisory lock, a shared competition-state lock, and a team row lock. Both paths recheck durable balances and commit cash, holdings, order, ledger, activity, and portfolio version atomically. Production instances therefore share one Supabase portfolio instead of relying on a function filesystem.
 
 ## Run it locally
 
@@ -56,9 +61,9 @@ Open [http://localhost:3000](http://localhost:3000). The app signs into Johnny a
 
 No market-data API key is required. The default provider calls Yahoo Finance from the Next.js server, caches symbol searches for 10 minutes, current quotes for at least 60 seconds, applies a 60-second cooldown after failures or rate limits, caches daily history for 15 minutes, and preserves the last real response as visibly stale if a refresh fails. Search accepts company names or tickers and filters results to equities on the TSX, Nasdaq, NYSE, NYSE American, and NYSE Arca; TSXV, CSE, NEO, OTC, funds, options, warrants, rights, and units are excluded. Search results are metadata only: the server fetches a chart and persists an instrument only when a user selects it. Unowned discoveries do not join the global refresh loop, while the selected quote and every held position still refresh at the one-minute market cadence. This prevents catalog growth from multiplying upstream requests. It never replaces a failed real response with generated chart points. Copy `.env.example` only if you need to make the provider mode explicit; `LUBAN_MARKET_DATA_PROVIDER=synthetic` is intended for deterministic tests, not the demonstration.
 
-The database seeds itself on first use. To start over, switch to `Joe (Host)` and use **Reset demo data**. The same reset is available through `POST /api/admin/reset` for automated verification.
+The local SQLite database seeds itself on first use. To start over locally, switch to `Joe (Host)` and use **Reset demo data**. Production is seeded non-destructively by its migration runner; the reset endpoint is deliberately disabled against the shared Production database.
 
-For Vercel and Supabase setup, including the current SQLite limitation, see [DEPLOYMENT.md](./DEPLOYMENT.md).
+For the guarded Vercel/Supabase migration and environment rules, see [DEPLOYMENT.md](./DEPLOYMENT.md).
 
 ## Demo identities
 
@@ -83,7 +88,7 @@ pnpm build
 pnpm test:e2e
 ```
 
-`pnpm test` includes provider fixtures plus a two-process contention test against one SQLite file. The provider tests verify exact timestamps, null-candle removal, request coalescing, stale-cache disclosure, upstream failure, and all four range mappings. Playwright uses the locally installed Chrome and covers range switching, separate student contexts, visible host controls, phone-width behavior, and automated accessibility checks.
+`pnpm test` includes provider fixtures, a two-process contention test against one SQLite file, environment-isolation checks, migration-runner guards, and execution of the real PostgreSQL migration and seed in an in-memory local PostgreSQL engine. No test opens a Supabase connection. Playwright uses the locally installed Chrome and covers range switching, separate student contexts, visible host controls, phone-width behavior, and automated accessibility checks.
 
 ## API surface
 
@@ -103,15 +108,17 @@ pnpm test:e2e
 | `PATCH /api/admin/competition` | Pause or resume the competition |
 | `PATCH /api/admin/teams/:teamId` | Freeze, disqualify, or restore a team |
 | `PATCH /api/admin/teams/:teamId/cash` | Set a team's exact CAD cash balance in cents |
-| `POST /api/admin/reset` | Restore seeded prototype state |
+| `POST /api/admin/reset` | Restore local seeded state; rejected in Production |
 
 All responses are private and `no-store`. Business conflicts return stable error codes such as `INSUFFICIENT_CASH`, `INSUFFICIENT_SHARES`, `TRADING_CLOSED`, and `IDEMPOTENCY_CONFLICT`.
 
 ## Where the server side should be hosted
 
-For this local prototype, the UI, route handlers, domain services, and SQLite database all run in one Node.js process on the developer's computer.
+Locally, the UI, route handlers, domain services, and SQLite database all run on the developer's computer. The provider guard forces this path even if a `POSTGRES_URL` was previously pulled into the shell.
 
-For a no-cost public preview, a practical current path is a free Render Node web service paired with a free Neon or Supabase Postgres database. Render's free web service sleeps after inactivity and its filesystem is ephemeral, so the checked-in SQLite adapter must not be treated as persistent there. Render explicitly recommends an external relational database for durable state. Neon and Supabase both publish free Postgres tiers suitable for a small prototype. See the current provider limits before an event:
+The deployed architecture uses Vercel for the Next.js UI/functions and the connected Supabase PostgreSQL resource for durable shared state. Production migrations run during the guarded Vercel prebuild; Preview remains intentionally isolated on disposable SQLite until it has a separate non-production database.
+
+Other free hosting combinations remain possible, including a Node service paired with Neon or Supabase. Their quotas and sleep/compute policies change, so check current limits before an event:
 
 - [Render free services and limitations](https://render.com/docs/free)
 - [Neon pricing](https://neon.com/pricing)
@@ -119,13 +126,13 @@ For a no-cost public preview, a practical current path is a free Render Node web
 
 Vercel can host the Next.js UI and route handlers, but its free Hobby plan is limited to personal, non-commercial use. If Luban is deploying this as an organizational service, confirm plan eligibility rather than assuming Hobby applies: [Vercel Hobby plan](https://vercel.com/docs/plans/hobby).
 
-Before any multi-instance deployment, replace `lib/server/db.ts` with a managed PostgreSQL adapter while keeping the existing service contracts and transaction rules. Replace the keyless Yahoo prototype adapter with a licensed Canadian/U.S. market-data agreement that has published availability, delay, redistribution, and rate-limit terms.
+Before public or commercial use, replace the keyless Yahoo prototype adapter with a licensed Canadian/U.S. market-data agreement that has published availability, delay, redistribution, and rate-limit terms.
 
 ## Not production-ready yet
 
 - Replace demo switching with real authentication, invitations, team membership, and host authorization.
 - Define privacy, parental-consent, safeguarding, retention, and account-deletion policies for minors.
-- Migrate SQLite to managed PostgreSQL and add formal migrations, backups, monitoring, and rate limits.
+- Configure database backups, monitoring, alerting, connection budgets, and application rate limits.
 - Replace the working Yahoo prototype feed with licensed Canadian/U.S. market data before public or commercial redistribution; keep brokerage execution out of scope unless Luban deliberately enters a regulated workflow.
 - Add competition creation/rule management, email flows, recovery, audit export, and operational support tooling.
 - Run a formal accessibility audit with students using phones and assistive technology.
@@ -136,6 +143,10 @@ Before any multi-instance deployment, replace `lib/server/db.ts` with a managed 
 - `app/api/` — authenticated HTTP boundary
 - `lib/server/trading.ts` — atomic/idempotent order transaction
 - `lib/server/quotes.ts` — cached Yahoo adapter, exact history parser, and deterministic test provider
-- `lib/server/db.ts` — schema, seed data, WAL configuration, and reset
+- `lib/server/db.ts` — local SQLite schema, seed data, WAL configuration, and reset
+- `lib/server/database-provider.ts` — local/Preview/Production isolation guard
+- `lib/server/postgres/` — Supabase queries, quotes, transactions, and host controls
+- `supabase/migrations/` — checksum-tracked PostgreSQL schema
+- `scripts/migrate-postgres.ts` — guarded Production migration runner
 - `tests/integration/concurrency.test.ts` — real two-process cash contention proof
 - `tests/e2e/` — browser-level multi-session and accessibility verification

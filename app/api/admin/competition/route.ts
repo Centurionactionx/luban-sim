@@ -1,6 +1,9 @@
 import { z } from "zod";
 
-import { refreshAllQuotes, setCompetitionStatus } from "@/lib";
+import {
+  refreshAllRuntimeQuotes,
+  setRuntimeCompetitionStatus,
+} from "@/lib/server/runtime";
 
 import {
   handleRouteError,
@@ -25,8 +28,8 @@ export async function PATCH(request: Request): Promise<Response> {
   try {
     const user = await requireHostUser();
     const { status } = statusSchema.parse(await parseJson(request));
-    await refreshAllQuotes();
-    const overview = setCompetitionStatus({
+    await refreshAllRuntimeQuotes();
+    const overview = await setRuntimeCompetitionStatus({
       actorUserId: user.id,
       status,
     });

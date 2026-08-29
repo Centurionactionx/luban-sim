@@ -1,4 +1,8 @@
-import { getDashboard, listDemoUsers, refreshAllQuotes } from "@/lib";
+import {
+  getRuntimeDashboard,
+  listRuntimeDemoUsers,
+  refreshAllRuntimeQuotes,
+} from "@/lib/server/runtime";
 
 import {
   handleRouteError,
@@ -13,12 +17,12 @@ export async function GET(request: Request): Promise<Response> {
     const user = await requireAuthenticatedUser();
     const refreshMarket =
       new URL(request.url).searchParams.get("refreshMarket") !== "0";
-    if (refreshMarket) await refreshAllQuotes();
-    const dashboard = getDashboard(user.id);
+    if (refreshMarket) await refreshAllRuntimeQuotes();
+    const dashboard = await getRuntimeDashboard(user.id);
 
     return json({
       ...dashboard,
-      session: { user, demoUsers: listDemoUsers() },
+      session: { user, demoUsers: await listRuntimeDemoUsers() },
     });
   } catch (error) {
     return handleRouteError(error);

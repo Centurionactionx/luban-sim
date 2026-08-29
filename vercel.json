@@ -1,0 +1,12 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "pnpm build",
+  "env": {
+    "LUBAN_DATABASE_PROVIDER": "postgres"
+  },
+  "build": {
+    "env": {
+      "LUBAN_DATABASE_PROVIDER": "postgres"
+    }
+  }
+}
