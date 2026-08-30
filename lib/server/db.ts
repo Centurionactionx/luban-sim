@@ -375,8 +375,17 @@ function requirePostgresUrl(): string {
 }
 
 function createPgPoolDriver(): PgDriver {
-  const connectionString = requirePostgresUrl();
-  const host = new URL(connectionString).hostname;
+  // Providers embed sslmode=require in their URLs, and node-postgres lets
+  // that override an explicit ssl option — which then fails against
+  // Supabase's self-signed pooler CA. Strip the URL's ssl parameters so the
+  // pool option below is the single authority: TLS on, chain unverified
+  // (the standard arrangement for Supabase's pooler).
+  const url = new URL(requirePostgresUrl());
+  for (const param of ["sslmode", "ssl", "sslcert", "sslkey", "sslrootcert"]) {
+    url.searchParams.delete(param);
+  }
+  const connectionString = url.toString();
+  const host = url.hostname;
   const local = host === "localhost" || host === "127.0.0.1";
 
   // int8 and numeric arrive as strings by default; every value in this
