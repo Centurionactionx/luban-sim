@@ -42,7 +42,7 @@ export async function POST(request: Request): Promise<Response> {
       );
     }
 
-    const user = consumeInvitation(token, identity);
+    const user = await consumeInvitation(token, identity);
 
     return json({ ok: true, user }, { status: 201 });
   } catch (error) {

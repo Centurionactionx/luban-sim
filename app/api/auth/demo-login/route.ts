@@ -39,7 +39,7 @@ export async function POST(request: Request): Promise<Response> {
     }
 
     const { userId } = loginSchema.parse(await parseJson(request));
-    const user = getSessionUser(userId);
+    const user = await getSessionUser(userId);
 
     if (!user) {
       return errorResponse(
@@ -53,10 +53,10 @@ export async function POST(request: Request): Promise<Response> {
     const cookieStore = await cookies();
     const previousToken = cookieStore.get(SESSION_COOKIE_NAME)?.value;
     if (previousToken) {
-      invalidateSessionToken(previousToken);
+      await invalidateSessionToken(previousToken);
     }
 
-    const token = createSessionToken(user.id);
+    const token = await createSessionToken(user.id);
     cookieStore.set(
       SESSION_COOKIE_NAME,
       token,

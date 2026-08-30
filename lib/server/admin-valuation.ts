@@ -9,7 +9,7 @@ import type { MarketDataSource } from "../contracts";
 import { AppError } from "../errors";
 import { MARKET_REFRESH_INTERVAL_MS } from "../market-config";
 import { getSessionUser } from "./auth";
-import { getDatabase } from "./db";
+import { getDb } from "./db";
 import {
   getHistoricalMarketPrice,
   getHistoricalSplitMultipliers,
@@ -65,8 +65,8 @@ function roundPercent(numerator: number, denominator: number): number {
     : Math.round((numerator / denominator) * 10_000) / 100;
 }
 
-function requirePlatformAdminActor(actorUserId: string): void {
-  const user = getSessionUser(actorUserId);
+async function requirePlatformAdminActor(actorUserId: string): Promise<void> {
+  const user = await getSessionUser(actorUserId);
   if (!user) {
     throw new AppError("UNAUTHORIZED", "Sign in to continue.", 401);
   }
@@ -139,9 +139,10 @@ function normalizePositionInput(
   };
 }
 
-function readPositionRows(actorUserId: string): PositionRow[] {
-  return getDatabase()
-    .prepare(`
+async function readPositionRows(actorUserId: string): Promise<PositionRow[]> {
+  const db = await getDb();
+  return db.all<PositionRow>(
+    `
       SELECT
         p.id, p.admin_user_id, p.idempotency_key, p.request_fingerprint,
         p.symbol, i.name, i.exchange, i.listing_currency,
@@ -154,8 +155,9 @@ function readPositionRows(actorUserId: string): PositionRow[] {
       JOIN instruments AS i ON i.symbol = p.symbol
       WHERE p.admin_user_id = ?
       ORDER BY p.created_at DESC, p.id DESC
-    `)
-    .all(actorUserId) as unknown as PositionRow[];
+    `,
+    [actorUserId],
+  );
 }
 
 async function refreshSplitMultipliers(
@@ -222,28 +224,21 @@ async function refreshSplitMultipliers(
     );
     refreshed.push(...batchResults.flat());
   }
-  const database = getDatabase();
+  const database = await getDb();
   const checkedAt = at.toISOString();
 
-  database.exec("BEGIN IMMEDIATE;");
-  try {
-    const update = database.prepare(`
-      UPDATE admin_valuation_positions
-      SET split_multiplier_ppm = ?, split_checked_at = ?
-      WHERE id = ?
-    `);
+  await database.transaction(async (tx) => {
     for (const item of refreshed) {
-      update.run(item.splitMultiplierPpm, checkedAt, item.id);
+      await tx.run(
+        `
+          UPDATE admin_valuation_positions
+          SET split_multiplier_ppm = ?, split_checked_at = ?
+          WHERE id = ?
+        `,
+        [item.splitMultiplierPpm, checkedAt, item.id],
+      );
     }
-    database.exec("COMMIT;");
-  } catch (error) {
-    try {
-      database.exec("ROLLBACK;");
-    } catch {
-      // Preserve the database error that initiated the rollback.
-    }
-    throw error;
-  }
+  });
 
   const values = new Map(
     rows.map((row) => [row.id, Number(row.split_multiplier_ppm)]),
@@ -269,8 +264,8 @@ export async function getAdminValuationPortfolio(
   actorUserId: string,
   at: Date = new Date(),
 ): Promise<AdminValuationPortfolio> {
-  requirePlatformAdminActor(actorUserId);
-  const rows = readPositionRows(actorUserId);
+  await requirePlatformAdminActor(actorUserId);
+  const rows = await readPositionRows(actorUserId);
   const symbols = [...new Set(rows.map((row) => row.symbol))];
   const [refreshedQuotes, splitMultipliers] = await Promise.all([
     Promise.all(
@@ -375,18 +370,17 @@ export async function createAdminValuationPosition(
   input: CreateAdminValuationPositionInput,
   at: Date = new Date(),
 ): Promise<AdminValuationPortfolio> {
-  requirePlatformAdminActor(input.actorUserId);
+  await requirePlatformAdminActor(input.actorUserId);
   const normalized = normalizePositionInput(input);
-  const database = getDatabase();
-  const existing = database
-    .prepare(`
+  const database = await getDb();
+  const existing = await database.get<ExistingPositionRow>(
+    `
       SELECT request_fingerprint
       FROM admin_valuation_positions
       WHERE admin_user_id = ? AND idempotency_key = ?
-    `)
-    .get(normalized.actorUserId, normalized.idempotencyKey) as
-    | ExistingPositionRow
-    | undefined;
+    `,
+    [normalized.actorUserId, normalized.idempotencyKey],
+  );
   if (existing) {
     if (existing.request_fingerprint !== normalized.fingerprint) {
       throw new AppError(
@@ -415,18 +409,15 @@ export async function createAdminValuationPosition(
   const grossCents = historical.closeCadCents * normalized.quantity;
   assertSafeMoney(grossCents);
 
-  database.exec("BEGIN IMMEDIATE;");
-  let transactionOpen = true;
-  try {
-    const replay = database
-      .prepare(`
+  await database.transaction(async (tx) => {
+    const replay = await tx.get<ExistingPositionRow>(
+      `
         SELECT request_fingerprint
         FROM admin_valuation_positions
         WHERE admin_user_id = ? AND idempotency_key = ?
-      `)
-      .get(normalized.actorUserId, normalized.idempotencyKey) as
-      | ExistingPositionRow
-      | undefined;
+      `,
+      [normalized.actorUserId, normalized.idempotencyKey],
+    );
     if (replay) {
       if (replay.request_fingerprint !== normalized.fingerprint) {
         throw new AppError(
@@ -435,19 +426,20 @@ export async function createAdminValuationPosition(
           409,
         );
       }
-      database.exec("COMMIT;");
-      transactionOpen = false;
-      return getAdminValuationPortfolio(normalized.actorUserId, at);
+      // Replayed request: commit without inserting and fall through to the
+      // portfolio read below.
+      return;
     }
 
-    const count = database
-      .prepare(`
+    const count = await tx.get<{ count: number }>(
+      `
         SELECT COUNT(*) AS count
         FROM admin_valuation_positions
         WHERE admin_user_id = ?
-      `)
-      .get(normalized.actorUserId) as { count: number };
-    if (Number(count.count) >= MAX_POSITIONS_PER_ADMIN) {
+      `,
+      [normalized.actorUserId],
+    );
+    if (Number(count?.count ?? 0) >= MAX_POSITIONS_PER_ADMIN) {
       throw new AppError(
         "VALUATION_POSITION_LIMIT",
         `The test lab supports up to ${MAX_POSITIONS_PER_ADMIN} purchases. Clear it before adding more.`,
@@ -455,8 +447,8 @@ export async function createAdminValuationPosition(
       );
     }
 
-    database
-      .prepare(`
+    await tx.run(
+      `
         INSERT INTO admin_valuation_positions (
           id, admin_user_id, idempotency_key, request_fingerprint,
           symbol, requested_date, session_date, session_at, quantity,
@@ -464,8 +456,8 @@ export async function createAdminValuationPosition(
           historical_fx_rate_basis_points, split_multiplier_ppm,
           split_checked_at, source, source_url, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `)
-      .run(
+      `,
+      [
         randomUUID(),
         normalized.actorUserId,
         normalized.idempotencyKey,
@@ -486,19 +478,9 @@ export async function createAdminValuationPosition(
         historical.source,
         historical.sourceUrl,
         at.toISOString(),
-      );
-    database.exec("COMMIT;");
-    transactionOpen = false;
-  } catch (error) {
-    if (transactionOpen) {
-      try {
-        database.exec("ROLLBACK;");
-      } catch {
-        // Preserve the original domain or database error.
-      }
-    }
-    throw error;
-  }
+      ],
+    );
+  });
 
   return getAdminValuationPortfolio(normalized.actorUserId, at);
 }
@@ -507,9 +489,10 @@ export async function clearAdminValuationPortfolio(
   actorUserId: string,
   at: Date = new Date(),
 ): Promise<AdminValuationPortfolio> {
-  requirePlatformAdminActor(actorUserId);
-  getDatabase()
-    .prepare("DELETE FROM admin_valuation_positions WHERE admin_user_id = ?")
-    .run(actorUserId);
+  await requirePlatformAdminActor(actorUserId);
+  const db = await getDb();
+  await db.run("DELETE FROM admin_valuation_positions WHERE admin_user_id = ?", [
+    actorUserId,
+  ]);
   return getAdminValuationPortfolio(actorUserId, at);
 }

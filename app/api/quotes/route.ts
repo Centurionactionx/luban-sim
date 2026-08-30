@@ -65,7 +65,7 @@ export async function GET(request: Request): Promise<Response> {
     }
 
     await refreshAllQuotes();
-    return json({ results: listQuotes().slice(0, 25) });
+    return json({ results: (await listQuotes()).slice(0, 25) });
   } catch (error) {
     return handleRouteError(error);
   }

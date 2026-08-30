@@ -12,7 +12,7 @@ export async function GET(): Promise<Response> {
   try {
     const user = await requireHostUser();
     await refreshAllQuotes();
-    return json(getAdminOverview(user.id));
+    return json(await getAdminOverview(user.id));
   } catch (error) {
     return handleRouteError(error);
   }

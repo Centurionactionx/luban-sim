@@ -14,8 +14,12 @@ import { canHostCompetitions } from "../contracts";
 import { AppError } from "../errors";
 import { getSessionUser } from "./auth";
 import {
+  ADVISORY_LOCK_ACCOUNTS,
+  acquireAdvisoryLock,
+} from "./database";
+import {
   assertLedgerReconciles,
-  getDatabase,
+  getDb,
   resetPrototypeDatabase,
   withReadTransaction,
 } from "./db";
@@ -47,8 +51,8 @@ interface CashTeamRow {
   version: number;
 }
 
-function requireHost(actorUserId: string): void {
-  const user = getSessionUser(actorUserId);
+async function requireHost(actorUserId: string): Promise<void> {
+  const user = await getSessionUser(actorUserId);
 
   if (!user) {
     throw new AppError("UNAUTHORIZED", "Sign in to continue.", 401);
@@ -114,12 +118,15 @@ function formatCad(cents: number): string {
   }).format(cents / 100);
 }
 
-export function listAdminTeams(actorUserId: string): AdminTeamSummary[] {
-  requireHost(actorUserId);
+export async function listAdminTeams(
+  actorUserId: string,
+): Promise<AdminTeamSummary[]> {
+  await requireHost(actorUserId);
   const now = new Date();
-  const competition = getCompetitionSummary();
-  const rows = getDatabase()
-    .prepare(`
+  const competition = await getCompetitionSummary();
+  const db = await getDb();
+  const rows = await db.all<AdminTeamRow>(
+    `
       SELECT
         t.id, t.name, t.status, t.cash_cents, t.version,
         COUNT(o.id) AS trade_count
@@ -128,14 +135,17 @@ export function listAdminTeams(actorUserId: string): AdminTeamSummary[] {
       WHERE t.competition_id = ?
       GROUP BY t.id
       ORDER BY t.name ASC
-    `)
-    .all(competition.id) as unknown as AdminTeamRow[];
+    `,
+    [competition.id],
+  );
 
-  return rows.map((row) => {
-    const team = getTeamSummary(row.id);
-    const portfolio = calculatePortfolio(row.id, now).summary;
+  const summaries: AdminTeamSummary[] = [];
 
-    return {
+  for (const row of rows) {
+    const team = await getTeamSummary(row.id);
+    const portfolio = (await calculatePortfolio(row.id, now)).summary;
+
+    summaries.push({
       id: row.id,
       name: row.name,
       status: row.status,
@@ -146,42 +156,45 @@ export function listAdminTeams(actorUserId: string): AdminTeamSummary[] {
       returnPercent: portfolio.totalReturnPercent,
       tradeCount: Number(row.trade_count),
       version: Number(row.version),
-    };
-  });
+    });
+  }
+
+  return summaries;
 }
 
-export function getAdminOverview(actorUserId: string): AdminOverview {
-  return withReadTransaction(() => {
-    requireHost(actorUserId);
+export async function getAdminOverview(
+  actorUserId: string,
+): Promise<AdminOverview> {
+  return withReadTransaction(async () => {
+    await requireHost(actorUserId);
     return {
-      competition: getCompetitionSummary(),
-      teams: listAdminTeams(actorUserId),
-      recentActivity: listActivity(actorUserId, 30),
+      competition: await getCompetitionSummary(),
+      teams: await listAdminTeams(actorUserId),
+      recentActivity: await listActivity(actorUserId, 30),
       generatedAt: new Date().toISOString(),
     };
   });
 }
 
-export function updateCompetitionStatus(
+export async function updateCompetitionStatus(
   input: UpdateCompetitionStatusInput,
-): AdminOverview {
-  requireHost(input.actorUserId);
+): Promise<AdminOverview> {
+  await requireHost(input.actorUserId);
   const status = normalizeCompetitionStatus(input.status);
-  const database = getDatabase();
-  const competition = getCompetitionSummary();
+  const db = await getDb();
+  const competition = await getCompetitionSummary();
 
   if (competition.status === status) {
     return getAdminOverview(input.actorUserId);
   }
 
-  database.exec("BEGIN IMMEDIATE;");
+  await db.transaction(async (tx) => {
+    const changed = await tx.run(
+      "UPDATE competitions SET status = ? WHERE id = ? AND status = ?",
+      [status, competition.id, competition.status],
+    );
 
-  try {
-    const changed = database
-      .prepare("UPDATE competitions SET status = ? WHERE id = ? AND status = ?")
-      .run(status, competition.id, competition.status);
-
-    if (Number(changed.changes) !== 1) {
+    if (changed.changes !== 1) {
       throw new AppError(
         "ADMIN_CONFLICT",
         "The competition changed while the update was being applied.",
@@ -189,32 +202,25 @@ export function updateCompetitionStatus(
       );
     }
 
-    const actor = getSessionUser(input.actorUserId);
+    const actor = await getSessionUser(input.actorUserId);
     const createdAt = new Date().toISOString();
-    database
-      .prepare(`
+    await tx.run(
+      `
         INSERT INTO activity_events (
           id, competition_id, team_id, actor_user_id, type,
           title, detail, created_at
         ) VALUES (?, ?, NULL, ?, 'COMPETITION_STATUS_CHANGED', ?, ?, ?)
-      `)
-      .run(
+      `,
+      [
         randomUUID(),
         competition.id,
         input.actorUserId,
         `Competition ${status}`,
         `${actor?.name ?? "Host"} changed the competition from ${competition.status} to ${status}.`,
         createdAt,
-      );
-    database.exec("COMMIT;");
-  } catch (error) {
-    try {
-      database.exec("ROLLBACK;");
-    } catch {
-      // Preserve the domain or database error that caused the rollback.
-    }
-    throw error;
-  }
+      ],
+    );
+  });
 
   return getAdminOverview(input.actorUserId);
 }
@@ -250,10 +256,10 @@ function normalizeScheduleInstant(
  * "active" competition accepts orders only between startsAt and endsAt, so
  * scheduling a start or end needs no timer — it takes effect by clock.
  */
-export function updateCompetitionSchedule(
+export async function updateCompetitionSchedule(
   input: UpdateCompetitionScheduleInput,
-): AdminOverview {
-  requireHost(input.actorUserId);
+): Promise<AdminOverview> {
+  await requireHost(input.actorUserId);
 
   if (
     input.startsAt === undefined &&
@@ -267,30 +273,24 @@ export function updateCompetitionSchedule(
     );
   }
 
-  const database = getDatabase();
-  let transactionOpen = false;
+  const db = await getDb();
 
-  database.exec("BEGIN IMMEDIATE;");
-  transactionOpen = true;
+  await db.transaction(async (tx) => {
+    await acquireAdvisoryLock(tx, ADVISORY_LOCK_ACCOUNTS);
 
-  try {
-    const competition = database
-      .prepare(`
-        SELECT id, name, status, starting_cash_cents, starts_at, ends_at
-        FROM competitions
-        ORDER BY created_at DESC
-        LIMIT 1
-      `)
-      .get() as
-      | {
-          id: string;
-          name: string;
-          status: CompetitionStatus;
-          starting_cash_cents: number;
-          starts_at: string;
-          ends_at: string;
-        }
-      | undefined;
+    const competition = await tx.get<{
+      id: string;
+      name: string;
+      status: CompetitionStatus;
+      starting_cash_cents: number;
+      starts_at: string;
+      ends_at: string;
+    }>(`
+      SELECT id, name, status, starting_cash_cents, starts_at, ends_at
+      FROM competitions
+      ORDER BY created_at DESC
+      LIMIT 1
+    `);
 
     if (!competition) {
       throw new AppError(
@@ -333,9 +333,10 @@ export function updateCompetitionSchedule(
       startsAt !== competition.starts_at || endsAt !== competition.ends_at;
 
     if (scheduleChanged) {
-      database
-        .prepare("UPDATE competitions SET starts_at = ?, ends_at = ? WHERE id = ?")
-        .run(startsAt, endsAt, competition.id);
+      await tx.run(
+        "UPDATE competitions SET starts_at = ?, ends_at = ? WHERE id = ?",
+        [startsAt, endsAt, competition.id],
+      );
     }
 
     let cashChanged = false;
@@ -359,16 +360,29 @@ export function updateCompetitionSchedule(
         );
       }
 
-      const traded = database
-        .prepare(`
+      // Lock every team row before the traded-count gate. On PostgreSQL a
+      // concurrent order's version-CAS UPDATE blocks on these locks until
+      // this transaction ends, and an order that committed first is visible
+      // to the count below — so the rebuild can never erase a trade that
+      // slipped in around the gate. SQLite's single-writer transactions
+      // already serialize this; FOR UPDATE is not valid syntax there.
+      if (tx.engine === "postgres") {
+        await tx.all("SELECT id FROM teams WHERE competition_id = ? FOR UPDATE", [
+          competition.id,
+        ]);
+      }
+
+      const traded = await tx.get<{ count: number }>(
+        `
           SELECT COUNT(*) AS count
           FROM orders o
           JOIN teams t ON t.id = o.team_id
           WHERE t.competition_id = ?
-        `)
-        .get(competition.id) as { count: number };
+        `,
+        [competition.id],
+      );
 
-      if (Number(traded.count) > 0) {
+      if (Number(traded?.count ?? 0) > 0) {
         throw new AppError(
           "STARTING_CASH_LOCKED",
           "Starting cash cannot change once trading has begun. Reset the demo data or adjust individual team balances instead.",
@@ -377,46 +391,48 @@ export function updateCompetitionSchedule(
         );
       }
 
-      database
-        .prepare("UPDATE competitions SET starting_cash_cents = ? WHERE id = ?")
-        .run(cashCents, competition.id);
+      await tx.run(
+        "UPDATE competitions SET starting_cash_cents = ? WHERE id = ?",
+        [cashCents, competition.id],
+      );
 
       // No orders exist, so each team's ledger holds only its starting-cash
       // entry (plus any pre-start host adjustments). Rebuild it as a single
       // fresh STARTING_CASH line so cash and ledger reconcile exactly.
-      const teams = database
-        .prepare("SELECT id FROM teams WHERE competition_id = ?")
-        .all(competition.id) as unknown as Array<{ id: string }>;
+      const teams = await tx.all<{ id: string }>(
+        "SELECT id FROM teams WHERE competition_id = ?",
+        [competition.id],
+      );
       const nowIso = new Date().toISOString();
 
       for (const team of teams) {
-        database
-          .prepare("UPDATE teams SET cash_cents = ?, version = version + 1 WHERE id = ?")
-          .run(cashCents, team.id);
-        database
-          .prepare("DELETE FROM ledger_entries WHERE team_id = ?")
-          .run(team.id);
-        database
-          .prepare(`
+        await tx.run(
+          "UPDATE teams SET cash_cents = ?, version = version + 1 WHERE id = ?",
+          [cashCents, team.id],
+        );
+        await tx.run("DELETE FROM ledger_entries WHERE team_id = ?", [team.id]);
+        await tx.run(
+          `
             INSERT INTO ledger_entries (
               id, team_id, order_id, entry_type, amount_cents,
               symbol, quantity, note, created_at
             ) VALUES (?, ?, NULL, 'STARTING_CASH', ?, NULL, NULL, ?, ?)
-          `)
-          .run(
+          `,
+          [
             randomUUID(),
             team.id,
             cashCents,
             "Competition starting balance",
             nowIso,
-          );
+          ],
+        );
       }
 
       cashChanged = true;
     }
 
     if (scheduleChanged || cashChanged) {
-      const actor = getSessionUser(input.actorUserId);
+      const actor = await getSessionUser(input.actorUserId);
       const changes: string[] = [];
 
       if (scheduleChanged) {
@@ -430,60 +446,50 @@ export function updateCompetitionSchedule(
         );
       }
 
-      database
-        .prepare(`
+      await tx.run(
+        `
           INSERT INTO activity_events (
             id, competition_id, team_id, actor_user_id, type,
             title, detail, created_at
           ) VALUES (?, ?, NULL, ?, 'COMPETITION_SCHEDULE_CHANGED', ?, ?, ?)
-        `)
-        .run(
+        `,
+        [
           randomUUID(),
           competition.id,
           input.actorUserId,
           "Competition schedule updated",
           `${actor?.name ?? "Host"} set ${changes.join(" and ")}.`,
           new Date().toISOString(),
-        );
+        ],
+      );
 
-      assertLedgerReconciles();
+      await assertLedgerReconciles();
     }
-
-    database.exec("COMMIT;");
-    transactionOpen = false;
-  } catch (error) {
-    if (transactionOpen) {
-      try {
-        database.exec("ROLLBACK;");
-      } catch {
-        // Preserve the domain or database error that caused the rollback.
-      }
-    }
-    throw error;
-  }
+  });
 
   return getAdminOverview(input.actorUserId);
 }
 
-export function updateTeamStatus(input: UpdateTeamStatusInput): AdminOverview {
-  requireHost(input.actorUserId);
+export async function updateTeamStatus(
+  input: UpdateTeamStatusInput,
+): Promise<AdminOverview> {
+  await requireHost(input.actorUserId);
   const status = normalizeTeamStatus(input.status);
-  const database = getDatabase();
-  const competition = getCompetitionSummary();
-  const team = getTeamSummary(input.teamId);
+  const db = await getDb();
+  const competition = await getCompetitionSummary();
+  const team = await getTeamSummary(input.teamId);
 
   if (team.status === status) {
     return getAdminOverview(input.actorUserId);
   }
 
-  database.exec("BEGIN IMMEDIATE;");
+  await db.transaction(async (tx) => {
+    const changed = await tx.run(
+      "UPDATE teams SET status = ?, version = version + 1 WHERE id = ? AND status = ?",
+      [status, input.teamId, team.status],
+    );
 
-  try {
-    const changed = database
-      .prepare("UPDATE teams SET status = ?, version = version + 1 WHERE id = ? AND status = ?")
-      .run(status, input.teamId, team.status);
-
-    if (Number(changed.changes) !== 1) {
+    if (changed.changes !== 1) {
       throw new AppError(
         "ADMIN_CONFLICT",
         "The team changed while the update was being applied.",
@@ -491,16 +497,16 @@ export function updateTeamStatus(input: UpdateTeamStatusInput): AdminOverview {
       );
     }
 
-    const actor = getSessionUser(input.actorUserId);
+    const actor = await getSessionUser(input.actorUserId);
     const createdAt = new Date().toISOString();
-    database
-      .prepare(`
+    await tx.run(
+      `
         INSERT INTO activity_events (
           id, competition_id, team_id, actor_user_id, type,
           title, detail, created_at
         ) VALUES (?, ?, ?, ?, 'TEAM_STATUS_CHANGED', ?, ?, ?)
-      `)
-      .run(
+      `,
+      [
         randomUUID(),
         competition.id,
         input.teamId,
@@ -508,37 +514,27 @@ export function updateTeamStatus(input: UpdateTeamStatusInput): AdminOverview {
         `${team.name} ${status}`,
         `${actor?.name ?? "Host"} changed ${team.name} from ${team.status} to ${status}.`,
         createdAt,
-      );
-    database.exec("COMMIT;");
-  } catch (error) {
-    try {
-      database.exec("ROLLBACK;");
-    } catch {
-      // Preserve the domain or database error that caused the rollback.
-    }
-    throw error;
-  }
+      ],
+    );
+  });
 
   return getAdminOverview(input.actorUserId);
 }
 
-export function setTeamCash(input: SetTeamCashInput): AdminOverview {
-  requireHost(input.actorUserId);
+export async function setTeamCash(input: SetTeamCashInput): Promise<AdminOverview> {
+  await requireHost(input.actorUserId);
   const cashCents = normalizeCashCents(input.cashCents);
-  const database = getDatabase();
-  let transactionOpen = false;
+  const db = await getDb();
 
-  database.exec("BEGIN IMMEDIATE;");
-  transactionOpen = true;
-
-  try {
-    const team = database
-      .prepare(`
+  await db.transaction(async (tx) => {
+    const team = await tx.get<CashTeamRow>(
+      `
         SELECT id, competition_id, name, cash_cents, version
         FROM teams
         WHERE id = ?
-      `)
-      .get(input.teamId) as CashTeamRow | undefined;
+      `,
+      [input.teamId],
+    );
 
     if (!team) {
       throw new AppError("TEAM_NOT_FOUND", "That team does not exist.", 404);
@@ -546,20 +542,20 @@ export function setTeamCash(input: SetTeamCashInput): AdminOverview {
 
     const previousCashCents = Number(team.cash_cents);
     if (previousCashCents === cashCents) {
-      database.exec("COMMIT;");
-      transactionOpen = false;
-      return getAdminOverview(input.actorUserId);
+      // No-op: commit without writing and fall through to the overview.
+      return;
     }
 
-    const changed = database
-      .prepare(`
+    const changed = await tx.run(
+      `
         UPDATE teams
         SET cash_cents = ?, version = version + 1
         WHERE id = ? AND version = ?
-      `)
-      .run(cashCents, team.id, team.version);
+      `,
+      [cashCents, team.id, team.version],
+    );
 
-    if (Number(changed.changes) !== 1) {
+    if (changed.changes !== 1) {
       throw new AppError(
         "ADMIN_CONFLICT",
         "The team changed while its cash balance was being updated.",
@@ -567,31 +563,32 @@ export function setTeamCash(input: SetTeamCashInput): AdminOverview {
       );
     }
 
-    const actor = getSessionUser(input.actorUserId);
+    const actor = await getSessionUser(input.actorUserId);
     const createdAt = new Date().toISOString();
     const adjustmentCents = cashCents - previousCashCents;
-    database
-      .prepare(`
+    await tx.run(
+      `
         INSERT INTO ledger_entries (
           id, team_id, order_id, entry_type, amount_cents,
           symbol, quantity, note, created_at
         ) VALUES (?, ?, NULL, 'ADJUSTMENT', ?, NULL, NULL, ?, ?)
-      `)
-      .run(
+      `,
+      [
         randomUUID(),
         team.id,
         adjustmentCents,
         `Host cash adjustment from ${formatCad(previousCashCents)} to ${formatCad(cashCents)}`,
         createdAt,
-      );
-    database
-      .prepare(`
+      ],
+    );
+    await tx.run(
+      `
         INSERT INTO activity_events (
           id, competition_id, team_id, actor_user_id, type,
           title, detail, created_at
         ) VALUES (?, ?, ?, ?, 'TEAM_CASH_ADJUSTED', ?, ?, ?)
-      `)
-      .run(
+      `,
+      [
         randomUUID(),
         team.competition_id,
         team.id,
@@ -599,37 +596,29 @@ export function setTeamCash(input: SetTeamCashInput): AdminOverview {
         `${team.name} cash adjusted`,
         `${actor?.name ?? "Host"} changed ${team.name}'s cash from ${formatCad(previousCashCents)} to ${formatCad(cashCents)}.`,
         createdAt,
-      );
+      ],
+    );
 
-    assertLedgerReconciles();
-    database.exec("COMMIT;");
-    transactionOpen = false;
-  } catch (error) {
-    if (transactionOpen) {
-      try {
-        database.exec("ROLLBACK;");
-      } catch {
-        // Preserve the original domain or database error.
-      }
-    }
-    throw error;
-  }
+    await assertLedgerReconciles();
+  });
 
   return getAdminOverview(input.actorUserId);
 }
 
-export function setCompetitionStatus(
+export async function setCompetitionStatus(
   input: UpdateCompetitionStatusInput,
-): AdminOverview {
+): Promise<AdminOverview> {
   return updateCompetitionStatus(input);
 }
 
-export function setTeamStatus(input: UpdateTeamStatusInput): AdminOverview {
+export async function setTeamStatus(
+  input: UpdateTeamStatusInput,
+): Promise<AdminOverview> {
   return updateTeamStatus(input);
 }
 
-export function resetPrototype(actorUserId: string): AdminOverview {
-  requireHost(actorUserId);
-  resetPrototypeDatabase();
+export async function resetPrototype(actorUserId: string): Promise<AdminOverview> {
+  await requireHost(actorUserId);
+  await resetPrototypeDatabase();
   return getAdminOverview(actorUserId);
 }

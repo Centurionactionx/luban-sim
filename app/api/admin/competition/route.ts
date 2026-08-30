@@ -63,7 +63,7 @@ export async function PATCH(request: Request): Promise<Response> {
       update.startsAt !== undefined ||
       update.endsAt !== undefined ||
       update.startingCashCents !== undefined
-        ? updateCompetitionSchedule({
+        ? await updateCompetitionSchedule({
             actorUserId: user.id,
             startsAt: update.startsAt,
             endsAt: update.endsAt,
@@ -72,7 +72,7 @@ export async function PATCH(request: Request): Promise<Response> {
         : null;
 
     if (update.status !== undefined) {
-      overview = setCompetitionStatus({
+      overview = await setCompetitionStatus({
         actorUserId: user.id,
         status: update.status,
       });

@@ -12,7 +12,7 @@ export async function GET(): Promise<Response> {
   try {
     const authMode = getAuthMode();
     const user = await getAuthenticatedUser();
-    const demoUsers = isDemoLoginAllowed() ? listDemoUsers() : [];
+    const demoUsers = isDemoLoginAllowed() ? await listDemoUsers() : [];
 
     if (!user) {
       return json({ authenticated: false, authMode, demoUsers });

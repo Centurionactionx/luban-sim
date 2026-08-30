@@ -35,7 +35,7 @@ export async function GET(): Promise<Response> {
   try {
     const user = await requireHostUser();
 
-    return json({ invitations: listInvitations(user.id) });
+    return json({ invitations: await listInvitations(user.id) });
   } catch (error) {
     return handleRouteError(error);
   }
@@ -46,7 +46,7 @@ export async function POST(request: Request): Promise<Response> {
     const user = await requireHostUser();
     const input = createSchema.parse(await parseJson(request));
 
-    const created = createInvitation({
+    const created = await createInvitation({
       actorUserId: user.id,
       role: input.role,
       teamId: input.teamId ?? null,

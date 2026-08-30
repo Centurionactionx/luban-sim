@@ -12,7 +12,7 @@ export async function POST(request: Request): Promise<Response> {
     const token = cookieStore.get(SESSION_COOKIE_NAME)?.value;
 
     if (token) {
-      invalidateSessionToken(token);
+      await invalidateSessionToken(token);
     }
 
     cookieStore.set(SESSION_COOKIE_NAME, "", {

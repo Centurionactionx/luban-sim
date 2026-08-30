@@ -27,7 +27,7 @@ export async function POST(): Promise<Response> {
     // Best-effort valuation freshness only: a market-data outage must never
     // block the host from pausing, scheduling, resetting, or fixing balances.
     await refreshAllQuotes().catch(() => {});
-    const overview = resetPrototype(user.id);
+    const overview = await resetPrototype(user.id);
 
     return json({ ok: true, ...overview });
   } catch (error) {

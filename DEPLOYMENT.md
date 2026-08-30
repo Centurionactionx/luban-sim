@@ -1,6 +1,25 @@
 # Vercel deployment handoff
 
-The Next.js application builds on Vercel, but the current SQLite persistence layer is local-prototype infrastructure. Do not treat a Vercel deployment as durable until `lib/server/db.ts` and its synchronous callers have been migrated to managed PostgreSQL.
+The application now runs on either of two database engines behind one async
+data layer:
+
+- **SQLite** (default): zero-setup local file, used for development and the
+  automated test suites. On Vercel it is ephemeral — fine for a stateless
+  demo, wrong for real accounts.
+- **PostgreSQL** (durable): selected only when `LUBAN_DATABASE_PROVIDER=postgres`
+  is explicitly set, connecting via `LUBAN_DATABASE_URL` (or the
+  `POSTGRES_URL` the Supabase Vercel integration provides — use the pooled,
+  transaction-mode URL). Tables are created and the demo world seeded
+  automatically on first boot, serialized by an advisory lock, with row-level
+  security enabled and no anon policies. The engine choice is never inferred
+  from the mere presence of credentials.
+
+To make the live site durable: install the Supabase integration (or create a
+Supabase project and copy its pooled connection string), set the two
+variables above in Vercel, and redeploy. The PostgreSQL code paths are
+exercised in CI against an embedded Postgres, and the ledger invariants
+(atomic orders, idempotent replays, optimistic portfolio versioning) are
+enforced identically on both engines.
 
 ## Recommended service stack
 

@@ -19,13 +19,13 @@ export async function GET(request: Request): Promise<Response> {
     const refreshMarket =
       new URL(request.url).searchParams.get("refreshMarket") !== "0";
     if (refreshMarket) await refreshAllQuotes();
-    const dashboard = getDashboard(user.id);
+    const dashboard = await getDashboard(user.id);
 
     return json({
       ...dashboard,
       session: {
         user,
-        demoUsers: isDemoLoginAllowed() ? listDemoUsers() : [],
+        demoUsers: isDemoLoginAllowed() ? await listDemoUsers() : [],
       },
     });
   } catch (error) {

@@ -12,7 +12,7 @@ export async function DELETE(
     const user = await requireHostUser();
     const { invitationId } = await context.params;
 
-    return json({ invitation: revokeInvitation(user.id, invitationId) });
+    return json({ invitation: await revokeInvitation(user.id, invitationId) });
   } catch (error) {
     return handleRouteError(error);
   }

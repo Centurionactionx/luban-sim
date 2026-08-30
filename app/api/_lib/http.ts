@@ -20,7 +20,7 @@ const NO_STORE_HEADERS = {
 
 export const SESSION_MAX_AGE_SECONDS = SESSION_TTL_SECONDS;
 
-type SessionUser = NonNullable<ReturnType<typeof getSessionFromToken>>;
+type SessionUser = NonNullable<Awaited<ReturnType<typeof getSessionFromToken>>>;
 
 export class ApiError extends Error {
   constructor(
@@ -112,7 +112,7 @@ export async function getAuthenticatedUser(): Promise<SessionUser | null> {
     return null;
   }
 
-  const user = getSessionFromToken(token);
+  const user = await getSessionFromToken(token);
   if (!user) {
     cookieStore.set(SESSION_COOKIE_NAME, "", {
       httpOnly: true,

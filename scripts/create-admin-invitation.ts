@@ -41,7 +41,7 @@ async function main(): Promise<void> {
     "../lib/server/invitations"
   );
 
-  const created = createSystemAdminInvitation({
+  const created = await createSystemAdminInvitation({
     email: values.email ?? null,
     invitedName: values.name ?? null,
     expiresInHours: hours,

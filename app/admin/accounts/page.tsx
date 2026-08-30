@@ -42,7 +42,7 @@ export default async function AccountsPage() {
   }
 
   const token = (await cookies()).get(SESSION_COOKIE_NAME)?.value;
-  const user = token ? getSessionFromToken(token) : null;
+  const user = token ? await getSessionFromToken(token) : null;
 
   if (!user || !canHostCompetitions(user.role)) {
     redirect("/");

@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 
 import type { DemoUser, SessionUser, UserRole, UserStatus } from "../contracts";
 import { AppError } from "../errors";
-import { getDatabase } from "./db";
+import { getDb } from "./db";
 
 export const SESSION_COOKIE_NAME = "luban_session";
 export const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
@@ -60,9 +60,10 @@ function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
-export function getSessionUser(userId: string): SessionUser | null {
-  const row = getDatabase()
-    .prepare(`
+export async function getSessionUser(userId: string): Promise<SessionUser | null> {
+  const db = await getDb();
+  const row = await db.get<UserRow>(
+    `
       SELECT
         u.id,
         u.name,
@@ -75,19 +76,20 @@ export function getSessionUser(userId: string): SessionUser | null {
       LEFT JOIN team_members tm ON tm.user_id = u.id
       LEFT JOIN teams t ON t.id = tm.team_id
       WHERE u.id = ?
-    `)
-    .get(userId) as UserRow | undefined;
+    `,
+    [userId],
+  );
 
   return row ? rowToSessionUser(row) : null;
 }
 
-export function listDemoUsers(): DemoUser[] {
+export async function listDemoUsers(): Promise<DemoUser[]> {
   // Only seeded demo identities are switchable. Accounts created through
   // managed sign-in carry an auth_subject and must never be listed or
   // assumable through the demo identity switcher, even if the same database
   // is later reopened in demo mode.
-  const rows = getDatabase()
-    .prepare(`
+  const db = await getDb();
+  const rows = await db.all<UserRow>(`
       SELECT
         u.id,
         u.name,
@@ -101,8 +103,7 @@ export function listDemoUsers(): DemoUser[] {
       LEFT JOIN teams t ON t.id = tm.team_id
       WHERE u.auth_subject IS NULL
       ORDER BY CASE u.role WHEN 'student' THEN 0 ELSE 1 END, u.name ASC
-    `)
-    .all() as unknown as UserRow[];
+    `);
 
   return rows.map((row) => {
     const user = rowToSessionUser(row);
@@ -117,19 +118,21 @@ export function listDemoUsers(): DemoUser[] {
   });
 }
 
-export function createSessionToken(
+export async function createSessionToken(
   userId: string,
   ttlSeconds = SESSION_TTL_SECONDS,
-): string {
-  const user = getSessionUser(userId);
+): Promise<string> {
+  const user = await getSessionUser(userId);
 
   if (!user) {
     throw new AppError("USER_NOT_FOUND", "That demo user does not exist.", 404);
   }
 
-  const subjectRow = getDatabase()
-    .prepare("SELECT auth_subject FROM users WHERE id = ?")
-    .get(userId) as { auth_subject: string | null } | undefined;
+  const db = await getDb();
+  const subjectRow = await db.get<{ auth_subject: string | null }>(
+    "SELECT auth_subject FROM users WHERE id = ?",
+    [userId],
+  );
 
   if (subjectRow?.auth_subject) {
     throw new AppError(
@@ -147,32 +150,38 @@ export function createSessionToken(
     );
   }
 
-  const database = getDatabase();
   const token = randomBytes(32).toString("base64url");
   const now = new Date();
   const expiresAt = new Date(now.getTime() + ttlSeconds * 1_000);
 
-  database
-    .prepare("DELETE FROM sessions WHERE expires_at <= ? OR revoked_at IS NOT NULL")
-    .run(now.toISOString());
-  database
-    .prepare(`
+  await db.transaction(async (tx) => {
+    await tx.run(
+      "DELETE FROM sessions WHERE expires_at <= ? OR revoked_at IS NOT NULL",
+      [now.toISOString()],
+    );
+    await tx.run(
+      `
       INSERT INTO sessions (token_hash, user_id, expires_at, created_at, revoked_at)
       VALUES (?, ?, ?, ?, NULL)
-    `)
-    .run(hashToken(token), userId, expiresAt.toISOString(), now.toISOString());
+    `,
+      [hashToken(token), userId, expiresAt.toISOString(), now.toISOString()],
+    );
+  });
 
   return token;
 }
 
-export function getSessionFromToken(token: string | null | undefined): SessionUser | null {
+export async function getSessionFromToken(
+  token: string | null | undefined,
+): Promise<SessionUser | null> {
   if (!token || token.length < 32 || token.length > 256) {
     return null;
   }
 
   const now = new Date().toISOString();
-  const row = getDatabase()
-    .prepare(`
+  const db = await getDb();
+  const row = await db.get<UserRow>(
+    `
       SELECT
         u.id,
         u.name,
@@ -189,24 +198,31 @@ export function getSessionFromToken(token: string | null | undefined): SessionUs
         AND s.revoked_at IS NULL
         AND s.expires_at > ?
         AND u.status = 'active'
-    `)
-    .get(hashToken(token), now) as UserRow | undefined;
+    `,
+    [hashToken(token), now],
+  );
 
   return row ? rowToSessionUser(row) : null;
 }
 
-export function verifySessionToken(token: string | null | undefined): SessionUser | null {
+export async function verifySessionToken(
+  token: string | null | undefined,
+): Promise<SessionUser | null> {
   return getSessionFromToken(token);
 }
 
-export function invalidateSessionToken(token: string | null | undefined): void {
+export async function invalidateSessionToken(
+  token: string | null | undefined,
+): Promise<void> {
   if (!token) {
     return;
   }
 
-  getDatabase()
-    .prepare("UPDATE sessions SET revoked_at = ? WHERE token_hash = ?")
-    .run(new Date().toISOString(), hashToken(token));
+  const db = await getDb();
+  await db.run("UPDATE sessions SET revoked_at = ? WHERE token_hash = ?", [
+    new Date().toISOString(),
+    hashToken(token),
+  ]);
 }
 
 export function readSessionTokenFromCookieHeader(

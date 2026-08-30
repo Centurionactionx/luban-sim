@@ -75,7 +75,7 @@ export default async function AdminValuationLabPage() {
   }
 
   const token = (await cookies()).get(SESSION_COOKIE_NAME)?.value;
-  const user = token ? getSessionFromToken(token) : null;
+  const user = token ? await getSessionFromToken(token) : null;
 
   if (!user || user.role !== "platform_admin") {
     redirect("/");

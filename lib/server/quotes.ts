@@ -8,7 +8,7 @@ import type {
 import type { HistoricalMarketPrice } from "../backtest-contracts";
 import { AppError } from "../errors";
 import { MARKET_REFRESH_INTERVAL_MS } from "../market-config";
-import { getDatabase } from "./db";
+import { getDb } from "./db";
 
 export const QUOTE_DELAY_MINUTES = 15;
 
@@ -1401,23 +1401,22 @@ function normalizeAt(at?: Date | string): Date {
   return parsed;
 }
 
-function readInstruments(): MarketInstrument[] {
-  const rows = getDatabase()
-    .prepare(`
+async function readInstruments(): Promise<MarketInstrument[]> {
+  const db = await getDb();
+  const rows = await db.all<InstrumentRow>(`
       SELECT
         symbol, name, exchange, sector, listing_currency,
         base_price_cents, previous_close_cents, fx_rate_basis_points
       FROM instruments
       WHERE is_active = 1
       ORDER BY symbol ASC
-    `)
-    .all() as unknown as InstrumentRow[];
+    `);
   return rows.map(rowToInstrument);
 }
 
-function readRefreshInstruments(): MarketInstrument[] {
-  const rows = getDatabase()
-    .prepare(`
+async function readRefreshInstruments(): Promise<MarketInstrument[]> {
+  const db = await getDb();
+  const rows = await db.all<InstrumentRow>(`
       SELECT
         i.symbol, i.name, i.exchange, i.sector, i.listing_currency,
         i.base_price_cents, i.previous_close_cents, i.fx_rate_basis_points
@@ -1432,15 +1431,17 @@ function readRefreshInstruments(): MarketInstrument[] {
           )
         )
       ORDER BY i.symbol ASC
-    `)
-    .all() as unknown as InstrumentRow[];
+    `);
   return rows.map(rowToInstrument);
 }
 
-function readInstrumentSearchResults(query: string): InstrumentSearchResult[] {
+async function readInstrumentSearchResults(
+  query: string,
+): Promise<InstrumentSearchResult[]> {
   const normalized = `%${query.trim().toLowerCase()}%`;
-  const rows = getDatabase()
-    .prepare(`
+  const db = await getDb();
+  const rows = await db.all<InstrumentRow>(
+    `
       SELECT
         symbol, name, exchange, sector, listing_currency,
         base_price_cents, previous_close_cents, fx_rate_basis_points
@@ -1454,8 +1455,9 @@ function readInstrumentSearchResults(query: string): InstrumentSearchResult[] {
         )
       ORDER BY symbol ASC
       LIMIT 25
-    `)
-    .all(normalized, normalized, normalized, normalized) as unknown as InstrumentRow[];
+    `,
+    [normalized, normalized, normalized, normalized],
+  );
   return rows.map((row) => ({
     symbol: row.symbol,
     name: row.name,
@@ -1465,16 +1467,18 @@ function readInstrumentSearchResults(query: string): InstrumentSearchResult[] {
   }));
 }
 
-function readInstrument(symbol: string): MarketInstrument | null {
-  const row = getDatabase()
-    .prepare(`
+async function readInstrument(symbol: string): Promise<MarketInstrument | null> {
+  const db = await getDb();
+  const row = await db.get<InstrumentRow>(
+    `
       SELECT
         symbol, name, exchange, sector, listing_currency,
         base_price_cents, previous_close_cents, fx_rate_basis_points
       FROM instruments
       WHERE symbol = ? AND is_active = 1
-    `)
-    .get(normalizeMarketSymbol(symbol)) as InstrumentRow | undefined;
+    `,
+    [normalizeMarketSymbol(symbol)],
+  );
   return row ? rowToInstrument(row) : null;
 }
 
@@ -1489,12 +1493,13 @@ function instrumentFromSearchResult(
   };
 }
 
-function persistDiscoveredInstrument(
+async function persistDiscoveredInstrument(
   result: InstrumentSearchResult,
   quote: Quote,
-): void {
-  getDatabase()
-    .prepare(`
+): Promise<void> {
+  const db = await getDb();
+  await db.run(
+    `
       INSERT INTO instruments (
         symbol, name, exchange, sector, listing_currency,
         base_price_cents, previous_close_cents, fx_rate_basis_points,
@@ -1509,8 +1514,8 @@ function persistDiscoveredInstrument(
         previous_close_cents = excluded.previous_close_cents,
         fx_rate_basis_points = excluded.fx_rate_basis_points,
         is_active = 1
-    `)
-    .run(
+    `,
+    [
       result.symbol,
       result.name,
       result.exchange,
@@ -1519,7 +1524,8 @@ function persistDiscoveredInstrument(
       quote.priceCents,
       quote.previousCloseCents,
       quote.fxRateBasisPoints,
-    );
+    ],
+  );
 }
 
 async function resolveInstrument(
@@ -1538,7 +1544,7 @@ export async function refreshQuote(
   at?: Date | string,
 ): Promise<Quote | null> {
   const normalizedSymbol = normalizeMarketSymbol(symbol);
-  let instrument = readInstrument(normalizedSymbol);
+  let instrument = await readInstrument(normalizedSymbol);
   const quoteAt = normalizeAt(at);
   if (!instrument) {
     if (!MARKET_SYMBOL_PATTERN.test(normalizedSymbol)) return null;
@@ -1548,7 +1554,7 @@ export async function refreshQuote(
     const quote = activeProvider.refreshQuote
       ? await activeProvider.refreshQuote(instrument, quoteAt)
       : activeProvider.quote(instrument, quoteAt);
-    persistDiscoveredInstrument(discovered, quote);
+    await persistDiscoveredInstrument(discovered, quote);
     return quote;
   }
   return activeProvider.refreshQuote
@@ -1559,7 +1565,7 @@ export async function refreshQuote(
 export async function refreshAllQuotes(at?: Date | string): Promise<void> {
   const quoteAt = normalizeAt(at);
   const results = await Promise.allSettled(
-    readRefreshInstruments().map((instrument) =>
+    (await readRefreshInstruments()).map((instrument) =>
       activeProvider.refreshQuote
         ? activeProvider.refreshQuote(instrument, quoteAt)
         : Promise.resolve(activeProvider.quote(instrument, quoteAt)),
@@ -1577,8 +1583,11 @@ export async function refreshAllQuotes(at?: Date | string): Promise<void> {
   }
 }
 
-export function getQuote(symbol: string, at?: Date | string): Quote | null {
-  const instrument = readInstrument(symbol);
+export async function getQuote(
+  symbol: string,
+  at?: Date | string,
+): Promise<Quote | null> {
+  const instrument = await readInstrument(symbol);
   if (!instrument) return null;
   try {
     return activeProvider.quote(instrument, normalizeAt(at));
@@ -1593,8 +1602,11 @@ export function getQuote(symbol: string, at?: Date | string): Quote | null {
   }
 }
 
-export function requireQuote(symbol: string, at?: Date | string): Quote {
-  const quote = getQuote(symbol, at);
+export async function requireQuote(
+  symbol: string,
+  at?: Date | string,
+): Promise<Quote> {
+  const quote = await getQuote(symbol, at);
   if (!quote) {
     throw new AppError(
       "UNKNOWN_SYMBOL",
@@ -1611,7 +1623,7 @@ export async function getQuoteHistory(
   range: QuoteRange,
   at?: Date | string,
 ): Promise<QuoteHistory> {
-  const instrument = readInstrument(symbol);
+  const instrument = await readInstrument(symbol);
   if (!instrument) {
     throw new AppError(
       "UNKNOWN_SYMBOL",
@@ -1641,11 +1653,11 @@ export async function getHistoricalMarketPrice(
   const quoteAt = normalizeAt(at);
   parseHistoricalDate(requestedDate, quoteAt);
   const normalizedSymbol = normalizeMarketSymbol(symbol);
-  let instrument = readInstrument(normalizedSymbol);
+  let instrument = await readInstrument(normalizedSymbol);
 
   if (!instrument) {
     await refreshQuote(normalizedSymbol, quoteAt);
-    instrument = readInstrument(normalizedSymbol);
+    instrument = await readInstrument(normalizedSymbol);
   }
   if (!instrument) {
     throw new AppError(
@@ -1678,10 +1690,10 @@ export async function getHistoricalSplitMultipliers(
   }
 
   const normalizedSymbol = normalizeMarketSymbol(symbol);
-  let instrument = readInstrument(normalizedSymbol);
+  let instrument = await readInstrument(normalizedSymbol);
   if (!instrument) {
     await refreshQuote(normalizedSymbol, quoteAt);
-    instrument = readInstrument(normalizedSymbol);
+    instrument = await readInstrument(normalizedSymbol);
   }
   if (!instrument) {
     throw new AppError(
@@ -1719,9 +1731,9 @@ export async function getHistoricalSplitMultipliers(
   );
 }
 
-export function listQuotes(at?: Date | string): Quote[] {
+export async function listQuotes(at?: Date | string): Promise<Quote[]> {
   const quoteAt = normalizeAt(at);
-  return readInstruments().flatMap((instrument) => {
+  return (await readInstruments()).flatMap((instrument) => {
     try {
       return [activeProvider.quote(instrument, quoteAt)];
     } catch (error) {
@@ -1733,9 +1745,12 @@ export function listQuotes(at?: Date | string): Quote[] {
   });
 }
 
-export function searchInstruments(query: string, at?: Date | string): Quote[] {
+export async function searchInstruments(
+  query: string,
+  at?: Date | string,
+): Promise<Quote[]> {
   const normalized = query.trim().toLowerCase();
-  const quotes = listQuotes(at);
+  const quotes = await listQuotes(at);
   if (!normalized) return quotes;
   return quotes.filter((quote) =>
     [quote.symbol, quote.name, quote.exchange, quote.sector].some((value) =>
@@ -1748,7 +1763,7 @@ export async function searchMarketInstruments(
   query: string,
 ): Promise<InstrumentSearchResult[]> {
   const normalizedQuery = query.trim();
-  const local = readInstrumentSearchResults(normalizedQuery);
+  const local = await readInstrumentSearchResults(normalizedQuery);
   const exactSymbol = normalizeMarketSymbol(normalizedQuery);
   const tsxAlias = tsxAliasForBareTickerQuery(normalizedQuery);
   const exactLocal = local.find((result) => result.symbol === exactSymbol);

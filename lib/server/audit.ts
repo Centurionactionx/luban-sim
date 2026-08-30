@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { AuthAuditEventView } from "../contracts";
-import { getDatabase } from "./db";
+import { getDb } from "./db";
 
 export type AuthAuditType =
   | "INVITATION_CREATED"
@@ -33,14 +33,17 @@ interface AuditRow {
  * session identifiers in `detail` or `metadata`. Safe to call inside an open
  * transaction; it uses the same connection.
  */
-export function recordAuthAuditEvent(input: RecordAuthAuditInput): void {
-  getDatabase()
-    .prepare(`
+export async function recordAuthAuditEvent(
+  input: RecordAuthAuditInput,
+): Promise<void> {
+  const db = await getDb();
+  await db.run(
+    `
       INSERT INTO auth_audit_events (
         id, type, actor_user_id, subject_user_id, detail, metadata_json, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?)
-    `)
-    .run(
+    `,
+    [
       randomUUID(),
       input.type,
       input.actorUserId ?? null,
@@ -48,12 +51,16 @@ export function recordAuthAuditEvent(input: RecordAuthAuditInput): void {
       input.detail,
       input.metadata ? JSON.stringify(input.metadata) : null,
       new Date().toISOString(),
-    );
+    ],
+  );
 }
 
-export function listAuthAuditEvents(limit = 50): AuthAuditEventView[] {
-  const rows = getDatabase()
-    .prepare(`
+export async function listAuthAuditEvents(
+  limit = 50,
+): Promise<AuthAuditEventView[]> {
+  const db = await getDb();
+  const rows = await db.all<AuditRow>(
+    `
       SELECT
         e.id,
         e.type,
@@ -66,8 +73,9 @@ export function listAuthAuditEvents(limit = 50): AuthAuditEventView[] {
       LEFT JOIN users subject ON subject.id = e.subject_user_id
       ORDER BY e.created_at DESC, e.id DESC
       LIMIT ?
-    `)
-    .all(Math.min(Math.max(Math.trunc(limit), 1), 200)) as unknown as AuditRow[];
+    `,
+    [Math.min(Math.max(Math.trunc(limit), 1), 200)],
+  );
 
   return rows.map((row) => ({
     id: row.id,

@@ -41,7 +41,7 @@ export async function GET(request: Request): Promise<Response> {
     const user = await requireAuthenticatedUser();
     const limit = parseLimit(request, { defaultValue: 25, maximum: 100 });
 
-    return json({ orders: listOrders(user.id, limit) });
+    return json({ orders: await listOrders(user.id, limit) });
   } catch (error) {
     return handleRouteError(error);
   }
@@ -59,7 +59,7 @@ export async function POST(request: Request): Promise<Response> {
       side: order.side,
       symbol: order.symbol,
     };
-    const replay = replayOrder(input);
+    const replay = await replayOrder(input);
     if (replay) {
       return json({ ok: true, ...replay }, { status: 201 });
     }
@@ -83,7 +83,7 @@ export async function POST(request: Request): Promise<Response> {
         "Trading is paused because the latest market quote could not be refreshed.",
       );
     }
-    const receipt = placeOrder(input);
+    const receipt = await placeOrder(input);
 
     return json({ ok: true, ...receipt }, { status: 201 });
   } catch (error) {

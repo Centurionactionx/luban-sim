@@ -35,8 +35,8 @@ Browser session (Johnny / Menon / Radin / Joe as Host)
           └── cached MarketDataProvider interface ──► Yahoo search + chart feeds
                  │                                    (prototype only)
                  ▼
-      Node 24 SQLite, WAL journal mode
-      data/luban.sqlite (local, regenerable)
+      One async data layer, two engines:
+      SQLite (local default, WAL)  |  PostgreSQL (LUBAN_DATABASE_PROVIDER=postgres)
 ```
 
 The browser never computes or writes the authoritative balance. The order route refreshes its market quote before opening a database transaction. `placeOrder` then starts a SQLite `BEGIN IMMEDIATE` transaction, rechecks idempotency and the latest durable balances, applies the cash and position change, records the order, ledger entry, activity event, and portfolio version, then commits them together. SQLite serializes competing writers; an idempotent replay is returned without depending on the external market feed.
@@ -160,13 +160,13 @@ For a no-cost public preview, a practical current path is a free Render Node web
 
 Vercel can host the Next.js UI and route handlers, but its free Hobby plan is limited to personal, non-commercial use. If Luban is deploying this as an organizational service, confirm plan eligibility rather than assuming Hobby applies: [Vercel Hobby plan](https://vercel.com/docs/plans/hobby).
 
-Before any multi-instance deployment, replace `lib/server/db.ts` with a managed PostgreSQL adapter while keeping the existing service contracts and transaction rules. Replace the keyless Yahoo prototype adapter with a licensed Canadian/U.S. market-data agreement that has published availability, delay, redistribution, and rate-limit terms.
+The data layer now runs on managed PostgreSQL when `LUBAN_DATABASE_PROVIDER=postgres` and `LUBAN_DATABASE_URL` are set (see DEPLOYMENT.md); the PostgreSQL code paths are exercised in the test suite against an embedded Postgres. Replace the keyless Yahoo prototype adapter with a licensed Canadian/U.S. market-data agreement that has published availability, delay, redistribution, and rate-limit terms.
 
 ## Not production-ready yet
 
 - Real authentication now exists behind `LUBAN_AUTH_MODE=managed` (Clerk sign-in, invitation-only registration, bootstrapped admin, admin MFA). Still open: suspension tooling UI, rate limiting, session-revocation UI, and email delivery of invitations (links are currently copied by the host).
 - Define privacy, parental-consent, safeguarding, retention, and account-deletion policies for minors.
-- Migrate SQLite to managed PostgreSQL and add formal migrations, backups, monitoring, and rate limits.
+- PostgreSQL support has landed (dual-engine data layer, tested against embedded Postgres). Still open: formal migration tooling for future schema changes, backups, and monitoring.
 - Replace the working Yahoo prototype feed with licensed Canadian/U.S. market data before public or commercial redistribution; keep brokerage execution out of scope unless Luban deliberately enters a regulated workflow.
 - Add competition creation/rule management, email flows, recovery, audit export, and operational support tooling.
 - Run a formal accessibility audit with students using phones and assistive technology.

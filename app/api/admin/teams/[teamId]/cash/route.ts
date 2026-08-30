@@ -35,7 +35,7 @@ export async function PATCH(
     // Best-effort valuation freshness only: a market-data outage must never
     // block the host from pausing, scheduling, resetting, or fixing balances.
     await refreshAllQuotes().catch(() => {});
-    const overview = setTeamCash({
+    const overview = await setTeamCash({
       actorUserId: user.id,
       teamId,
       cashCents,

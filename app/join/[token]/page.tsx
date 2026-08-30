@@ -96,7 +96,7 @@ export default async function JoinPage({
     );
   }
 
-  const preview = previewInvitation(token);
+  const preview = await previewInvitation(token);
 
   if (!preview) {
     return (

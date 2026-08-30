@@ -13,7 +13,7 @@ import { canHostCompetitions } from "../contracts";
 import { AppError } from "../errors";
 import { recordAuthAuditEvent } from "./audit";
 import { getSessionUser } from "./auth";
-import { getDatabase } from "./db";
+import { getDb } from "./db";
 
 export const DEFAULT_INVITATION_TTL_HOURS = 72;
 export const MIN_INVITATION_TTL_HOURS = 1;
@@ -165,8 +165,8 @@ function normalizeTtlHours(value: number | undefined): number {
   return value;
 }
 
-function requireInvitationManager(actorUserId: string): SessionUser {
-  const actor = getSessionUser(actorUserId);
+async function requireInvitationManager(actorUserId: string): Promise<SessionUser> {
+  const actor = await getSessionUser(actorUserId);
 
   if (!actor) {
     throw new AppError("UNAUTHORIZED", "Sign in to continue.", 401);
@@ -221,8 +221,10 @@ interface InsertInvitationParams {
   ttlHours: number;
 }
 
-function insertInvitation(params: InsertInvitationParams): CreatedInvitation {
-  const database = getDatabase();
+async function insertInvitation(
+  params: InsertInvitationParams,
+): Promise<CreatedInvitation> {
+  const db = await getDb();
   const now = new Date();
   const nowIso = now.toISOString();
   const expiresAt = new Date(
@@ -231,9 +233,7 @@ function insertInvitation(params: InsertInvitationParams): CreatedInvitation {
   const token = randomBytes(32).toString("base64url");
   const id = randomUUID();
 
-  database.exec("BEGIN IMMEDIATE;");
-
-  try {
+  await db.transaction(async (tx) => {
     let competitionId: string | null = null;
 
     if (params.role === "student") {
@@ -246,11 +246,13 @@ function insertInvitation(params: InsertInvitationParams): CreatedInvitation {
         );
       }
 
-      const team = database
-        .prepare("SELECT id, competition_id, status FROM teams WHERE id = ?")
-        .get(params.teamId) as
-        | { id: string; competition_id: string; status: string }
-        | undefined;
+      const team = await tx.get<{
+        id: string;
+        competition_id: string;
+        status: string;
+      }>("SELECT id, competition_id, status FROM teams WHERE id = ?", [
+        params.teamId,
+      ]);
 
       if (!team) {
         throw new AppError("TEAM_NOT_FOUND", "That team does not exist.", 404, {
@@ -268,15 +270,16 @@ function insertInvitation(params: InsertInvitationParams): CreatedInvitation {
       );
     }
 
-    const activeCount = database
-      .prepare(`
+    const activeCount = await tx.get<{ count: number }>(
+      `
         SELECT COUNT(*) AS count
         FROM account_invitations
         WHERE used_at IS NULL AND revoked_at IS NULL AND expires_at > ?
-      `)
-      .get(nowIso) as { count: number };
+      `,
+      [nowIso],
+    );
 
-    if (Number(activeCount.count) >= MAX_ACTIVE_INVITATIONS) {
+    if (Number(activeCount?.count ?? 0) >= MAX_ACTIVE_INVITATIONS) {
       throw new AppError(
         "TOO_MANY_INVITATIONS",
         "Revoke unused invitations before creating more.",
@@ -284,14 +287,14 @@ function insertInvitation(params: InsertInvitationParams): CreatedInvitation {
       );
     }
 
-    database
-      .prepare(`
+    await tx.run(
+      `
         INSERT INTO account_invitations (
           id, token_hash, role, email, invited_name, team_id, competition_id,
           created_by, created_at, expires_at, revoked_at, used_at, used_by
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)
-      `)
-      .run(
+      `,
+      [
         id,
         hashInvitationToken(token),
         params.role,
@@ -302,9 +305,10 @@ function insertInvitation(params: InsertInvitationParams): CreatedInvitation {
         params.createdBy,
         nowIso,
         expiresAt,
-      );
+      ],
+    );
 
-    recordAuthAuditEvent({
+    await recordAuthAuditEvent({
       type: "INVITATION_CREATED",
       actorUserId: params.createdBy,
       detail: `${params.createdByLabel} created a ${params.role} invitation${
@@ -317,20 +321,12 @@ function insertInvitation(params: InsertInvitationParams): CreatedInvitation {
         expiresAt,
       },
     });
+  });
 
-    database.exec("COMMIT;");
-  } catch (error) {
-    try {
-      database.exec("ROLLBACK;");
-    } catch {
-      // Preserve the domain error that caused the rollback.
-    }
-    throw error;
-  }
-
-  const row = database
-    .prepare(`${INVITATION_SELECT} WHERE i.id = ?`)
-    .get(id) as InvitationRow | undefined;
+  const row = await db.get<InvitationRow>(
+    `${INVITATION_SELECT} WHERE i.id = ?`,
+    [id],
+  );
 
   if (!row) {
     throw new AppError("INVITATION_NOT_FOUND", "The invitation vanished.", 500);
@@ -343,8 +339,10 @@ function insertInvitation(params: InsertInvitationParams): CreatedInvitation {
   };
 }
 
-export function createInvitation(input: CreateInvitationInput): CreatedInvitation {
-  const actor = requireInvitationManager(input.actorUserId);
+export async function createInvitation(
+  input: CreateInvitationInput,
+): Promise<CreatedInvitation> {
+  const actor = await requireInvitationManager(input.actorUserId);
   assertActorMayIssueRole(actor.role, input.role);
 
   return insertInvitation({
@@ -362,11 +360,11 @@ export function createInvitation(input: CreateInvitationInput): CreatedInvitatio
  * Out-of-band bootstrap path used by the deployment operator, not by any HTTP
  * route: mints the first platform_admin invitation without an acting user.
  */
-export function createSystemAdminInvitation(options: {
+export async function createSystemAdminInvitation(options: {
   email?: string | null;
   invitedName?: string | null;
   expiresInHours?: number;
-} = {}): CreatedInvitation {
+} = {}): Promise<CreatedInvitation> {
   return insertInvitation({
     role: "platform_admin",
     email: normalizeEmail(options.email),
@@ -378,8 +376,10 @@ export function createSystemAdminInvitation(options: {
   });
 }
 
-export function listInvitations(actorUserId: string): InvitationSummary[] {
-  const actor = requireInvitationManager(actorUserId);
+export async function listInvitations(
+  actorUserId: string,
+): Promise<InvitationSummary[]> {
+  const actor = await requireInvitationManager(actorUserId);
   const nowIso = new Date().toISOString();
   const roleFilter =
     actor.role !== "platform_admin" ? "AND i.role = 'student'" : "";
@@ -388,24 +388,27 @@ export function listInvitations(actorUserId: string): InvitationSummary[] {
   // place its id (and therefore the revoke control) is exposed, so a cap
   // here would make older active invitations effectively irrevocable.
   // Consumed history is capped instead.
-  const activeRows = getDatabase()
-    .prepare(`
+  const db = await getDb();
+  const activeRows = await db.all<InvitationRow>(
+    `
       ${INVITATION_SELECT}
       WHERE i.used_at IS NULL AND i.revoked_at IS NULL AND i.expires_at > ?
         ${roleFilter}
       ORDER BY i.created_at DESC, i.id DESC
-    `)
-    .all(nowIso) as unknown as InvitationRow[];
+    `,
+    [nowIso],
+  );
 
-  const historyRows = getDatabase()
-    .prepare(`
+  const historyRows = await db.all<InvitationRow>(
+    `
       ${INVITATION_SELECT}
       WHERE (i.used_at IS NOT NULL OR i.revoked_at IS NOT NULL OR i.expires_at <= ?)
         ${roleFilter}
       ORDER BY i.created_at DESC, i.id DESC
       LIMIT 200
-    `)
-    .all(nowIso) as unknown as InvitationRow[];
+    `,
+    [nowIso],
+  );
 
   return [...activeRows, ...historyRows]
     .sort((a, b) =>
@@ -420,20 +423,19 @@ export function listInvitations(actorUserId: string): InvitationSummary[] {
     .map((row) => rowToSummary(row, nowIso));
 }
 
-export function revokeInvitation(
+export async function revokeInvitation(
   actorUserId: string,
   invitationId: string,
-): InvitationSummary {
-  const actor = requireInvitationManager(actorUserId);
-  const database = getDatabase();
+): Promise<InvitationSummary> {
+  const actor = await requireInvitationManager(actorUserId);
+  const db = await getDb();
   const nowIso = new Date().toISOString();
 
-  database.exec("BEGIN IMMEDIATE;");
-
-  try {
-    const row = database
-      .prepare(`${INVITATION_SELECT} WHERE i.id = ?`)
-      .get(invitationId) as InvitationRow | undefined;
+  await db.transaction(async (tx) => {
+    const row = await tx.get<InvitationRow>(
+      `${INVITATION_SELECT} WHERE i.id = ?`,
+      [invitationId],
+    );
 
     if (!row) {
       throw new AppError(
@@ -462,33 +464,24 @@ export function revokeInvitation(
     }
 
     if (state !== "revoked") {
-      database
-        .prepare(
-          "UPDATE account_invitations SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL AND used_at IS NULL",
-        )
-        .run(nowIso, invitationId);
+      await tx.run(
+        "UPDATE account_invitations SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL AND used_at IS NULL",
+        [nowIso, invitationId],
+      );
 
-      recordAuthAuditEvent({
+      await recordAuthAuditEvent({
         type: "INVITATION_REVOKED",
         actorUserId: actor.id,
         detail: `${actor.name} revoked a ${row.role} invitation.`,
         metadata: { invitationId, role: row.role },
       });
     }
+  });
 
-    database.exec("COMMIT;");
-  } catch (error) {
-    try {
-      database.exec("ROLLBACK;");
-    } catch {
-      // Preserve the domain error that caused the rollback.
-    }
-    throw error;
-  }
-
-  const updated = getDatabase()
-    .prepare(`${INVITATION_SELECT} WHERE i.id = ?`)
-    .get(invitationId) as InvitationRow | undefined;
+  const updated = await db.get<InvitationRow>(
+    `${INVITATION_SELECT} WHERE i.id = ?`,
+    [invitationId],
+  );
 
   if (!updated) {
     throw new AppError(
@@ -515,24 +508,29 @@ function maskEmail(email: string | null): string | null {
  * Read-only lookup for the public /join page. Reveals only what the visitor
  * needs to decide whether to register; the token itself proves possession.
  */
-export function previewInvitation(token: string): InvitationPreview | null {
+export async function previewInvitation(
+  token: string,
+): Promise<InvitationPreview | null> {
   if (!token || token.length < 20 || token.length > 256) {
     return null;
   }
 
   const nowIso = new Date().toISOString();
-  const row = getDatabase()
-    .prepare(`${INVITATION_SELECT} WHERE i.token_hash = ?`)
-    .get(hashInvitationToken(token)) as InvitationRow | undefined;
+  const db = await getDb();
+  const row = await db.get<InvitationRow>(
+    `${INVITATION_SELECT} WHERE i.token_hash = ?`,
+    [hashInvitationToken(token)],
+  );
 
   if (!row) {
     return null;
   }
 
   const competition = row.competition_id
-    ? (getDatabase()
-        .prepare("SELECT name FROM competitions WHERE id = ?")
-        .get(row.competition_id) as { name: string } | undefined)
+    ? await db.get<{ name: string }>(
+        "SELECT name FROM competitions WHERE id = ?",
+        [row.competition_id],
+      )
     : undefined;
 
   return {
@@ -551,10 +549,10 @@ export function previewInvitation(token: string): InvitationPreview | null {
  * entire check-create-consume sequence runs in one immediate transaction, so
  * two concurrent redemptions of the same token cannot both succeed.
  */
-export function consumeInvitation(
+export async function consumeInvitation(
   token: string,
   identity: ManagedIdentity,
-): SessionUser {
+): Promise<SessionUser> {
   const subject = identity.subject?.trim();
   const email = normalizeEmail(identity.email);
 
@@ -590,16 +588,14 @@ export function consumeInvitation(
     );
   }
 
-  const database = getDatabase();
+  const db = await getDb();
   const nowIso = new Date().toISOString();
-  let userId: string;
 
-  database.exec("BEGIN IMMEDIATE;");
-
-  try {
-    const row = database
-      .prepare(`${INVITATION_SELECT} WHERE i.token_hash = ?`)
-      .get(hashInvitationToken(token)) as InvitationRow | undefined;
+  const userId = await db.transaction(async (tx) => {
+    const row = await tx.get<InvitationRow>(
+      `${INVITATION_SELECT} WHERE i.token_hash = ?`,
+      [hashInvitationToken(token)],
+    );
 
     if (!row) {
       throw new AppError(
@@ -643,9 +639,10 @@ export function consumeInvitation(
       );
     }
 
-    const existingBySubject = database
-      .prepare("SELECT id FROM users WHERE auth_subject = ?")
-      .get(subject) as { id: string } | undefined;
+    const existingBySubject = await tx.get<{ id: string }>(
+      "SELECT id FROM users WHERE auth_subject = ?",
+      [subject],
+    );
 
     if (existingBySubject) {
       throw new AppError(
@@ -655,9 +652,10 @@ export function consumeInvitation(
       );
     }
 
-    const existingByEmail = database
-      .prepare("SELECT id FROM users WHERE lower(email) = ?")
-      .get(email) as { id: string } | undefined;
+    const existingByEmail = await tx.get<{ id: string }>(
+      "SELECT id FROM users WHERE lower(email) = ?",
+      [email],
+    );
 
     if (existingByEmail) {
       throw new AppError(
@@ -675,54 +673,56 @@ export function consumeInvitation(
       );
     }
 
-    userId = randomUUID();
+    const createdUserId = randomUUID();
     const displayName =
       identity.name?.trim() || row.invited_name || email.split("@")[0];
 
-    database
-      .prepare(`
+    await tx.run(
+      `
         INSERT INTO users (
           id, name, email, role, status, auth_subject,
           email_verified_at, created_at, last_login_at
         ) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?)
-      `)
-      .run(userId, displayName, email, row.role, subject, nowIso, nowIso, nowIso);
+      `,
+      [createdUserId, displayName, email, row.role, subject, nowIso, nowIso, nowIso],
+    );
 
     if (row.role === "student" && row.team_id) {
-      database
-        .prepare(`
+      await tx.run(
+        `
           INSERT INTO team_members (team_id, user_id, is_captain, joined_at)
           VALUES (?, ?, 0, ?)
-        `)
-        .run(row.team_id, userId, nowIso);
+        `,
+        [row.team_id, createdUserId, nowIso],
+      );
 
       if (row.competition_id) {
-        database
-          .prepare(`
+        await tx.run(
+          `
             INSERT INTO activity_events (
               id, competition_id, team_id, actor_user_id, type,
               title, detail, created_at
             ) VALUES (?, ?, ?, ?, 'MEMBER_JOINED', ?, ?, ?)
-          `)
-          .run(
+          `,
+          [
             randomUUID(),
             row.competition_id,
             row.team_id,
-            userId,
+            createdUserId,
             `${displayName} joined ${row.team_name ?? "the team"}`,
             `${displayName} accepted an invitation and joined ${row.team_name ?? "the team"}.`,
             nowIso,
-          );
+          ],
+        );
       }
     }
 
-    const consumed = database
-      .prepare(
-        "UPDATE account_invitations SET used_at = ?, used_by = ? WHERE id = ? AND used_at IS NULL AND revoked_at IS NULL",
-      )
-      .run(nowIso, userId, row.id);
+    const consumed = await tx.run(
+      "UPDATE account_invitations SET used_at = ?, used_by = ? WHERE id = ? AND used_at IS NULL AND revoked_at IS NULL",
+      [nowIso, createdUserId, row.id],
+    );
 
-    if (Number(consumed.changes) !== 1) {
+    if (consumed.changes !== 1) {
       throw new AppError(
         "INVITATION_ALREADY_USED",
         "This invitation has already been used.",
@@ -730,32 +730,25 @@ export function consumeInvitation(
       );
     }
 
-    recordAuthAuditEvent({
+    await recordAuthAuditEvent({
       type: "INVITATION_ACCEPTED",
-      actorUserId: userId,
-      subjectUserId: userId,
+      actorUserId: createdUserId,
+      subjectUserId: createdUserId,
       detail: `${displayName} accepted a ${row.role} invitation.`,
       metadata: { invitationId: row.id, role: row.role, teamId: row.team_id },
     });
-    recordAuthAuditEvent({
+    await recordAuthAuditEvent({
       type: "ACCOUNT_CREATED",
-      actorUserId: userId,
-      subjectUserId: userId,
+      actorUserId: createdUserId,
+      subjectUserId: createdUserId,
       detail: `A ${row.role} account was created for ${displayName} through an invitation.`,
       metadata: { invitationId: row.id, role: row.role },
     });
 
-    database.exec("COMMIT;");
-  } catch (error) {
-    try {
-      database.exec("ROLLBACK;");
-    } catch {
-      // Preserve the domain error that caused the rollback.
-    }
-    throw error;
-  }
+    return createdUserId;
+  });
 
-  const user = getSessionUser(userId);
+  const user = await getSessionUser(userId);
 
   if (!user) {
     throw new AppError(

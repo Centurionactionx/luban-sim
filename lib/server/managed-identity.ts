@@ -69,7 +69,7 @@ export async function getManagedSessionState(): Promise<ManagedSessionState> {
     return { kind: "signed-out" };
   }
 
-  const local = resolveManagedSubject(userId);
+  const local = await resolveManagedSubject(userId);
 
   if (local.kind === "linked") {
     return { kind: "linked", user: local.user, subject: userId };
@@ -82,7 +82,7 @@ export async function getManagedSessionState(): Promise<ManagedSessionState> {
   const identity = await getManagedIdentity();
 
   if (identity) {
-    const bootstrapped = resolveManagedUser(identity);
+    const bootstrapped = await resolveManagedUser(identity);
 
     if (bootstrapped.kind === "linked") {
       return { kind: "linked", user: bootstrapped.user, subject: userId };

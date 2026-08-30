@@ -11,6 +11,7 @@ import type {
   OrderView,
   PortfolioPoint,
   PortfolioSummary,
+  Quote,
   SessionUser,
   TeamStatus,
   TeamSummary,
@@ -18,7 +19,7 @@ import type {
 } from "../contracts";
 import { AppError } from "../errors";
 import { getSessionUser } from "./auth";
-import { getDatabase, withReadTransaction } from "./db";
+import { getDb, withReadTransaction } from "./db";
 import { getQuote, listQuotes } from "./quotes";
 
 interface CompetitionRow {
@@ -94,8 +95,8 @@ function normalizedLimit(limit: number | undefined, fallback: number): number {
   return Math.min(limit, 100);
 }
 
-export function requireSessionUser(userId: string): SessionUser {
-  const user = getSessionUser(userId);
+export async function requireSessionUser(userId: string): Promise<SessionUser> {
+  const user = await getSessionUser(userId);
 
   if (!user) {
     throw new AppError("UNAUTHORIZED", "Sign in to continue.", 401);
@@ -132,17 +133,16 @@ export function competitionPhaseFor(
   return "open";
 }
 
-export function getCompetitionSummary(): CompetitionSummary {
-  const row = getDatabase()
-    .prepare(`
+export async function getCompetitionSummary(): Promise<CompetitionSummary> {
+  const db = await getDb();
+  const row = await db.get<CompetitionRow>(`
       SELECT
         id, name, status, base_currency, starting_cash_cents,
         starts_at, ends_at
       FROM competitions
       ORDER BY created_at DESC
       LIMIT 1
-    `)
-    .get() as CompetitionRow | undefined;
+    `);
 
   if (!row) {
     throw new AppError("COMPETITION_NOT_FOUND", "No competition is configured.", 404);
@@ -167,24 +167,27 @@ export function getCompetitionSummary(): CompetitionSummary {
   };
 }
 
-export function getTeamSummary(teamId: string): TeamSummary {
-  const row = getDatabase()
-    .prepare("SELECT id, name, status, cash_cents, version FROM teams WHERE id = ?")
-    .get(teamId) as TeamRow | undefined;
+export async function getTeamSummary(teamId: string): Promise<TeamSummary> {
+  const db = await getDb();
+  const row = await db.get<TeamRow>(
+    "SELECT id, name, status, cash_cents, version FROM teams WHERE id = ?",
+    [teamId],
+  );
 
   if (!row) {
     throw new AppError("TEAM_NOT_FOUND", "That team does not exist.", 404);
   }
 
-  const members = getDatabase()
-    .prepare(`
+  const members = await db.all<{ name: string }>(
+    `
       SELECT u.name
       FROM team_members tm
       JOIN users u ON u.id = tm.user_id
       WHERE tm.team_id = ?
       ORDER BY tm.is_captain DESC, u.name ASC
-    `)
-    .all(teamId) as unknown as Array<{ name: string }>;
+    `,
+    [teamId],
+  );
 
   return {
     id: row.id,
@@ -200,31 +203,43 @@ export interface PortfolioCalculation {
   holdings: HoldingView[];
 }
 
-export function calculatePortfolio(
+export async function calculatePortfolio(
   teamId: string,
   at: Date = new Date(),
-): PortfolioCalculation {
-  const database = getDatabase();
-  const team = database
-    .prepare("SELECT id, name, status, cash_cents, version FROM teams WHERE id = ?")
-    .get(teamId) as TeamRow | undefined;
+): Promise<PortfolioCalculation> {
+  const database = await getDb();
+  const team = await database.get<TeamRow>(
+    "SELECT id, name, status, cash_cents, version FROM teams WHERE id = ?",
+    [teamId],
+  );
 
   if (!team) {
     throw new AppError("TEAM_NOT_FOUND", "That team does not exist.", 404);
   }
 
-  const competition = getCompetitionSummary();
-  const holdingRows = database
-    .prepare(`
+  const competition = await getCompetitionSummary();
+  const holdingRows = await database.all<HoldingRow>(
+    `
       SELECT symbol, quantity, average_cost_cents
       FROM holdings
       WHERE team_id = ? AND quantity > 0
       ORDER BY symbol ASC
-    `)
-    .all(teamId) as unknown as HoldingRow[];
+    `,
+    [teamId],
+  );
 
-  const interim = holdingRows.map((row) => {
-    const quote = getQuote(row.symbol, at);
+  const interim: Array<{
+    quote: Quote;
+    quantity: number;
+    averageCostCents: number;
+    marketValueCents: number;
+    costBasisCents: number;
+    gainLossCents: number;
+    dayChangeCents: number;
+  }> = [];
+
+  for (const row of holdingRows) {
+    const quote = await getQuote(row.symbol, at);
 
     if (!quote) {
       throw new AppError(
@@ -240,7 +255,7 @@ export function calculatePortfolio(
     const costBasisCents = averageCostCents * quantity;
     const gainLossCents = marketValueCents - costBasisCents;
 
-    return {
+    interim.push({
       quote,
       quantity,
       averageCostCents,
@@ -249,8 +264,8 @@ export function calculatePortfolio(
       gainLossCents,
       dayChangeCents:
         (quote.priceCadCents - quote.previousCloseCadCents) * quantity,
-    };
-  });
+    });
+  }
 
   const holdingsValueCents = interim.reduce(
     (total, holding) => total + holding.marketValueCents,
@@ -328,12 +343,18 @@ function orderRowToView(row: OrderRow): OrderView {
   };
 }
 
-export function getOrderByIdempotencyKey(
+export async function getOrderByIdempotencyKey(
   key: string,
   actorUserId?: string,
-): OrderView | null {
-  const row = getDatabase()
-    .prepare(`
+): Promise<OrderView | null> {
+  const db = await getDb();
+  // The optional-actor filter is decided here rather than with a
+  // `? IS NULL` SQL trick: PostgreSQL cannot infer a type for a parameter
+  // that only appears in an IS NULL test.
+  const actorFilter = actorUserId ? "AND ir.actor_user_id = ?" : "";
+  const params = actorUserId ? [key, actorUserId, key] : [key, key];
+  const row = await db.get<OrderRow>(
+    `
       SELECT
         o.id, COALESCE(ir.idempotency_key, o.idempotency_key) AS idempotency_key,
         o.team_id, t.name AS team_name,
@@ -345,23 +366,22 @@ export function getOrderByIdempotencyKey(
       JOIN users u ON u.id = o.actor_user_id
       LEFT JOIN idempotency_records ir ON ir.order_id = o.id
       WHERE
-        (ir.idempotency_key = ? AND (? IS NULL OR ir.actor_user_id = ?))
+        (ir.idempotency_key = ? ${actorFilter})
         OR (ir.order_id IS NULL AND o.idempotency_key = ?)
       LIMIT 1
-    `)
-    .get(key, actorUserId ?? null, actorUserId ?? null, key) as
-    | OrderRow
-    | undefined;
+    `,
+    params,
+  );
 
   return row ? orderRowToView(row) : null;
 }
 
-export function listOrders(
+export async function listOrders(
   userId: string,
   limit?: number,
   requestedTeamId?: string,
-): OrderView[] {
-  const user = requireSessionUser(userId);
+): Promise<OrderView[]> {
+  const user = await requireSessionUser(userId);
   const resultLimit = normalizedLimit(limit, 12);
   const teamId = user.role === "host" ? requestedTeamId : user.teamId;
 
@@ -379,8 +399,9 @@ export function listOrders(
 
   parameters.push(resultLimit);
   const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-  const rows = getDatabase()
-    .prepare(`
+  const db = await getDb();
+  const rows = await db.all<OrderRow>(
+    `
       SELECT
         o.id, COALESCE(ir.idempotency_key, o.idempotency_key) AS idempotency_key,
         o.team_id, t.name AS team_name,
@@ -394,8 +415,9 @@ export function listOrders(
       ${where}
       ORDER BY o.created_at DESC, o.id DESC
       LIMIT ?
-    `)
-    .all(...parameters) as unknown as OrderRow[];
+    `,
+    parameters,
+  );
 
   return rows.map(orderRowToView);
 }
@@ -414,10 +436,13 @@ function activityRowToItem(row: ActivityRow): ActivityItem {
   };
 }
 
-export function listActivity(userId: string, limit?: number): ActivityItem[] {
-  const user = requireSessionUser(userId);
+export async function listActivity(
+  userId: string,
+  limit?: number,
+): Promise<ActivityItem[]> {
+  const user = await requireSessionUser(userId);
   const resultLimit = normalizedLimit(limit, 16);
-  const competition = getCompetitionSummary();
+  const competition = await getCompetitionSummary();
   const parameters: Array<string | number> = [competition.id];
   let visibility = "";
 
@@ -431,8 +456,9 @@ export function listActivity(userId: string, limit?: number): ActivityItem[] {
   }
 
   parameters.push(resultLimit);
-  const rows = getDatabase()
-    .prepare(`
+  const db = await getDb();
+  const rows = await db.all<ActivityRow>(
+    `
       SELECT
         a.id, a.type, a.title, a.detail,
         a.actor_user_id, u.name AS actor_name,
@@ -443,39 +469,45 @@ export function listActivity(userId: string, limit?: number): ActivityItem[] {
       WHERE a.competition_id = ? ${visibility}
       ORDER BY a.created_at DESC, a.id DESC
       LIMIT ?
-    `)
-    .all(...parameters) as unknown as ActivityRow[];
+    `,
+    parameters,
+  );
 
   return rows.map(activityRowToItem);
 }
 
-function buildLeaderboard(user: SessionUser, at: Date): Leaderboard {
-  const competition = getCompetitionSummary();
-  const teams = getDatabase()
-    .prepare(`
+async function buildLeaderboard(user: SessionUser, at: Date): Promise<Leaderboard> {
+  const competition = await getCompetitionSummary();
+  const db = await getDb();
+  const teams = await db.all<TeamRow>(
+    `
       SELECT id, name, status, cash_cents, version
       FROM teams
       WHERE competition_id = ?
-    `)
-    .all(competition.id) as unknown as TeamRow[];
+    `,
+    [competition.id],
+  );
 
-  const rows = teams.map((team) => {
-    const portfolio = calculatePortfolio(team.id, at).summary;
-    const countRow = getDatabase()
-      .prepare("SELECT COUNT(*) AS count FROM orders WHERE team_id = ? AND status = 'FILLED'")
-      .get(team.id) as { count: number };
+  const rows: Array<Omit<LeaderboardRow, "rank">> = [];
 
-    return {
+  for (const team of teams) {
+    const portfolio = (await calculatePortfolio(team.id, at)).summary;
+    const countRow = await db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM orders WHERE team_id = ? AND status = 'FILLED'",
+      [team.id],
+    );
+
+    rows.push({
       teamId: team.id,
       teamName: team.name,
       teamStatus: team.status,
       totalValueCents: portfolio.totalValueCents,
       returnCents: portfolio.totalReturnCents,
       returnPercent: portfolio.totalReturnPercent,
-      tradeCount: Number(countRow.count),
+      tradeCount: Number(countRow?.count ?? 0),
       isCurrentTeam: team.id === user.teamId,
-    };
-  });
+    });
+  }
 
   rows.sort((left, right) => {
     const leftDisqualified = left.teamStatus === "disqualified" ? 1 : 0;
@@ -497,23 +529,28 @@ function buildLeaderboard(user: SessionUser, at: Date): Leaderboard {
   };
 }
 
-export function getLeaderboard(userId: string): Leaderboard {
-  return buildLeaderboard(requireSessionUser(userId), new Date());
+export async function getLeaderboard(userId: string): Promise<Leaderboard> {
+  return buildLeaderboard(await requireSessionUser(userId), new Date());
 }
 
-function getPortfolioHistory(teamId: string, current: PortfolioSummary): PortfolioPoint[] {
-  const rows = getDatabase()
-    .prepare(`
+async function getPortfolioHistory(
+  teamId: string,
+  current: PortfolioSummary,
+): Promise<PortfolioPoint[]> {
+  const db = await getDb();
+  const rows = await db.all<{
+    total_value_cents: number;
+    captured_at: string;
+  }>(
+    `
       SELECT total_value_cents, captured_at
       FROM portfolio_snapshots
       WHERE team_id = ?
       ORDER BY captured_at ASC
       LIMIT 30
-    `)
-    .all(teamId) as unknown as Array<{
-    total_value_cents: number;
-    captured_at: string;
-  }>;
+    `,
+    [teamId],
+  );
 
   const history = rows.map((row) => ({
     at: row.captured_at,
@@ -523,16 +560,18 @@ function getPortfolioHistory(teamId: string, current: PortfolioSummary): Portfol
   return history;
 }
 
-export function getDashboard(userId: string): Dashboard {
-  return withReadTransaction(() => {
-    const currentUser = requireSessionUser(userId);
+export async function getDashboard(userId: string): Promise<Dashboard> {
+  return withReadTransaction(async () => {
+    const currentUser = await requireSessionUser(userId);
     const now = new Date();
-    const competition = getCompetitionSummary();
-    const team = currentUser.teamId ? getTeamSummary(currentUser.teamId) : null;
-    const calculated = currentUser.teamId
-      ? calculatePortfolio(currentUser.teamId, now)
+    const competition = await getCompetitionSummary();
+    const team = currentUser.teamId
+      ? await getTeamSummary(currentUser.teamId)
       : null;
-    const leaderboard = buildLeaderboard(currentUser, now);
+    const calculated = currentUser.teamId
+      ? await calculatePortfolio(currentUser.teamId, now)
+      : null;
+    const leaderboard = await buildLeaderboard(currentUser, now);
 
     return {
       currentUser,
@@ -542,12 +581,12 @@ export function getDashboard(userId: string): Dashboard {
       holdings: calculated?.holdings ?? [],
       portfolioHistory:
         currentUser.teamId && calculated
-          ? getPortfolioHistory(currentUser.teamId, calculated.summary)
+          ? await getPortfolioHistory(currentUser.teamId, calculated.summary)
           : [],
-      recentOrders: listOrders(currentUser.id, 8),
-      recentActivity: listActivity(currentUser.id, 10),
+      recentOrders: await listOrders(currentUser.id, 8),
+      recentActivity: await listActivity(currentUser.id, 10),
       leaderboard: leaderboard.rows.slice(0, 5),
-      availableSymbols: listQuotes(now),
+      availableSymbols: await listQuotes(now),
       serverTime: now.toISOString(),
     };
   });

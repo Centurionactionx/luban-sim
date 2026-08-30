@@ -3,7 +3,8 @@ import { randomUUID } from "node:crypto";
 import type { SessionUser } from "../contracts";
 import { recordAuthAuditEvent } from "./audit";
 import { getSessionUser } from "./auth";
-import { getDatabase } from "./db";
+import { ADVISORY_LOCK_ACCOUNTS, acquireAdvisoryLock } from "./database";
+import { getDb } from "./db";
 import type { ManagedIdentity } from "./invitations";
 
 const LAST_LOGIN_WRITE_INTERVAL_MS = 15 * 60 * 1_000;
@@ -13,27 +14,31 @@ export type ManagedResolution =
   | { kind: "suspended" }
   | { kind: "unlinked" };
 
-function findUserIdByAuthSubject(subject: string): string | null {
-  const row = getDatabase()
-    .prepare("SELECT id FROM users WHERE auth_subject = ?")
-    .get(subject) as { id: string } | undefined;
+async function findUserIdByAuthSubject(subject: string): Promise<string | null> {
+  const db = await getDb();
+  const row = await db.get<{ id: string }>(
+    "SELECT id FROM users WHERE auth_subject = ?",
+    [subject],
+  );
 
   return row?.id ?? null;
 }
 
-function touchLastLogin(userId: string): void {
-  const database = getDatabase();
-  const row = database
-    .prepare("SELECT last_login_at FROM users WHERE id = ?")
-    .get(userId) as { last_login_at: string | null } | undefined;
+async function touchLastLogin(userId: string): Promise<void> {
+  const db = await getDb();
+  const row = await db.get<{ last_login_at: string | null }>(
+    "SELECT last_login_at FROM users WHERE id = ?",
+    [userId],
+  );
 
   const now = Date.now();
   const last = row?.last_login_at ? Date.parse(row.last_login_at) : 0;
 
   if (!Number.isFinite(last) || now - last >= LAST_LOGIN_WRITE_INTERVAL_MS) {
-    database
-      .prepare("UPDATE users SET last_login_at = ? WHERE id = ?")
-      .run(new Date(now).toISOString(), userId);
+    await db.run("UPDATE users SET last_login_at = ? WHERE id = ?", [
+      new Date(now).toISOString(),
+      userId,
+    ]);
   }
 }
 
@@ -49,7 +54,9 @@ function normalizedBootstrapEmail(): string | null {
  * only while no other platform administrator exists, so the variable cannot
  * later be abused to mint a second admin.
  */
-function maybeBootstrapAdmin(identity: ManagedIdentity): SessionUser | null {
+async function maybeBootstrapAdmin(
+  identity: ManagedIdentity,
+): Promise<SessionUser | null> {
   const bootstrapEmail = normalizedBootstrapEmail();
   const email = identity.email?.trim().toLowerCase();
 
@@ -61,59 +68,53 @@ function maybeBootstrapAdmin(identity: ManagedIdentity): SessionUser | null {
     return null;
   }
 
-  const database = getDatabase();
-  let userId: string | null = null;
+  const db = await getDb();
 
-  database.exec("BEGIN IMMEDIATE;");
+  const userId = await db.transaction(async (tx) => {
+    await acquireAdvisoryLock(tx, ADVISORY_LOCK_ACCOUNTS);
 
-  try {
-    const existingAdmin = database
-      .prepare(
-        "SELECT id FROM users WHERE role = 'platform_admin' AND status = 'active' LIMIT 1",
-      )
-      .get() as { id: string } | undefined;
+    const existingAdmin = await tx.get<{ id: string }>(
+      "SELECT id FROM users WHERE role = 'platform_admin' AND status = 'active' LIMIT 1",
+    );
 
-    const emailTaken = database
-      .prepare("SELECT id FROM users WHERE lower(email) = ?")
-      .get(email) as { id: string } | undefined;
+    const emailTaken = await tx.get<{ id: string }>(
+      "SELECT id FROM users WHERE lower(email) = ?",
+      [email],
+    );
 
-    if (!existingAdmin && !emailTaken) {
-      userId = randomUUID();
-      const nowIso = new Date().toISOString();
-      const displayName = identity.name?.trim() || email.split("@")[0];
-
-      database
-        .prepare(`
-          INSERT INTO users (
-            id, name, email, role, status, auth_subject,
-            email_verified_at, created_at, last_login_at
-          ) VALUES (?, ?, ?, 'platform_admin', 'active', ?, ?, ?, ?)
-        `)
-        .run(userId, displayName, email, identity.subject, nowIso, nowIso, nowIso);
-
-      recordAuthAuditEvent({
-        type: "ADMIN_BOOTSTRAPPED",
-        actorUserId: userId,
-        subjectUserId: userId,
-        detail: `${displayName} was bootstrapped as the first platform administrator via LUBAN_BOOTSTRAP_ADMIN_EMAIL.`,
-      });
-      recordAuthAuditEvent({
-        type: "ACCOUNT_CREATED",
-        actorUserId: userId,
-        subjectUserId: userId,
-        detail: `A platform_admin account was created for ${displayName} during bootstrap.`,
-      });
+    if (existingAdmin || emailTaken) {
+      return null;
     }
 
-    database.exec("COMMIT;");
-  } catch (error) {
-    try {
-      database.exec("ROLLBACK;");
-    } catch {
-      // Preserve the original error.
-    }
-    throw error;
-  }
+    const createdUserId = randomUUID();
+    const nowIso = new Date().toISOString();
+    const displayName = identity.name?.trim() || email.split("@")[0];
+
+    await tx.run(
+      `
+        INSERT INTO users (
+          id, name, email, role, status, auth_subject,
+          email_verified_at, created_at, last_login_at
+        ) VALUES (?, ?, ?, 'platform_admin', 'active', ?, ?, ?, ?)
+      `,
+      [createdUserId, displayName, email, identity.subject, nowIso, nowIso, nowIso],
+    );
+
+    await recordAuthAuditEvent({
+      type: "ADMIN_BOOTSTRAPPED",
+      actorUserId: createdUserId,
+      subjectUserId: createdUserId,
+      detail: `${displayName} was bootstrapped as the first platform administrator via LUBAN_BOOTSTRAP_ADMIN_EMAIL.`,
+    });
+    await recordAuthAuditEvent({
+      type: "ACCOUNT_CREATED",
+      actorUserId: createdUserId,
+      subjectUserId: createdUserId,
+      detail: `A platform_admin account was created for ${displayName} during bootstrap.`,
+    });
+
+    return createdUserId;
+  });
 
   return userId ? getSessionUser(userId) : null;
 }
@@ -122,20 +123,22 @@ function maybeBootstrapAdmin(identity: ManagedIdentity): SessionUser | null {
  * Local-database-only resolution of a provider subject. No provider calls,
  * no bootstrap: the fast path for every authenticated request.
  */
-export function resolveManagedSubject(subject: string): ManagedResolution {
+export async function resolveManagedSubject(
+  subject: string,
+): Promise<ManagedResolution> {
   const trimmed = subject?.trim();
 
   if (!trimmed) {
     return { kind: "unlinked" };
   }
 
-  const userId = findUserIdByAuthSubject(trimmed);
+  const userId = await findUserIdByAuthSubject(trimmed);
 
   if (!userId) {
     return { kind: "unlinked" };
   }
 
-  const user = getSessionUser(userId);
+  const user = await getSessionUser(userId);
 
   if (!user) {
     return { kind: "unlinked" };
@@ -145,7 +148,7 @@ export function resolveManagedSubject(subject: string): ManagedResolution {
     return { kind: "suspended" };
   }
 
-  touchLastLogin(userId);
+  await touchLastLogin(userId);
   return { kind: "linked", user };
 }
 
@@ -155,14 +158,16 @@ export function resolveManagedSubject(subject: string): ManagedResolution {
  * and status always come from the local database — never from any
  * client-supplied value.
  */
-export function resolveManagedUser(identity: ManagedIdentity): ManagedResolution {
-  const resolved = resolveManagedSubject(identity.subject);
+export async function resolveManagedUser(
+  identity: ManagedIdentity,
+): Promise<ManagedResolution> {
+  const resolved = await resolveManagedSubject(identity.subject);
 
   if (resolved.kind !== "unlinked") {
     return resolved;
   }
 
-  const bootstrapped = maybeBootstrapAdmin(identity);
+  const bootstrapped = await maybeBootstrapAdmin(identity);
 
   if (bootstrapped) {
     return { kind: "linked", user: bootstrapped };
