@@ -5,6 +5,8 @@ import {
   createSessionToken,
   getSessionUser,
   invalidateSessionToken,
+  isDemoLoginAllowed,
+  isManagedAuthMode,
   SESSION_COOKIE_NAME,
 } from "@/lib";
 
@@ -26,14 +28,13 @@ const loginSchema = z
 
 export async function POST(request: Request): Promise<Response> {
   try {
-    if (
-      process.env.NODE_ENV === "production" &&
-      process.env.LUBAN_DEMO_MODE !== "true"
-    ) {
+    if (!isDemoLoginAllowed()) {
       return errorResponse(
         503,
-        "DEMO_MODE_DISABLED",
-        "Demo identity switching is disabled in production.",
+        isManagedAuthMode() ? "AUTH_MODE_MANAGED" : "DEMO_MODE_DISABLED",
+        isManagedAuthMode()
+          ? "This deployment uses real sign-in. Demo identity switching is disabled."
+          : "Demo identity switching is disabled in production.",
       );
     }
 

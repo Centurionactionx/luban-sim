@@ -17,6 +17,40 @@ export {
 } from "./server/auth";
 
 export {
+  getAuthMode,
+  isDemoLoginAllowed,
+  isManagedAuthMode,
+} from "./server/auth-mode";
+
+export {
+  assertRequestAllowed,
+  resetRequestThrottle,
+} from "./server/request-throttle";
+
+export {
+  listAuthAuditEvents,
+  recordAuthAuditEvent,
+} from "./server/audit";
+
+export {
+  DEFAULT_INVITATION_TTL_HOURS,
+  MAX_INVITATION_TTL_HOURS,
+  MIN_INVITATION_TTL_HOURS,
+  consumeInvitation,
+  createInvitation,
+  createSystemAdminInvitation,
+  listInvitations,
+  previewInvitation,
+  revokeInvitation,
+} from "./server/invitations";
+
+export type { ManagedIdentity } from "./server/invitations";
+
+export { resolveManagedSubject, resolveManagedUser } from "./server/accounts";
+
+export type { ManagedResolution } from "./server/accounts";
+
+export {
   COMPETITION_STATUSES,
   MAX_TEAM_CASH_CENTS,
   TEAM_STATUSES,
@@ -26,12 +60,14 @@ export {
   setCompetitionStatus,
   setTeamCash,
   setTeamStatus,
+  updateCompetitionSchedule,
   updateCompetitionStatus,
   updateTeamStatus,
 } from "./server/admin";
 
 export {
   calculatePortfolio,
+  competitionPhaseFor,
   getCompetitionSummary,
   getDashboard,
   getLeaderboard,

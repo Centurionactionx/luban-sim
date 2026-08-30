@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  assertRequestAllowed,
   listOrders,
   normalizeMarketSymbol,
   placeOrder,
@@ -23,7 +24,7 @@ export const dynamic = "force-dynamic";
 const orderSchema = z
   .object({
     orderType: z.literal("MARKET").default("MARKET"),
-    quantity: z.number().int().positive().max(1_000_000),
+    quantity: z.number().int().positive().max(100_000),
     side: z.enum(["BUY", "SELL"]),
     symbol: z
       .string()
@@ -62,6 +63,10 @@ export async function POST(request: Request): Promise<Response> {
     if (replay) {
       return json({ ok: true, ...replay }, { status: 201 });
     }
+    // The durable per-trader limit lives inside placeOrder's transaction;
+    // this pre-quote throttle additionally stops unknown-symbol spam from
+    // reaching the upstream provider without ever entering the engine.
+    assertRequestAllowed(`order-quote:${user.id}`, 30);
     const quote = await refreshQuote(order.symbol);
     if (!quote) {
       throw new ApiError(

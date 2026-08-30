@@ -5,6 +5,7 @@ import type {
   QuoteHistoryPoint,
   QuoteRange,
 } from "../contracts";
+import type { HistoricalMarketPrice } from "../backtest-contracts";
 import { AppError } from "../errors";
 import { MARKET_REFRESH_INTERVAL_MS } from "../market-config";
 import { getDatabase } from "./db";
@@ -27,10 +28,14 @@ const YAHOO_EXCHANGES: Record<
   NMS: { exchange: "NASDAQ", listingCurrency: "USD" },
   NGM: { exchange: "NASDAQ", listingCurrency: "USD" },
   NCM: { exchange: "NASDAQ", listingCurrency: "USD" },
+  NAS: { exchange: "NASDAQ", listingCurrency: "USD" },
+  NASDAQ: { exchange: "NASDAQ", listingCurrency: "USD" },
   NYQ: { exchange: "NYSE", listingCurrency: "USD" },
+  NYSE: { exchange: "NYSE", listingCurrency: "USD" },
   ASE: { exchange: "NYSE American", listingCurrency: "USD" },
   PCX: { exchange: "NYSE Arca", listingCurrency: "USD" },
   TOR: { exchange: "TSX", listingCurrency: "CAD" },
+  TSX: { exchange: "TSX", listingCurrency: "CAD" },
 };
 
 export const QUOTE_RANGES = ["1D", "5D", "1M", "3M"] as const;
@@ -95,6 +100,16 @@ export interface MarketDataProvider {
     range: QuoteRange,
     at: Date,
   ): Promise<QuoteHistory>;
+  historicalPrice?(
+    instrument: MarketInstrument,
+    requestedDate: string,
+    at: Date,
+  ): Promise<HistoricalMarketPrice>;
+  splitMultipliers?(
+    instrument: MarketInstrument,
+    sessionDates: string[],
+    at: Date,
+  ): Promise<Map<string, number>>;
 }
 
 interface InstrumentRow {
@@ -133,6 +148,7 @@ interface YahooChartResult {
   meta?: YahooChartMeta;
   timestamp?: unknown;
   indicators?: { quote?: unknown };
+  events?: { splits?: unknown };
 }
 
 interface YahooChartPayload {
@@ -156,6 +172,13 @@ interface ParsedYahooChart {
   meta: YahooChartMeta;
   timestamps: Array<number | null>;
   quote: YahooIndicatorQuote;
+  splits: YahooSplitEvent[];
+}
+
+interface YahooSplitEvent {
+  date: number;
+  numerator: number;
+  denominator: number;
 }
 
 interface CacheEntry<T> {
@@ -171,6 +194,8 @@ interface FailedQuoteRefresh {
 interface YahooMarketState {
   quotes: Map<string, CacheEntry<Quote>>;
   histories: Map<string, CacheEntry<QuoteHistory>>;
+  historicalPrices: Map<string, CacheEntry<HistoricalMarketPrice>>;
+  splitMultipliers: Map<string, CacheEntry<Map<string, number>>>;
   searches: Map<string, CacheEntry<InstrumentSearchResult[]>>;
   discoveredInstruments: Map<string, InstrumentSearchResult>;
   quoteFailures: Map<string, FailedQuoteRefresh>;
@@ -187,6 +212,8 @@ function yahooState(): YahooMarketState {
     yahooGlobal.__lubanYahooMarketState = {
       quotes: new Map(),
       histories: new Map(),
+      historicalPrices: new Map(),
+      splitMultipliers: new Map(),
       searches: new Map(),
       discoveredInstruments: new Map(),
       quoteFailures: new Map(),
@@ -195,6 +222,8 @@ function yahooState(): YahooMarketState {
     };
   }
   yahooGlobal.__lubanYahooMarketState.searches ??= new Map();
+  yahooGlobal.__lubanYahooMarketState.historicalPrices ??= new Map();
+  yahooGlobal.__lubanYahooMarketState.splitMultipliers ??= new Map();
   yahooGlobal.__lubanYahooMarketState.discoveredInstruments ??= new Map();
   yahooGlobal.__lubanYahooMarketState.quoteFailures ??= new Map();
   yahooGlobal.__lubanYahooMarketState.searchFailures ??= new Map();
@@ -245,6 +274,158 @@ function numberArray(value: unknown): Array<number | null> {
   return Array.isArray(value) ? value.map((item) => finiteNumber(item)) : [];
 }
 
+function parseSplitEvents(value: unknown): YahooSplitEvent[] {
+  if (!value || typeof value !== "object") return [];
+
+  return Object.values(value as Record<string, unknown>).flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object") return [];
+    const raw = candidate as Record<string, unknown>;
+    const date = finiteNumber(raw.date);
+    const numerator = finiteNumber(raw.numerator);
+    const denominator = finiteNumber(raw.denominator);
+    if (
+      date === null ||
+      numerator === null ||
+      denominator === null ||
+      numerator <= 0 ||
+      denominator <= 0
+    ) {
+      return [];
+    }
+    return [{ date, numerator, denominator }];
+  });
+}
+
+function calendarDateInTimeZone(date: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function parseHistoricalDate(value: string, at: Date): Date {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw new AppError(
+      "INVALID_HISTORICAL_DATE",
+      "Purchase date must use YYYY-MM-DD.",
+      400,
+      { field: "purchaseDate" },
+    );
+  }
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
+    throw new AppError(
+      "INVALID_HISTORICAL_DATE",
+      "Purchase date is not a valid calendar date.",
+      400,
+      { field: "purchaseDate" },
+    );
+  }
+  const today = calendarDateInTimeZone(at, "America/Toronto");
+  if (value >= today) {
+    throw new AppError(
+      "HISTORICAL_DATE_REQUIRED",
+      "Choose a completed market date before today.",
+      400,
+      { field: "purchaseDate", maximum: today },
+    );
+  }
+  return parsed;
+}
+
+interface HistoricalClosePoint {
+  sessionDate: string;
+  sessionAt: string;
+  closeCents: number;
+  closeBasisPoints: number;
+}
+
+function selectHistoricalClose(
+  chart: ParsedYahooChart,
+  requestedDate: string,
+): HistoricalClosePoint {
+  const closes = numberArray(chart.quote.close);
+  const timeZone =
+    typeof chart.meta.exchangeTimezoneName === "string"
+      ? chart.meta.exchangeTimezoneName
+      : "America/Toronto";
+  let selected: HistoricalClosePoint | null = null;
+
+  for (let index = 0; index < chart.timestamps.length; index += 1) {
+    const timestamp = chart.timestamps[index] ?? null;
+    const close = closes[index] ?? null;
+    if (timestamp === null || close === null || close <= 0) continue;
+    const at = new Date(timestamp * 1_000);
+    const sessionDate = calendarDateInTimeZone(at, timeZone);
+    if (sessionDate > requestedDate) continue;
+    if (!selected || Date.parse(at.toISOString()) > Date.parse(selected.sessionAt)) {
+      selected = {
+        sessionDate,
+        sessionAt: at.toISOString(),
+        closeCents: Math.round(close * 100),
+        closeBasisPoints: Math.round(close * 10_000),
+      };
+    }
+  }
+
+  if (!selected) {
+    throw new AppError(
+      "HISTORICAL_PRICE_UNAVAILABLE",
+      "No completed market close was available on or before that date.",
+      404,
+      { requestedDate },
+    );
+  }
+
+  const gapDays = Math.round(
+    (Date.parse(`${requestedDate}T00:00:00.000Z`) -
+      Date.parse(`${selected.sessionDate}T00:00:00.000Z`)) /
+      86_400_000,
+  );
+  if (gapDays > 7) {
+    throw new AppError(
+      "HISTORICAL_PRICE_UNAVAILABLE",
+      "No nearby trading session was available for that date.",
+      404,
+      { requestedDate },
+    );
+  }
+
+  return selected;
+}
+
+function splitMultiplierAfter(
+  chart: ParsedYahooChart,
+  sessionDate: string,
+  at: Date,
+): number {
+  const timeZone =
+    typeof chart.meta.exchangeTimezoneName === "string"
+      ? chart.meta.exchangeTimezoneName
+      : "America/Toronto";
+  let multiplier = 1;
+
+  for (const split of chart.splits) {
+    const splitAt = new Date(split.date * 1_000);
+    const splitDate = calendarDateInTimeZone(splitAt, timeZone);
+    if (splitDate <= sessionDate || splitAt.getTime() > at.getTime()) continue;
+    multiplier *= split.numerator / split.denominator;
+  }
+
+  if (!Number.isFinite(multiplier) || multiplier <= 0 || multiplier > 1_000_000) {
+    throw new AppError(
+      "MARKET_DATA_INVALID",
+      "The historical split data was invalid.",
+      503,
+    );
+  }
+  return Math.round(multiplier * 1_000_000) / 1_000_000;
+}
+
 export function normalizeMarketSymbol(value: string): string {
   const symbol = value.trim().toUpperCase();
   const tsxClassShare = symbol.match(/^([A-Z0-9]+)\.([A-Z])\.TO$/);
@@ -260,6 +441,20 @@ function yahooSearchQuery(value: string): string {
   return MARKET_SYMBOL_PATTERN.test(normalizedSymbol)
     ? normalizedSymbol
     : trimmed;
+}
+
+function tsxAliasForBareTickerQuery(value: string): string | null {
+  const normalized = normalizeMarketSymbol(value);
+  if (
+    !MARKET_SYMBOL_PATTERN.test(normalized) ||
+    normalized.endsWith(".TO") ||
+    normalized.length > 6
+  ) {
+    return null;
+  }
+
+  const alias = `${normalized}.TO`;
+  return MARKET_SYMBOL_PATTERN.test(alias) ? alias : null;
 }
 
 function isExplicitDerivativeSecurity(symbol: string, name: string): boolean {
@@ -399,6 +594,7 @@ function parseYahooChart(payload: unknown, symbol: string): ParsedYahooChart {
     meta: typedResult.meta,
     timestamps,
     quote: quote as YahooIndicatorQuote,
+    splits: parseSplitEvents(typedResult.events?.splits),
   };
 }
 
@@ -605,6 +801,59 @@ export class DeterministicMarketDataProvider implements MarketDataProvider {
       isStale: false,
     };
   }
+
+  async historicalPrice(
+    instrument: MarketInstrument,
+    requestedDate: string,
+    at: Date,
+  ): Promise<HistoricalMarketPrice> {
+    const requested = parseHistoricalDate(requestedDate, at);
+    const session = new Date(requested);
+    while (session.getUTCDay() === 0 || session.getUTCDay() === 6) {
+      session.setUTCDate(session.getUTCDate() - 1);
+    }
+    const sessionDate = session.toISOString().slice(0, 10);
+    const seed = hashString(`${instrument.symbol}:historical:${sessionDate}`);
+    const driftBasisPoints = Math.round((pseudoRandom(seed) - 0.5) * 2_000);
+    const closeCents = Math.max(
+      1,
+      Math.round(
+        (instrument.basePriceCents * (10_000 + driftBasisPoints)) / 10_000,
+      ),
+    );
+    const fxRateBasisPoints = instrument.fxRateBasisPoints;
+
+    return {
+      symbol: instrument.symbol,
+      requestedDate,
+      sessionDate,
+      sessionAt: `${sessionDate}T20:00:00.000Z`,
+      listingCurrency: instrument.listingCurrency,
+      closeCents,
+      closeCadCents: Math.round((closeCents * fxRateBasisPoints) / 10_000),
+      fxRateBasisPoints,
+      fxAsOf: `${sessionDate}T20:00:00.000Z`,
+      splitMultiplier: 1,
+      source: "LUBAN_SIMULATED",
+      sourceUrl: null,
+    };
+  }
+
+  async splitMultipliers(
+    instrument: MarketInstrument,
+    sessionDates: string[],
+    at: Date,
+  ): Promise<Map<string, number>> {
+    return new Map(
+      await Promise.all(
+        sessionDates.map(async (sessionDate) => [
+          sessionDate,
+          (await this.historicalPrice(instrument, sessionDate, at))
+            .splitMultiplier,
+        ] as const),
+      ),
+    );
+  }
 }
 
 export class YahooFinanceMarketDataProvider implements MarketDataProvider {
@@ -808,6 +1057,170 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
     }
   }
 
+  async historicalPrice(
+    instrument: MarketInstrument,
+    requestedDate: string,
+    at: Date,
+  ): Promise<HistoricalMarketPrice> {
+    const requested = parseHistoricalDate(requestedDate, at);
+    // Corporate actions are part of this value, so a cache entry must never
+    // survive into a new Toronto market date after a split becomes effective.
+    const valuationDate = calendarDateInTimeZone(at, "America/Toronto");
+    const key = `${instrument.symbol}:${requestedDate}:${valuationDate}`;
+    const cached = this.state.historicalPrices.get(key);
+    const nowMs = this.now();
+    if (cached && nowMs - cached.fetchedAtMs < DAILY_HISTORY_TTL_MS) {
+      return cached.value;
+    }
+
+    try {
+      return await this.coalesce(`historical-price:${key}`, async () => {
+        const refreshedCache = this.state.historicalPrices.get(key);
+        const refreshedNow = this.now();
+        if (
+          refreshedCache &&
+          refreshedNow - refreshedCache.fetchedAtMs < DAILY_HISTORY_TTL_MS
+        ) {
+          return refreshedCache.value;
+        }
+
+        const dayMs = 86_400_000;
+        const narrowStart = Math.floor((requested.getTime() - 10 * dayMs) / 1_000);
+        const narrowEnd = Math.floor((requested.getTime() + 2 * dayMs) / 1_000);
+        const splitEnd = Math.floor((at.getTime() + dayMs) / 1_000);
+        const splitInterval = at.getTime() - requested.getTime() <= 366 * dayMs
+          ? "1d"
+          : "1mo";
+        const [priceChart, fxChart, splitChart] = await Promise.all([
+          this.fetchChartBetween(
+            instrument.symbol,
+            narrowStart,
+            narrowEnd,
+            "1d",
+          ),
+          instrument.listingCurrency === "USD"
+            ? this.fetchChartBetween("CAD=X", narrowStart, narrowEnd, "1d")
+            : Promise.resolve(null),
+          this.fetchChartBetween(
+            instrument.symbol,
+            narrowStart,
+            splitEnd,
+            splitInterval,
+          ),
+        ]);
+        validateYahooInstrument(instrument, priceChart);
+        validateYahooInstrument(instrument, splitChart);
+        const historicalClose = selectHistoricalClose(priceChart, requestedDate);
+        const fxClose = fxChart
+          ? selectHistoricalClose(fxChart, historicalClose.sessionDate)
+          : null;
+        const fxRateBasisPoints = fxClose
+          ? fxClose.closeBasisPoints
+          : 10_000;
+        const splitMultiplier = splitMultiplierAfter(
+          splitChart,
+          historicalClose.sessionDate,
+          at,
+        );
+        // Yahoo retrospectively expresses historical `close` values on the
+        // latest split-adjusted share basis. Reconstruct the actual per-share
+        // close an investor paid on that session; the valuation layer then
+        // applies the same multiplier to the share quantity exactly once.
+        const contemporaneousCloseCents = Math.round(
+          (historicalClose.closeBasisPoints * splitMultiplier) / 100,
+        );
+        const value: HistoricalMarketPrice = {
+          symbol: instrument.symbol,
+          requestedDate,
+          sessionDate: historicalClose.sessionDate,
+          sessionAt: historicalClose.sessionAt,
+          listingCurrency: instrument.listingCurrency,
+          closeCents: contemporaneousCloseCents,
+          closeCadCents: Math.round(
+            (contemporaneousCloseCents * fxRateBasisPoints) / 10_000,
+          ),
+          fxRateBasisPoints,
+          fxAsOf: fxClose?.sessionAt ?? historicalClose.sessionAt,
+          splitMultiplier,
+          source: "YAHOO_FINANCE",
+          sourceUrl: sourceUrl(instrument.symbol),
+        };
+        this.state.historicalPrices.set(key, {
+          value,
+          fetchedAtMs: refreshedNow,
+        });
+        return value;
+      });
+    } catch (error) {
+      throw normalizeProviderError(
+        error,
+        `The historical market price for ${instrument.symbol}`,
+      );
+    }
+  }
+
+  async splitMultipliers(
+    instrument: MarketInstrument,
+    sessionDates: string[],
+    at: Date,
+  ): Promise<Map<string, number>> {
+    const dates = [...new Set(sessionDates)].sort();
+    if (dates.length === 0) return new Map();
+    for (const sessionDate of dates) {
+      parseHistoricalDate(sessionDate, at);
+    }
+
+    const valuationDate = calendarDateInTimeZone(at, "America/Toronto");
+    const key = `${instrument.symbol}:${dates.join(",")}:${valuationDate}`;
+    const cached = this.state.splitMultipliers.get(key);
+    const nowMs = this.now();
+    if (cached && nowMs - cached.fetchedAtMs < DAILY_HISTORY_TTL_MS) {
+      return new Map(cached.value);
+    }
+
+    try {
+      return await this.coalesce(`split-multipliers:${key}`, async () => {
+        const refreshedCache = this.state.splitMultipliers.get(key);
+        const refreshedNow = this.now();
+        if (
+          refreshedCache &&
+          refreshedNow - refreshedCache.fetchedAtMs < DAILY_HISTORY_TTL_MS
+        ) {
+          return new Map(refreshedCache.value);
+        }
+
+        const dayMs = 86_400_000;
+        const earliest = Date.parse(`${dates[0]}T00:00:00.000Z`);
+        const start = Math.floor((earliest - dayMs) / 1_000);
+        const end = Math.floor((at.getTime() + dayMs) / 1_000);
+        const interval = at.getTime() - earliest <= 366 * dayMs ? "1d" : "1mo";
+        const chart = await this.fetchChartBetween(
+          instrument.symbol,
+          start,
+          end,
+          interval,
+        );
+        validateYahooInstrument(instrument, chart);
+        const value = new Map(
+          dates.map((sessionDate) => [
+            sessionDate,
+            splitMultiplierAfter(chart, sessionDate, at),
+          ]),
+        );
+        this.state.splitMultipliers.set(key, {
+          value,
+          fetchedAtMs: refreshedNow,
+        });
+        return new Map(value);
+      });
+    } catch (error) {
+      throw normalizeProviderError(
+        error,
+        `The corporate-action history for ${instrument.symbol}`,
+      );
+    }
+  }
+
   private async fetchCadFxRate(): Promise<number> {
     return this.coalesce("fx:CAD", async () => {
       const chart = await this.fetchChart("CAD=X", "1d", "5m");
@@ -879,9 +1292,31 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
     range: string,
     interval: string,
   ): Promise<ParsedYahooChart> {
-    const params = new URLSearchParams({
+    return this.fetchChartWithParams(symbol, {
       range,
       interval,
+    });
+  }
+
+  private async fetchChartBetween(
+    symbol: string,
+    period1: number,
+    period2: number,
+    interval: string,
+  ): Promise<ParsedYahooChart> {
+    return this.fetchChartWithParams(symbol, {
+      period1: String(period1),
+      period2: String(period2),
+      interval,
+    });
+  }
+
+  private async fetchChartWithParams(
+    symbol: string,
+    input: Record<string, string>,
+  ): Promise<ParsedYahooChart> {
+    const params = new URLSearchParams({
+      ...input,
       includePrePost: "false",
       events: "div,splits",
     });
@@ -1198,6 +1633,92 @@ export async function getQuoteHistory(
   return activeProvider.history(instrument, range, normalizeAt(at));
 }
 
+export async function getHistoricalMarketPrice(
+  symbol: string,
+  requestedDate: string,
+  at?: Date | string,
+): Promise<HistoricalMarketPrice> {
+  const quoteAt = normalizeAt(at);
+  parseHistoricalDate(requestedDate, quoteAt);
+  const normalizedSymbol = normalizeMarketSymbol(symbol);
+  let instrument = readInstrument(normalizedSymbol);
+
+  if (!instrument) {
+    await refreshQuote(normalizedSymbol, quoteAt);
+    instrument = readInstrument(normalizedSymbol);
+  }
+  if (!instrument) {
+    throw new AppError(
+      "UNKNOWN_SYMBOL",
+      `The symbol ${normalizedSymbol} is not available in this simulation.`,
+      404,
+      { symbol: normalizedSymbol },
+    );
+  }
+  if (!activeProvider.historicalPrice) {
+    throw new AppError(
+      "HISTORICAL_PRICE_UNAVAILABLE",
+      `Historical purchase pricing is not available for ${instrument.symbol}.`,
+      503,
+    );
+  }
+  return activeProvider.historicalPrice(instrument, requestedDate, quoteAt);
+}
+
+export async function getHistoricalSplitMultipliers(
+  symbol: string,
+  sessionDates: string[],
+  at?: Date | string,
+): Promise<Map<string, number>> {
+  const quoteAt = normalizeAt(at);
+  const dates = [...new Set(sessionDates)].sort();
+  if (dates.length === 0) return new Map();
+  for (const sessionDate of dates) {
+    parseHistoricalDate(sessionDate, quoteAt);
+  }
+
+  const normalizedSymbol = normalizeMarketSymbol(symbol);
+  let instrument = readInstrument(normalizedSymbol);
+  if (!instrument) {
+    await refreshQuote(normalizedSymbol, quoteAt);
+    instrument = readInstrument(normalizedSymbol);
+  }
+  if (!instrument) {
+    throw new AppError(
+      "UNKNOWN_SYMBOL",
+      `The symbol ${normalizedSymbol} is not available in this simulation.`,
+      404,
+      { symbol: normalizedSymbol },
+    );
+  }
+
+  if (activeProvider.splitMultipliers) {
+    return activeProvider.splitMultipliers(instrument, dates, quoteAt);
+  }
+  if (!activeProvider.historicalPrice) {
+    throw new AppError(
+      "HISTORICAL_PRICE_UNAVAILABLE",
+      `Corporate-action history is not available for ${instrument.symbol}.`,
+      503,
+    );
+  }
+
+  return new Map(
+    await Promise.all(
+      dates.map(async (sessionDate) => [
+        sessionDate,
+        (
+          await activeProvider.historicalPrice!(
+            instrument,
+            sessionDate,
+            quoteAt,
+          )
+        ).splitMultiplier,
+      ] as const),
+    ),
+  );
+}
+
 export function listQuotes(at?: Date | string): Quote[] {
   const quoteAt = normalizeAt(at);
   return readInstruments().flatMap((instrument) => {
@@ -1229,15 +1750,47 @@ export async function searchMarketInstruments(
   const normalizedQuery = query.trim();
   const local = readInstrumentSearchResults(normalizedQuery);
   const exactSymbol = normalizeMarketSymbol(normalizedQuery);
+  const tsxAlias = tsxAliasForBareTickerQuery(normalizedQuery);
   const exactLocal = local.find((result) => result.symbol === exactSymbol);
   if (exactLocal) return [exactLocal];
 
+  const exactTsxLocal = tsxAlias
+    ? local.find((result) => result.symbol === tsxAlias)
+    : undefined;
+  if (exactTsxLocal) {
+    return [
+      exactTsxLocal,
+      ...local.filter((result) => result.symbol !== exactTsxLocal.symbol),
+    ].slice(0, 25);
+  }
+
   let remote: InstrumentSearchResult[] = [];
+  let primarySearchError: unknown;
   if (activeProvider.search) {
     try {
       remote = await activeProvider.search(normalizedQuery);
     } catch (error) {
-      if (local.length === 0) throw error;
+      primarySearchError = error;
+    }
+
+    const hasLiteralExact = remote.some(
+      (result) => result.symbol === exactSymbol,
+    );
+    const hasTsxExact = tsxAlias
+      ? remote.some((result) => result.symbol === tsxAlias)
+      : false;
+
+    // Yahoo's fuzzy search for a bare Canadian ticker can omit its TSX
+    // listing entirely (for example, PET returns petroleum companies while
+    // PET.TO returns Pet Valu). Probe the exact TSX alias only when the first
+    // result set has no literal exact match. Each query is cached for ten
+    // minutes by the provider, so repeated searches do not multiply calls.
+    if (tsxAlias && !hasLiteralExact && !hasTsxExact) {
+      try {
+        remote = [...remote, ...(await activeProvider.search(tsxAlias))];
+      } catch (error) {
+        if (!primarySearchError) primarySearchError = error;
+      }
     }
   }
 
@@ -1245,11 +1798,19 @@ export async function searchMarketInstruments(
   for (const result of [...remote, ...local]) {
     if (!merged.has(result.symbol)) merged.set(result.symbol, result);
   }
-  return [...merged.values()]
+  const results = [...merged.values()]
     .sort((left, right) => {
       if (left.symbol === exactSymbol) return -1;
       if (right.symbol === exactSymbol) return 1;
+      if (tsxAlias && left.symbol === tsxAlias) return -1;
+      if (tsxAlias && right.symbol === tsxAlias) return 1;
       return 0;
     })
     .slice(0, 25);
+
+  if (results.length === 0 && primarySearchError) {
+    throw primarySearchError;
+  }
+
+  return results;
 }

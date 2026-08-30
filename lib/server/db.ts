@@ -12,7 +12,7 @@ const globalDatabase = globalThis as typeof globalThis & {
   __lubanSimulatorSchemaVersion?: number;
 };
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 6;
 
 function createDatabase(): DatabaseSync {
   const databasePath = process.env.LUBAN_DATABASE_PATH ?? DEFAULT_DATABASE_PATH;
@@ -28,6 +28,7 @@ function createDatabase(): DatabaseSync {
   createSchema(database);
   globalDatabase.__lubanSimulatorSchemaVersion = SCHEMA_VERSION;
   seedIfEmpty(database);
+  syncLocalDemoAdmin(database);
 
   return database;
 }
@@ -38,8 +39,12 @@ function createSchema(database: DatabaseSync): void {
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       email TEXT NOT NULL UNIQUE,
-      role TEXT NOT NULL CHECK (role IN ('student', 'host')),
-      created_at TEXT NOT NULL
+      role TEXT NOT NULL CHECK (role IN ('student', 'host', 'platform_admin')),
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended')),
+      auth_subject TEXT UNIQUE,
+      email_verified_at TEXT,
+      created_at TEXT NOT NULL,
+      last_login_at TEXT
     );
 
     CREATE TABLE IF NOT EXISTS competitions (
@@ -169,6 +174,55 @@ function createSchema(database: DatabaseSync): void {
       revoked_at TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS account_invitations (
+      id TEXT PRIMARY KEY,
+      token_hash TEXT NOT NULL UNIQUE,
+      role TEXT NOT NULL CHECK (role IN ('student', 'host', 'platform_admin')),
+      email TEXT,
+      invited_name TEXT,
+      team_id TEXT REFERENCES teams(id) ON DELETE CASCADE,
+      competition_id TEXT REFERENCES competitions(id) ON DELETE CASCADE,
+      created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      revoked_at TEXT,
+      used_at TEXT,
+      used_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      CHECK ((role = 'student') = (team_id IS NOT NULL))
+    );
+
+    CREATE TABLE IF NOT EXISTS auth_audit_events (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,
+      actor_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      subject_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      detail TEXT NOT NULL,
+      metadata_json TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS admin_valuation_positions (
+      id TEXT PRIMARY KEY,
+      admin_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      idempotency_key TEXT NOT NULL,
+      request_fingerprint TEXT NOT NULL,
+      symbol TEXT NOT NULL REFERENCES instruments(symbol),
+      requested_date TEXT NOT NULL,
+      session_date TEXT NOT NULL,
+      session_at TEXT NOT NULL,
+      quantity INTEGER NOT NULL CHECK (quantity > 0),
+      fill_price_cents INTEGER NOT NULL CHECK (fill_price_cents > 0),
+      fill_price_cad_cents INTEGER NOT NULL CHECK (fill_price_cad_cents > 0),
+      historical_fx_rate_basis_points INTEGER NOT NULL
+        CHECK (historical_fx_rate_basis_points > 0),
+      split_multiplier_ppm INTEGER NOT NULL CHECK (split_multiplier_ppm > 0),
+      split_checked_at TEXT NOT NULL,
+      source TEXT NOT NULL CHECK (source IN ('YAHOO_FINANCE', 'LUBAN_SIMULATED')),
+      source_url TEXT,
+      created_at TEXT NOT NULL,
+      UNIQUE (admin_user_id, idempotency_key)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_activity_competition_created
       ON activity_events (competition_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_activity_team_created
@@ -183,10 +237,108 @@ function createSchema(database: DatabaseSync): void {
       ON portfolio_snapshots (team_id, captured_at ASC);
     CREATE INDEX IF NOT EXISTS idx_sessions_user
       ON sessions (user_id);
+    CREATE INDEX IF NOT EXISTS idx_invitations_expires
+      ON account_invitations (expires_at);
+    CREATE INDEX IF NOT EXISTS idx_auth_audit_created
+      ON auth_audit_events (created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_admin_valuation_owner_created
+      ON admin_valuation_positions (admin_user_id, created_at DESC);
   `);
 
   ensureOrderReceiptColumns(database);
   ensureInstrumentRefreshColumn(database);
+  ensureAccountColumns(database);
+  ensureAdminValuationColumns(database);
+}
+
+function ensureAdminValuationColumns(database: DatabaseSync): void {
+  const columns = database
+    .prepare("PRAGMA table_info(admin_valuation_positions)")
+    .all() as unknown as Array<{ name: string }>;
+
+  if (!columns.some((column) => column.name === "split_checked_at")) {
+    database.exec(`
+      ALTER TABLE admin_valuation_positions
+      ADD COLUMN split_checked_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z';
+    `);
+  }
+}
+
+/**
+ * Databases created before schema version 4 have a users table without
+ * account-status, managed-identity, or platform_admin support. SQLite cannot
+ * widen a CHECK constraint in place, so the table is rebuilt and its rows
+ * copied. Foreign keys are switched off only for the rebuild, exactly as the
+ * SQLite ALTER TABLE documentation prescribes.
+ */
+function usersTableNeedsAccountColumns(database: DatabaseSync): boolean {
+  const columns = database.prepare("PRAGMA table_info(users)").all() as unknown as Array<{
+    name: string;
+  }>;
+
+  return !columns.some((column) => column.name === "auth_subject");
+}
+
+function ensureAccountColumns(database: DatabaseSync): void {
+  if (!usersTableNeedsAccountColumns(database)) {
+    return;
+  }
+
+  database.exec("PRAGMA foreign_keys = OFF;");
+
+  try {
+    database.exec("BEGIN IMMEDIATE;");
+
+    // Re-check now that the write lock is held: another process may have
+    // completed the same rebuild between the first check and BEGIN IMMEDIATE.
+    if (!usersTableNeedsAccountColumns(database)) {
+      database.exec("COMMIT;");
+      database.exec("PRAGMA foreign_keys = ON;");
+      return;
+    }
+
+    database.exec(`
+      CREATE TABLE users_migrated (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        email TEXT NOT NULL UNIQUE,
+        role TEXT NOT NULL CHECK (role IN ('student', 'host', 'platform_admin')),
+        status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended')),
+        auth_subject TEXT UNIQUE,
+        email_verified_at TEXT,
+        created_at TEXT NOT NULL,
+        last_login_at TEXT
+      );
+
+      INSERT INTO users_migrated (id, name, email, role, status, created_at)
+      SELECT id, name, email, role, 'active', created_at FROM users;
+
+      DROP TABLE users;
+      ALTER TABLE users_migrated RENAME TO users;
+
+      COMMIT;
+    `);
+  } catch (error) {
+    try {
+      database.exec("ROLLBACK;");
+    } catch {
+      // Preserve the migration error below.
+    }
+    database.exec("PRAGMA foreign_keys = ON;");
+    throw error;
+  }
+
+  database.exec("PRAGMA foreign_keys = ON;");
+
+  const violations = database.prepare("PRAGMA foreign_key_check").all();
+  if (violations.length > 0) {
+    throw new AppError(
+      "MIGRATION_FOREIGN_KEY_VIOLATION",
+      "The account schema migration left dangling foreign keys.",
+      500,
+      { violations: violations.length },
+    );
+  }
 }
 
 function ensureInstrumentRefreshColumn(database: DatabaseSync): void {
@@ -249,18 +401,51 @@ function seedIfEmpty(database: DatabaseSync): void {
   }
 }
 
+function syncLocalDemoAdmin(database: DatabaseSync): void {
+  const demoAdminEnabled =
+    process.env.LUBAN_AUTH_MODE !== "managed" &&
+    (process.env.NODE_ENV === "development" ||
+      process.env.LUBAN_DEMO_MODE === "true");
+
+  if (demoAdminEnabled) {
+    database
+      .prepare(`
+        INSERT INTO users (id, name, email, role, status, created_at)
+        VALUES ('admin', 'Ada (Admin)', 'admin@demo.luban.org',
+          'platform_admin', 'active', ?)
+        ON CONFLICT(id) DO NOTHING
+      `)
+      .run(new Date().toISOString());
+    return;
+  }
+
+  // Never let the browser-test identity occupy the first real administrator
+  // slot in managed auth. The exact predicates avoid touching a genuine
+  // linked account that happens to use a similar display name.
+  database
+    .prepare(`
+      DELETE FROM users
+      WHERE id = 'admin'
+        AND email = 'admin@demo.luban.org'
+        AND auth_subject IS NULL
+    `)
+    .run();
+}
+
 function clearDomainData(database: DatabaseSync, preserveSessions: boolean): void {
   if (!preserveSessions) {
     database.exec("DELETE FROM sessions;");
   }
 
   database.exec(`
+    DELETE FROM admin_valuation_positions;
     DELETE FROM portfolio_snapshots;
     DELETE FROM activity_events;
     DELETE FROM ledger_entries;
     DELETE FROM idempotency_records;
     DELETE FROM orders;
     DELETE FROM holdings;
+    DELETE FROM account_invitations;
     DELETE FROM team_members;
     DELETE FROM teams;
     DELETE FROM competitions;
@@ -278,19 +463,19 @@ function seedDatabase(database: DatabaseSync, preserveSessions: boolean): void {
     clearDomainData(database, preserveSessions);
 
     const insertUser = database.prepare(`
-      INSERT INTO users (id, name, email, role, created_at)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT INTO users (id, name, email, role, status, created_at)
+      VALUES (?, ?, ?, ?, 'active', ?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         email = excluded.email,
-        role = excluded.role
+        role = excluded.role,
+        status = 'active'
     `);
 
     insertUser.run("alex", "Johnny", "alex@demo.luban.org", "student", createdAt);
     insertUser.run("maya", "Menon", "maya@demo.luban.org", "student", createdAt);
     insertUser.run("jordan", "Radin", "jordan@demo.luban.org", "student", createdAt);
     insertUser.run("host", "Joe (Host)", "host@demo.luban.org", "host", createdAt);
-
     database.prepare(`
       INSERT INTO competitions (
         id, name, status, base_currency, starting_cash_cents,
@@ -429,6 +614,7 @@ export function getDatabase(): DatabaseSync {
   } else if (globalDatabase.__lubanSimulatorSchemaVersion !== SCHEMA_VERSION) {
     createSchema(globalDatabase.__lubanSimulatorDatabase);
     globalDatabase.__lubanSimulatorSchemaVersion = SCHEMA_VERSION;
+    syncLocalDemoAdmin(globalDatabase.__lubanSimulatorDatabase);
   }
 
   return globalDatabase.__lubanSimulatorDatabase;
@@ -518,4 +704,5 @@ export function resetPrototypeDatabase(): void {
   const database = getDatabase();
   createSchema(database);
   seedDatabase(database, true);
+  syncLocalDemoAdmin(database);
 }

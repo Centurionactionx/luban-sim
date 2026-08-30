@@ -6,9 +6,11 @@ import type {
   CompetitionStatus,
   SetTeamCashInput,
   TeamStatus,
+  UpdateCompetitionScheduleInput,
   UpdateCompetitionStatusInput,
   UpdateTeamStatusInput,
 } from "../contracts";
+import { canHostCompetitions } from "../contracts";
 import { AppError } from "../errors";
 import { getSessionUser } from "./auth";
 import {
@@ -52,7 +54,11 @@ function requireHost(actorUserId: string): void {
     throw new AppError("UNAUTHORIZED", "Sign in to continue.", 401);
   }
 
-  if (user.role !== "host") {
+  if (user.status !== "active") {
+    throw new AppError("ACCOUNT_SUSPENDED", "This account is suspended.", 403);
+  }
+
+  if (!canHostCompetitions(user.role)) {
     throw new AppError("HOST_REQUIRED", "This action is restricted to hosts.", 403);
   }
 }
@@ -206,6 +212,252 @@ export function updateCompetitionStatus(
       database.exec("ROLLBACK;");
     } catch {
       // Preserve the domain or database error that caused the rollback.
+    }
+    throw error;
+  }
+
+  return getAdminOverview(input.actorUserId);
+}
+
+const MAX_COMPETITION_LENGTH_MS = 366 * 24 * 3_600_000;
+
+function normalizeScheduleInstant(
+  value: string | undefined,
+  fallback: string,
+  field: string,
+): string {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  const parsed = Date.parse(value);
+
+  if (typeof value !== "string" || !Number.isFinite(parsed)) {
+    throw new AppError(
+      "INVALID_SCHEDULE_TIME",
+      "Schedule times must be valid dates with a time.",
+      400,
+      { field },
+    );
+  }
+
+  return new Date(parsed).toISOString();
+}
+
+/**
+ * Sets the competition window and, while nothing has traded yet, the teams'
+ * starting cash. The window itself is what opens and closes trading: an
+ * "active" competition accepts orders only between startsAt and endsAt, so
+ * scheduling a start or end needs no timer — it takes effect by clock.
+ */
+export function updateCompetitionSchedule(
+  input: UpdateCompetitionScheduleInput,
+): AdminOverview {
+  requireHost(input.actorUserId);
+
+  if (
+    input.startsAt === undefined &&
+    input.endsAt === undefined &&
+    input.startingCashCents === undefined
+  ) {
+    throw new AppError(
+      "EMPTY_SCHEDULE_UPDATE",
+      "Provide a start, an end, or a starting cash amount to update.",
+      400,
+    );
+  }
+
+  const database = getDatabase();
+  let transactionOpen = false;
+
+  database.exec("BEGIN IMMEDIATE;");
+  transactionOpen = true;
+
+  try {
+    const competition = database
+      .prepare(`
+        SELECT id, name, status, starting_cash_cents, starts_at, ends_at
+        FROM competitions
+        ORDER BY created_at DESC
+        LIMIT 1
+      `)
+      .get() as
+      | {
+          id: string;
+          name: string;
+          status: CompetitionStatus;
+          starting_cash_cents: number;
+          starts_at: string;
+          ends_at: string;
+        }
+      | undefined;
+
+    if (!competition) {
+      throw new AppError(
+        "COMPETITION_NOT_FOUND",
+        "No competition is configured.",
+        404,
+      );
+    }
+
+    const startsAt = normalizeScheduleInstant(
+      input.startsAt,
+      competition.starts_at,
+      "startsAt",
+    );
+    const endsAt = normalizeScheduleInstant(
+      input.endsAt,
+      competition.ends_at,
+      "endsAt",
+    );
+
+    if (endsAt <= startsAt) {
+      throw new AppError(
+        "INVALID_SCHEDULE_WINDOW",
+        "The competition must end after it starts.",
+        400,
+        { field: "endsAt" },
+      );
+    }
+
+    if (Date.parse(endsAt) - Date.parse(startsAt) > MAX_COMPETITION_LENGTH_MS) {
+      throw new AppError(
+        "INVALID_SCHEDULE_WINDOW",
+        "Competitions are limited to one year.",
+        400,
+        { field: "endsAt" },
+      );
+    }
+
+    const scheduleChanged =
+      startsAt !== competition.starts_at || endsAt !== competition.ends_at;
+
+    if (scheduleChanged) {
+      database
+        .prepare("UPDATE competitions SET starts_at = ?, ends_at = ? WHERE id = ?")
+        .run(startsAt, endsAt, competition.id);
+    }
+
+    let cashChanged = false;
+
+    if (
+      input.startingCashCents !== undefined &&
+      Number(input.startingCashCents) !== Number(competition.starting_cash_cents)
+    ) {
+      const cashCents = input.startingCashCents;
+
+      if (
+        !Number.isSafeInteger(cashCents) ||
+        cashCents < 0 ||
+        cashCents > MAX_TEAM_CASH_CENTS
+      ) {
+        throw new AppError(
+          "INVALID_CASH_BALANCE",
+          "Starting cash must be a non-negative amount within the supported CAD limit.",
+          400,
+          { field: "startingCashCents", maximumCents: MAX_TEAM_CASH_CENTS },
+        );
+      }
+
+      const traded = database
+        .prepare(`
+          SELECT COUNT(*) AS count
+          FROM orders o
+          JOIN teams t ON t.id = o.team_id
+          WHERE t.competition_id = ?
+        `)
+        .get(competition.id) as { count: number };
+
+      if (Number(traded.count) > 0) {
+        throw new AppError(
+          "STARTING_CASH_LOCKED",
+          "Starting cash cannot change once trading has begun. Reset the demo data or adjust individual team balances instead.",
+          409,
+          { field: "startingCashCents" },
+        );
+      }
+
+      database
+        .prepare("UPDATE competitions SET starting_cash_cents = ? WHERE id = ?")
+        .run(cashCents, competition.id);
+
+      // No orders exist, so each team's ledger holds only its starting-cash
+      // entry (plus any pre-start host adjustments). Rebuild it as a single
+      // fresh STARTING_CASH line so cash and ledger reconcile exactly.
+      const teams = database
+        .prepare("SELECT id FROM teams WHERE competition_id = ?")
+        .all(competition.id) as unknown as Array<{ id: string }>;
+      const nowIso = new Date().toISOString();
+
+      for (const team of teams) {
+        database
+          .prepare("UPDATE teams SET cash_cents = ?, version = version + 1 WHERE id = ?")
+          .run(cashCents, team.id);
+        database
+          .prepare("DELETE FROM ledger_entries WHERE team_id = ?")
+          .run(team.id);
+        database
+          .prepare(`
+            INSERT INTO ledger_entries (
+              id, team_id, order_id, entry_type, amount_cents,
+              symbol, quantity, note, created_at
+            ) VALUES (?, ?, NULL, 'STARTING_CASH', ?, NULL, NULL, ?, ?)
+          `)
+          .run(
+            randomUUID(),
+            team.id,
+            cashCents,
+            "Competition starting balance",
+            nowIso,
+          );
+      }
+
+      cashChanged = true;
+    }
+
+    if (scheduleChanged || cashChanged) {
+      const actor = getSessionUser(input.actorUserId);
+      const changes: string[] = [];
+
+      if (scheduleChanged) {
+        changes.push(
+          `the window to ${startsAt} through ${endsAt}`,
+        );
+      }
+      if (cashChanged) {
+        changes.push(
+          `starting cash to ${formatCad(Number(input.startingCashCents))}`,
+        );
+      }
+
+      database
+        .prepare(`
+          INSERT INTO activity_events (
+            id, competition_id, team_id, actor_user_id, type,
+            title, detail, created_at
+          ) VALUES (?, ?, NULL, ?, 'COMPETITION_SCHEDULE_CHANGED', ?, ?, ?)
+        `)
+        .run(
+          randomUUID(),
+          competition.id,
+          input.actorUserId,
+          "Competition schedule updated",
+          `${actor?.name ?? "Host"} set ${changes.join(" and ")}.`,
+          new Date().toISOString(),
+        );
+
+      assertLedgerReconciles();
+    }
+
+    database.exec("COMMIT;");
+    transactionOpen = false;
+  } catch (error) {
+    if (transactionOpen) {
+      try {
+        database.exec("ROLLBACK;");
+      } catch {
+        // Preserve the domain or database error that caused the rollback.
+      }
     }
     throw error;
   }

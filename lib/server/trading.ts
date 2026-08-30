@@ -14,6 +14,26 @@ import { assertLedgerReconciles, getDatabase } from "./db";
 import { normalizeMarketSymbol, requireQuote } from "./quotes";
 
 const MAX_ORDER_QUANTITY = 100_000;
+const DEFAULT_MAX_ORDERS_PER_MINUTE = 20;
+const ORDER_RATE_WINDOW_MS = 60_000;
+
+/**
+ * Anti-spam ceiling on order attempts per student per rolling minute. The
+ * default supports active day trading (an order every three seconds,
+ * sustained) while stopping runaway scripts and button-mashing. Counted from
+ * durable idempotency records inside the write transaction, so it holds
+ * across processes and server restarts; genuine idempotent replays are
+ * answered before the check and are never throttled.
+ */
+function maxOrdersPerMinute(): number {
+  const raw = Number(process.env.LUBAN_MAX_ORDERS_PER_MINUTE);
+
+  if (Number.isSafeInteger(raw) && raw >= 1 && raw <= 10_000) {
+    return raw;
+  }
+
+  return DEFAULT_MAX_ORDERS_PER_MINUTE;
+}
 
 interface IdempotencyRecordRow {
   request_fingerprint: string;
@@ -33,6 +53,8 @@ interface TradingAccountRow {
   version: number | null;
   competition_id: string | null;
   competition_status: CompetitionStatus | null;
+  competition_starts_at: string | null;
+  competition_ends_at: string | null;
 }
 
 interface HoldingRow {
@@ -133,7 +155,10 @@ function shouldPersistRejection(error: unknown): error is AppError {
     error.status < 500 &&
     error.code !== "UNAUTHORIZED" &&
     error.code !== "IDEMPOTENCY_CONFLICT" &&
-    error.code !== "PORTFOLIO_CONFLICT"
+    error.code !== "PORTFOLIO_CONFLICT" &&
+    // A throttled attempt must stay retryable: persisting it would replay
+    // the 429 forever for that idempotency key.
+    error.code !== "ORDER_RATE_LIMITED"
   );
 }
 
@@ -210,11 +235,50 @@ export function placeOrder(input: PlaceOrderInput): TradeReceipt {
       return replayedReceipt;
     }
 
+    const rateLimit = maxOrdersPerMinute();
+    const windowStartIso = new Date(
+      Date.now() - ORDER_RATE_WINDOW_MS,
+    ).toISOString();
+    const recentAttempts = database.prepare(`
+      SELECT COUNT(*) AS count
+      FROM idempotency_records
+      WHERE actor_user_id = ? AND created_at > ?
+    `).get(normalized.actorUserId, windowStartIso) as { count: number };
+
+    if (Number(recentAttempts.count) >= rateLimit) {
+      const oldestCounted = database.prepare(`
+        SELECT created_at
+        FROM idempotency_records
+        WHERE actor_user_id = ? AND created_at > ?
+        ORDER BY created_at ASC
+        LIMIT 1
+      `).get(normalized.actorUserId, windowStartIso) as
+        | { created_at: string }
+        | undefined;
+      const retryAfterSeconds = Math.max(
+        1,
+        Math.ceil(
+          (Date.parse(oldestCounted?.created_at ?? windowStartIso) +
+            ORDER_RATE_WINDOW_MS -
+            Date.now()) /
+            1_000,
+        ),
+      );
+
+      throw new AppError(
+        "ORDER_RATE_LIMITED",
+        `Slow down: at most ${rateLimit} orders per minute per trader. Try again shortly.`,
+        429,
+        { retryAfterSeconds, limitPerMinute: rateLimit },
+      );
+    }
+
     const account = database.prepare(`
       SELECT
         u.id AS user_id, u.name AS actor_name, u.role, tm.team_id,
         t.name AS team_name, t.status AS team_status, t.cash_cents, t.version,
-        c.id AS competition_id, c.status AS competition_status
+        c.id AS competition_id, c.status AS competition_status,
+        c.starts_at AS competition_starts_at, c.ends_at AS competition_ends_at
       FROM users u
       LEFT JOIN team_members tm ON tm.user_id = u.id
       LEFT JOIN teams t ON t.id = tm.team_id
@@ -249,6 +313,31 @@ export function placeOrder(input: PlaceOrderInput): TradeReceipt {
           : "This competition is not accepting trades.",
         409,
         { competitionStatus: account.competition_status },
+      );
+    }
+
+    // The schedule window is the automatic start/stop switch: an active
+    // competition only accepts orders between its start and end instants.
+    // Checked inside the same transaction as the balance mutation so a trade
+    // can never slip through around the boundary.
+    const nowIso = new Date().toISOString();
+    if (account.competition_starts_at && nowIso < account.competition_starts_at) {
+      throw new AppError(
+        "TRADING_CLOSED",
+        "Trading has not opened yet for this competition.",
+        409,
+        {
+          competitionStatus: "scheduled",
+          opensAt: account.competition_starts_at,
+        },
+      );
+    }
+    if (account.competition_ends_at && nowIso >= account.competition_ends_at) {
+      throw new AppError(
+        "TRADING_CLOSED",
+        "This competition has ended.",
+        409,
+        { competitionStatus: "ended", endedAt: account.competition_ends_at },
       );
     }
     if (account.team_status !== "active") {

@@ -46,14 +46,31 @@ Those are application migrations that must be implemented and tested in this rep
 ```env
 LUBAN_MARKET_DATA_PROVIDER=yahoo
 LUBAN_DEMO_MODE=true
+
+# Managed sign-in (see "Authentication choice" below)
+# LUBAN_AUTH_MODE=managed
+# NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_live_...
+# CLERK_SECRET_KEY=sk_live_...
+# LUBAN_BOOTSTRAP_ADMIN_EMAIL=admin@example.ca   # remove after first admin exists
+# LUBAN_REQUIRE_ADMIN_MFA=true
 ```
 
 `LUBAN_DEMO_MODE=true` permits anyone with access to switch among the seeded identities, including the host. Use it only for a private demonstration. It is not an authentication system and must be disabled before a public deployment.
+
+`LUBAN_AUTH_MODE=managed` switches the deployment to real Clerk sign-in: demo identity switching is refused, registration is invitation-only, and host/admin actions require MFA enrollment (unless `LUBAN_REQUIRE_ADMIN_MFA=false`, for Clerk plans without MFA strategies). The publishable key is inlined at build time, so both Clerk keys must be present in the build environment for a managed deployment.
 
 The Supabase Marketplace integration supplies its own connection and API variables. Never commit those values. Only public/publishable Supabase variables may use a `NEXT_PUBLIC_` prefix; database passwords and secret/service-role keys must remain server-only.
 
 ## Authentication choice
 
-For the fewest external services, use Supabase for both PostgreSQL and authentication. Keep Luban's application authorization in PostgreSQL: team membership, competition-scoped host access, platform-admin roles, account status, and audit history must be checked by the server on every protected operation.
+The application now ships a managed-identity integration built on Clerk, behind `LUBAN_AUTH_MODE=managed`. Clerk handles passwords, email verification, password resets, MFA, and session cookies; Luban keeps authorization (roles, teams, account status, audit history) in its own database and re-checks it on every protected operation. Do not run two independent authentication systems.
 
-If prebuilt authentication UI and simpler onboarding are more important, use Clerk for identity and Supabase only for PostgreSQL. Do not run two independent authentication systems.
+Bootstrap and operations in managed mode:
+
+1. Create a Clerk application and set `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY`. In the Clerk dashboard, require email verification at sign-up and enable the Authenticator-application (TOTP) MFA strategy — MFA strategies need a paid Clerk plan; until then set `LUBAN_REQUIRE_ADMIN_MFA=false` explicitly, and remove it as soon as the plan allows.
+2. Create the first platform administrator out of band: run `pnpm bootstrap:admin -- --email you@example.ca` on the machine that owns the database and open the printed single-use link, or set `LUBAN_BOOTSTRAP_ADMIN_EMAIL` and sign in once with that verified email. Remove the variable afterwards; it can never mint a second admin while one exists.
+3. The administrator invites hosts and administrators, and hosts invite students, from **Accounts & invitations** in the app. Invitation links are single-use, expire (72 h by default), are stored only as hashes, and every issue/revoke/accept is audited.
+4. Keep `LUBAN_DEMO_MODE` unset in managed deployments. Demo login is refused in managed mode regardless, and the seeded demo accounts have no managed sign-in linked to them.
+5. Give a managed deployment a fresh database rather than promoting one that ran in demo mode: invitations minted during a demo session would otherwise remain redeemable after the switch. (Managed accounts are protected in the other direction — they can never be assumed through the demo identity switcher.)
+
+Note the SQLite caveat above: on Vercel the database is ephemeral, so managed-mode accounts and invitations only become durable after the PostgreSQL migration. Test managed sign-in on a private preview first.

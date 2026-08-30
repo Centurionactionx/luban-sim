@@ -72,6 +72,41 @@ For Vercel and Supabase setup, including the current SQLite limitation, see [DEP
 Demo sessions use opaque, hashed, HTTP-only cookies. They are intentionally not a production sign-in system.
 Production builds reject demo login unless `LUBAN_DEMO_MODE=true`; enable that flag only for a private preview, never as the authentication model for a real deployment.
 
+## Real sign-in (managed mode)
+
+Setting `LUBAN_AUTH_MODE=managed` replaces the demo identity switcher with real
+registration and sign-in through [Clerk](https://clerk.com), which handles
+passwords, email verification, password resets, MFA enrollment, and session
+cookies. Luban keeps authorization: roles, teams, competition access, account
+status, and the security audit log all live in the local database and are
+checked by the server on every protected operation.
+
+- **Invitation-only registration.** There is no open sign-up and no public
+  "register as admin" path. A host creates a single-use, expiring invitation
+  from **Accounts & invitations** (also `POST /api/admin/invitations`); the
+  student opens the `/join/<token>` link, registers with a verified email, and
+  is placed on their assigned team. Tokens are stored only as SHA-256 hashes
+  and are consumed transactionally, so a link can never be redeemed twice.
+- **Roles.** `student` trades with their team; `host` runs the competition;
+  `platform_admin` additionally invites hosts and administrators. Roles are
+  never accepted from the browser.
+- **First administrator.** Bootstrap out of band with
+  `pnpm bootstrap:admin -- --email you@example.ca`, which prints a single-use
+  platform-admin invitation link — or set `LUBAN_BOOTSTRAP_ADMIN_EMAIL` so the
+  first verified sign-in with that email becomes the only bootstrapped admin.
+- **Admin MFA.** In managed mode, host and admin actions require the account
+  to have multi-factor authentication enrolled (verified against Clerk
+  server-side, failing closed). `LUBAN_REQUIRE_ADMIN_MFA=false` disables the
+  gate only while a Clerk plan without MFA strategies is in use.
+- **Audit trail.** Invitation creation/revocation/acceptance, account
+  creation, and admin bootstrap are recorded in `auth_audit_events` without
+  tokens or secrets.
+
+Managed mode needs `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY`
+(see `.env.example`). Demo mode remains the default and runs without any
+provider keys; the automated test suites cover demo mode plus the invitation,
+bootstrap, and MFA-policy logic directly.
+
 ## Verification
 
 ```bash
@@ -89,9 +124,13 @@ pnpm test:e2e
 
 | Route | Purpose |
 | --- | --- |
-| `POST /api/auth/demo-login` | Create/switch a demo session |
+| `POST /api/auth/demo-login` | Create/switch a demo session (demo mode only) |
 | `POST /api/auth/logout` | Revoke only the current session |
-| `GET /api/auth/session` | Read the current identity |
+| `GET /api/auth/session` | Read the current identity and auth mode |
+| `GET /api/admin/invitations` | Host/admin: list issued invitations |
+| `POST /api/admin/invitations` | Host/admin: create a single-use invitation |
+| `DELETE /api/admin/invitations/:id` | Host/admin: revoke an unused invitation |
+| `POST /api/invitations/accept` | Managed mode: redeem an invitation token |
 | `GET /api/dashboard` | Shared portfolio, holdings, activity, quotes, and standings |
 | `GET /api/quotes?q=...` | Search TSX, Nasdaq, and NYSE-family stock metadata |
 | `GET /api/quotes?symbol=DAKT` | Resolve one supported symbol and return its current quote |
@@ -100,12 +139,14 @@ pnpm test:e2e
 | `POST /api/orders` | Commit an idempotent market order |
 | `GET /api/activity` | Read attributed team/competition activity |
 | `GET /api/admin/overview` | Host-only team and competition state |
-| `PATCH /api/admin/competition` | Pause or resume the competition |
+| `PATCH /api/admin/competition` | Pause/resume, set the schedule window, or set starting cash |
 | `PATCH /api/admin/teams/:teamId` | Freeze, disqualify, or restore a team |
 | `PATCH /api/admin/teams/:teamId/cash` | Set a team's exact CAD cash balance in cents |
-| `POST /api/admin/reset` | Restore seeded prototype state |
+| `POST /api/admin/reset` | Restore seeded prototype state (demo mode only) |
 
-All responses are private and `no-store`. Business conflicts return stable error codes such as `INSUFFICIENT_CASH`, `INSUFFICIENT_SHARES`, `TRADING_CLOSED`, and `IDEMPOTENCY_CONFLICT`.
+All responses are private and `no-store`. Business conflicts return stable error codes such as `INSUFFICIENT_CASH`, `INSUFFICIENT_SHARES`, `TRADING_CLOSED`, and `IDEMPOTENCY_CONFLICT`. Order attempts are capped per trader per rolling minute (`ORDER_RATE_LIMITED`, default 20 via `LUBAN_MAX_ORDERS_PER_MINUTE`) — enough for continuous day trading, low enough to stop runaway scripts.
+
+Competitions run on a schedule: the host sets start/end date-times and team starting cash from the host panel, and trading opens and closes automatically at those instants (`scheduled` → `open` → `ended`), with manual pause/resume still available. The window is enforced inside the order transaction, so no trade can slip past the boundary. Starting cash can only change before the first fill.
 
 ## Where the server side should be hosted
 
@@ -123,7 +164,7 @@ Before any multi-instance deployment, replace `lib/server/db.ts` with a managed 
 
 ## Not production-ready yet
 
-- Replace demo switching with real authentication, invitations, team membership, and host authorization.
+- Real authentication now exists behind `LUBAN_AUTH_MODE=managed` (Clerk sign-in, invitation-only registration, bootstrapped admin, admin MFA). Still open: suspension tooling UI, rate limiting, session-revocation UI, and email delivery of invitations (links are currently copied by the host).
 - Define privacy, parental-consent, safeguarding, retention, and account-deletion policies for minors.
 - Migrate SQLite to managed PostgreSQL and add formal migrations, backups, monitoring, and rate limits.
 - Replace the working Yahoo prototype feed with licensed Canadian/U.S. market data before public or commercial redistribution; keep brokerage execution out of scope unless Luban deliberately enters a regulated workflow.

@@ -1,4 +1,5 @@
 import {
+  assertRequestAllowed,
   listQuotes,
   normalizeMarketSymbol,
   refreshAllQuotes,
@@ -17,7 +18,11 @@ export const dynamic = "force-dynamic";
 
 export async function GET(request: Request): Promise<Response> {
   try {
-    await requireAuthenticatedUser();
+    const user = await requireAuthenticatedUser();
+
+    // Cache misses on search and symbol resolution reach the upstream
+    // provider, so cap how fast one person can generate them.
+    assertRequestAllowed(`quotes:${user.id}`, 60);
 
     const searchParams = new URL(request.url).searchParams;
     const rawSymbol = searchParams.get("symbol")?.trim();

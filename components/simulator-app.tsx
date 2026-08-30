@@ -1,5 +1,7 @@
 "use client";
 
+import { useRouter } from "next/navigation";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -14,6 +16,7 @@ import {
 import type {
   ActivityItem,
   AdminOverview,
+  AuthMode,
   CompetitionSummary,
   Dashboard,
   DemoUser,
@@ -37,6 +40,7 @@ import {
 } from "@/lib/market-config";
 import {
   ArrowIcon,
+  ChevronDownIcon,
   FlaskIcon,
   InfoIcon,
   LockIcon,
@@ -55,6 +59,15 @@ type DashboardPayload = Omit<Dashboard, "leaderboard"> & {
     user: SessionUser;
     demoUsers: DemoUser[];
   };
+};
+
+type RailSectionId = "presence" | "activity" | "leaderboard" | "host";
+
+const INITIAL_RAIL_SECTIONS: Record<RailSectionId, boolean> = {
+  presence: true,
+  activity: true,
+  leaderboard: true,
+  host: true,
 };
 
 type OrderResult = {
@@ -283,6 +296,8 @@ const fallbackCompetition: CompetitionSummary = {
   id: "fall-2026",
   name: "Luban Fall Market Challenge",
   status: "active",
+  phase: "open",
+  tradingOpen: true,
   baseCurrency: "CAD",
   startingCashCents: 10000000,
   startsAt: "2026-08-24T14:20:00.000Z",
@@ -301,6 +316,7 @@ const fallbackDashboard: DashboardPayload = {
   currentUser: {
     ...fallbackUsers[0],
     email: "alex@demo.luban.org",
+    status: "active",
   },
   competition: fallbackCompetition,
   team: fallbackTeam,
@@ -313,7 +329,7 @@ const fallbackDashboard: DashboardPayload = {
   availableSymbols: fallbackQuotes,
   serverTime: FIXED_NOW,
   session: {
-    user: { ...fallbackUsers[0], email: "alex@demo.luban.org" },
+    user: { ...fallbackUsers[0], email: "alex@demo.luban.org", status: "active" },
     demoUsers: fallbackUsers,
   },
 };
@@ -348,6 +364,30 @@ function cashDraftsForOverview(overview: AdminOverview): Record<string, string> 
   return Object.fromEntries(
     overview.teams.map((team) => [team.id, (team.cashCents / 100).toFixed(2)]),
   );
+}
+
+function formatScheduleInstant(iso: string): string {
+  const date = new Date(iso);
+
+  if (Number.isNaN(date.getTime())) {
+    return iso;
+  }
+
+  return date.toLocaleString("en-CA", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
+function isoToLocalInputValue(iso: string): string {
+  const date = new Date(iso);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 function parseCashDraft(value: string): number | null {
@@ -819,6 +859,133 @@ function PanelHeading({
   );
 }
 
+function CollapsiblePanelHeading({
+  id,
+  controlsId,
+  title,
+  icon,
+  aside,
+  isOpen,
+  onToggle,
+}: {
+  id: string;
+  controlsId: string;
+  title: string;
+  icon?: ReactNode;
+  aside?: ReactNode;
+  isOpen: boolean;
+  onToggle: () => void;
+}) {
+  const shouldReduceMotion = useReducedMotion();
+
+  return (
+    <button
+      className="panel-heading panel-heading--collapsible"
+      type="button"
+      aria-expanded={isOpen}
+      aria-controls={controlsId}
+      onClick={onToggle}
+    >
+      <span className="panel-heading__title" id={id} role="heading" aria-level={2}>
+        {icon}
+        {title}
+      </span>
+      <span className="panel-heading__tools">
+        {aside ? <span className="panel-heading__aside">{aside}</span> : null}
+        <motion.span
+          className="panel-heading__chevron-motion"
+          aria-hidden="true"
+          animate={{ rotate: isOpen ? 180 : 0 }}
+          transition={
+            shouldReduceMotion
+              ? { duration: 0 }
+              : { duration: 0.2, ease: [0.16, 1, 0.3, 1] }
+          }
+        >
+          <ChevronDownIcon className="panel-heading__chevron" />
+        </motion.span>
+      </span>
+    </button>
+  );
+}
+
+function AnimatedRailSection({
+  className,
+  headingId,
+  contentId,
+  title,
+  icon,
+  aside,
+  isOpen,
+  onToggle,
+  dataFlash,
+  children,
+}: {
+  className: string;
+  headingId: string;
+  contentId: string;
+  title: string;
+  icon?: ReactNode;
+  aside?: ReactNode;
+  isOpen: boolean;
+  onToggle: () => void;
+  dataFlash?: boolean;
+  children: ReactNode;
+}) {
+  const shouldReduceMotion = useReducedMotion();
+  const reducedTransition = { duration: 0 } as const;
+
+  return (
+    <section
+      className={`rail-section ${className}`}
+      data-open={isOpen}
+      data-flash={dataFlash}
+      aria-labelledby={headingId}
+    >
+      <CollapsiblePanelHeading
+        id={headingId}
+        controlsId={contentId}
+        title={title}
+        icon={icon}
+        aside={aside}
+        isOpen={isOpen}
+        onToggle={onToggle}
+      />
+      <AnimatePresence initial={false}>
+        {isOpen ? (
+          <motion.div
+            key={contentId}
+            id={contentId}
+            className="rail-section__content"
+            initial={{ height: 0, opacity: shouldReduceMotion ? 1 : 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{
+              height: 0,
+              opacity: shouldReduceMotion ? 1 : 0,
+              transition: shouldReduceMotion
+                ? reducedTransition
+                : {
+                    height: { duration: 0.22, ease: [0.4, 0, 1, 1] },
+                    opacity: { duration: 0.12, ease: "easeIn" },
+                  },
+            }}
+            transition={
+              shouldReduceMotion
+                ? reducedTransition
+                : {
+                    height: { duration: 0.3, ease: [0.16, 1, 0.3, 1] },
+                    opacity: { duration: 0.18, ease: "easeOut" },
+                  }
+            }
+          >
+            <div className="rail-section__content-inner">{children}</div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+    </section>
+  );
+}
+
 function ChangeValue({ cents, percent }: { cents?: number; percent: number }) {
   const value = cents ?? percent;
   const className = value >= 0 ? "change change--positive" : "change change--negative";
@@ -829,7 +996,19 @@ function ChangeValue({ cents, percent }: { cents?: number; percent: number }) {
   );
 }
 
-export function SimulatorApp() {
+export interface SimulatorAppProps {
+  /** demo (default): seeded identities and the identity switcher. */
+  authMode?: AuthMode;
+  /** Rendered in the header instead of the demo identity switcher. */
+  accountControls?: ReactNode;
+}
+
+export function SimulatorApp({
+  authMode = "demo",
+  accountControls,
+}: SimulatorAppProps = {}) {
+  const isManaged = authMode === "managed";
+  const router = useRouter();
   const [dashboard, setDashboard] = useState<DashboardPayload>(fallbackDashboard);
   const [connection, setConnection] = useState<ConnectionState>("connecting");
   const [sessionReady, setSessionReady] = useState(false);
@@ -853,6 +1032,9 @@ export function SimulatorApp() {
   const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
   const [identityBusy, setIdentityBusy] = useState(false);
   const [hostBusy, setHostBusy] = useState(false);
+  const [scheduleStartDraft, setScheduleStartDraft] = useState<string | null>(null);
+  const [scheduleEndDraft, setScheduleEndDraft] = useState<string | null>(null);
+  const [scheduleCashDraft, setScheduleCashDraft] = useState<string | null>(null);
   const [adminOverview, setAdminOverview] = useState<AdminOverview | null>(null);
   const [teamCashDrafts, setTeamCashDrafts] = useState<Record<string, string>>({});
   const [teamActionBusy, setTeamActionBusy] = useState<string | null>(null);
@@ -860,10 +1042,21 @@ export function SimulatorApp() {
   const [hostFeedback, setHostFeedback] = useState("");
   const [resetArmed, setResetArmed] = useState(false);
   const [syncFlash, setSyncFlash] = useState(false);
+  const [openRailSections, setOpenRailSections] = useState(INITIAL_RAIL_SECTIONS);
   const pollInFlight = useRef(false);
+  // Survives an ambiguous network failure so a manual retry of the same
+  // ticket replays idempotently instead of double-filling.
+  const pendingOrder = useRef<{ key: string; fingerprint: string } | null>(null);
   const autoLoginAttempted = useRef(false);
   const knownVersion = useRef(fallbackTeam.version);
   const lastMarketRefreshAttemptAt = useRef(0);
+
+  const toggleRailSection = useCallback((section: RailSectionId) => {
+    setOpenRailSections((current) => ({
+      ...current,
+      [section]: !current[section],
+    }));
+  }, []);
 
   useEffect(() => {
     const timer = window.setTimeout(async () => {
@@ -880,6 +1073,11 @@ export function SimulatorApp() {
         }
 
         if (!payload.authenticated) {
+          if (isManaged) {
+            router.push("/sign-in");
+            return;
+          }
+
           const login = await fetch("/api/auth/demo-login", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -900,7 +1098,7 @@ export function SimulatorApp() {
     }, 0);
 
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [isManaged, router]);
 
   const fetchDashboard = useCallback(async (
     announce = false,
@@ -919,6 +1117,12 @@ export function SimulatorApp() {
 
       if (response.status === 401 && !autoLoginAttempted.current) {
         autoLoginAttempted.current = true;
+
+        if (isManaged) {
+          router.push("/sign-in");
+          return;
+        }
+
         const login = await fetch("/api/auth/demo-login", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -983,7 +1187,7 @@ export function SimulatorApp() {
     } finally {
       pollInFlight.current = false;
     }
-  }, [selectedSymbol]);
+  }, [isManaged, router, selectedSymbol]);
 
   useEffect(() => {
     if (!sessionReady) return;
@@ -1069,7 +1273,12 @@ export function SimulatorApp() {
   }, []);
 
   useEffect(() => {
-    if (dashboard.currentUser.role !== "host") return;
+    if (
+      dashboard.currentUser.role !== "host" &&
+      dashboard.currentUser.role !== "platform_admin"
+    ) {
+      return;
+    }
     const timer = window.setTimeout(() => void fetchAdminOverview(), 0);
     return () => window.clearTimeout(timer);
   }, [dashboard.currentUser.role, fetchAdminOverview]);
@@ -1088,7 +1297,7 @@ export function SimulatorApp() {
   );
   const wholeQuantity = Number(quantity);
   const quantityIsValid =
-    Number.isInteger(wholeQuantity) && wholeQuantity > 0 && wholeQuantity <= 1_000_000;
+    Number.isInteger(wholeQuantity) && wholeQuantity > 0 && wholeQuantity <= 100_000;
   const estimatedValue = quantityIsValid
     ? selectedQuote.priceCadCents * wholeQuantity
     : 0;
@@ -1100,12 +1309,17 @@ export function SimulatorApp() {
     !selectedQuote.isStale &&
     dashboard.currentUser.role === "student" &&
     dashboard.team?.status === "active" &&
-    dashboard.competition.status === "active" &&
+    dashboard.competition.tradingOpen &&
     quantityIsValid &&
     (side === "BUY"
       ? estimatedValue <= portfolio.buyingPowerCents
       : wholeQuantity <= (holdingForQuote?.quantity ?? 0));
-  const isHost = dashboard.currentUser.role === "host";
+  const isHost =
+    dashboard.currentUser.role === "host" ||
+    dashboard.currentUser.role === "platform_admin";
+  const competitionHasTrades = (adminOverview?.teams ?? []).some(
+    (team) => team.tradeCount > 0,
+  );
   const quoteLoaded =
     connection === "connected" &&
     !(selectedQuote.source === "LUBAN_SIMULATED" && selectedQuote.isStale);
@@ -1247,7 +1461,11 @@ export function SimulatorApp() {
           ? "This order is larger than the team’s available cash."
           : side === "SELL" && wholeQuantity > (holdingForQuote?.quantity ?? 0)
             ? `The team holds only ${holdingForQuote?.quantity ?? 0} shares of ${selectedQuote.symbol}.`
-            : "Trading is unavailable while the competition or team is paused.";
+            : dashboard.competition.phase === "scheduled"
+              ? `Trading opens ${formatScheduleInstant(dashboard.competition.startsAt)}.`
+              : dashboard.competition.phase === "ended"
+                ? `This competition ended ${formatScheduleInstant(dashboard.competition.endsAt)}.`
+                : "Trading is unavailable while the competition or team is paused.";
       setTicketStatus({ kind: "error", message: reason });
       return;
     }
@@ -1257,20 +1475,43 @@ export function SimulatorApp() {
       message: `Recording ${side.toLowerCase()} order in the shared ledger…`,
     });
 
+    // Reuse the pending key only for a retry of the exact same ticket; any
+    // edit to symbol, side, or quantity is a new order with a new key.
+    const orderFingerprint = `${selectedQuote.symbol}|${side}|${wholeQuantity}`;
+    const idempotencyKey =
+      pendingOrder.current?.fingerprint === orderFingerprint
+        ? pendingOrder.current.key
+        : createIdempotencyKey();
+    pendingOrder.current = { key: idempotencyKey, fingerprint: orderFingerprint };
+
     try {
-      const response = await fetch("/api/orders", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Idempotency-Key": createIdempotencyKey(),
-        },
-        body: JSON.stringify({
-          side,
-          symbol: selectedQuote.symbol,
-          quantity: wholeQuantity,
-          orderType: "MARKET",
-        }),
-      });
+      let response: Response;
+      try {
+        response = await fetch("/api/orders", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": idempotencyKey,
+          },
+          body: JSON.stringify({
+            side,
+            symbol: selectedQuote.symbol,
+            quantity: wholeQuantity,
+            orderType: "MARKET",
+          }),
+        });
+      } catch {
+        // No response arrived, so the order may or may not have committed.
+        // The key is kept: pressing the button again replays safely.
+        throw new Error(
+          "The server could not be reached. Retry this ticket — the same order cannot fill twice.",
+        );
+      }
+
+      // A response, success or rejection, is a definitive outcome; the next
+      // attempt is a genuinely new order.
+      pendingOrder.current = null;
+
       const payload = await readJson(response);
       if (!response.ok) {
         throw new Error(extractError(payload, "The order could not be recorded."));
@@ -1320,6 +1561,60 @@ export function SimulatorApp() {
         kind: "error",
         message: error instanceof Error ? error.message : "Host action failed.",
       });
+    } finally {
+      setHostBusy(false);
+    }
+  };
+
+  const saveCompetitionSchedule = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!isHost) return;
+
+    const body: Record<string, unknown> = {};
+
+    if (scheduleStartDraft !== null && scheduleStartDraft !== "") {
+      body.startsAt = new Date(scheduleStartDraft).toISOString();
+    }
+    if (scheduleEndDraft !== null && scheduleEndDraft !== "") {
+      body.endsAt = new Date(scheduleEndDraft).toISOString();
+    }
+    if (scheduleCashDraft !== null && scheduleCashDraft !== "") {
+      const cashCents = parseCashDraft(scheduleCashDraft);
+      if (cashCents === null) {
+        setHostFeedback("Enter a valid starting cash amount in dollars.");
+        return;
+      }
+      body.startingCashCents = cashCents;
+    }
+
+    if (Object.keys(body).length === 0) {
+      setHostFeedback("Change the schedule or starting cash before saving.");
+      return;
+    }
+
+    setHostBusy(true);
+    setHostFeedback("");
+    try {
+      const response = await fetch("/api/admin/competition", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify(body),
+      });
+      const payload = await readJson(response);
+      if (!response.ok) {
+        throw new Error(extractError(payload, "The schedule could not be saved."));
+      }
+      setScheduleStartDraft(null);
+      setScheduleEndDraft(null);
+      setScheduleCashDraft(null);
+      setHostFeedback("Competition schedule saved.");
+      await fetchDashboard(true, false);
+      await fetchAdminOverview();
+    } catch (error) {
+      setHostFeedback(
+        error instanceof Error ? error.message : "The schedule could not be saved.",
+      );
     } finally {
       setHostBusy(false);
     }
@@ -1485,30 +1780,32 @@ export function SimulatorApp() {
 
           <div className="competition-lockup" id="top">
             <strong>{dashboard.competition.name}</strong>
-            <span className={`state-tag state-tag--${dashboard.competition.status}`}>
+            <span className={`state-tag state-tag--${dashboard.competition.phase}`}>
               <span className="state-dot" aria-hidden="true" />
-              {dashboard.competition.status}
+              {dashboard.competition.phase}
             </span>
           </div>
 
-          <label className="identity-switcher">
-            <span>Demo user</span>
-            <span className="select-wrap">
-              <UserIcon />
-              <select
-                value={dashboard.currentUser.id}
-                onChange={(event) => void switchIdentity(event.target.value)}
-                disabled={identityBusy}
-                aria-label="Switch demo user"
-              >
-                {dashboard.session.demoUsers.map((user) => (
-                  <option key={user.id} value={user.id}>
-                    {user.name}
-                  </option>
-                ))}
-              </select>
-            </span>
-          </label>
+          {accountControls ?? (
+            <label className="identity-switcher">
+              <span>Demo user</span>
+              <span className="select-wrap">
+                <UserIcon />
+                <select
+                  value={dashboard.currentUser.id}
+                  onChange={(event) => void switchIdentity(event.target.value)}
+                  disabled={identityBusy}
+                  aria-label="Switch demo user"
+                >
+                  {dashboard.session.demoUsers.map((user) => (
+                    <option key={user.id} value={user.id}>
+                      {user.name}
+                    </option>
+                  ))}
+                </select>
+              </span>
+            </label>
+          )}
         </header>
 
         <section className="simulation-strip" aria-label="Prototype disclosure">
@@ -1919,7 +2216,7 @@ export function SimulatorApp() {
                   <input
                     inputMode="numeric"
                     min="1"
-                    max="1000000"
+                    max="100000"
                     step="1"
                     type="number"
                     value={quantity}
@@ -1996,12 +2293,15 @@ export function SimulatorApp() {
           </section>
 
           <aside className="room-column room-column--team" aria-label="Team room and competition">
-            <section className="rail-section presence-section" aria-labelledby="presence-heading">
-              <PanelHeading
-                id="presence-heading"
-                title={`Team presence (${memberRows.length})`}
-                icon={<span className="presence-signal" aria-hidden="true" />}
-              />
+            <AnimatedRailSection
+              className="presence-section"
+              headingId="presence-heading"
+              contentId="presence-content"
+              title={`Team presence (${memberRows.length})`}
+              icon={<span className="presence-signal" aria-hidden="true" />}
+              isOpen={openRailSections.presence}
+              onToggle={() => toggleRailSection("presence")}
+            >
               <ul className="presence-list">
                 {memberRows.map((member) => (
                   <li key={member.id}>
@@ -2017,18 +2317,18 @@ export function SimulatorApp() {
                   </li>
                 ))}
               </ul>
-            </section>
+            </AnimatedRailSection>
 
-            <section
-              className="rail-section activity-section sync-region"
+            <AnimatedRailSection
+              className="activity-section sync-region"
+              headingId="activity-heading"
+              contentId="activity-content"
+              title="Team activity"
+              aside={<span>Immutable log</span>}
+              isOpen={openRailSections.activity}
+              onToggle={() => toggleRailSection("activity")}
               data-flash={syncFlash}
-              aria-labelledby="activity-heading"
             >
-              <PanelHeading
-                id="activity-heading"
-                title="Team activity"
-                aside={<span>Immutable log</span>}
-              />
               <ol className="activity-list">
                 {dashboard.recentActivity.slice(0, 5).map((item) => (
                   <li key={item.id}>
@@ -2043,18 +2343,18 @@ export function SimulatorApp() {
                   </li>
                 ))}
               </ol>
-            </section>
+            </AnimatedRailSection>
 
-            <section
-              className="rail-section leaderboard-section sync-region"
+            <AnimatedRailSection
+              className="leaderboard-section sync-region"
+              headingId="leaderboard-heading"
+              contentId="leaderboard-content"
+              title="Competition leaderboard"
+              aside={<span>Fair snapshot</span>}
+              isOpen={openRailSections.leaderboard}
+              onToggle={() => toggleRailSection("leaderboard")}
               data-flash={syncFlash}
-              aria-labelledby="leaderboard-heading"
             >
-              <PanelHeading
-                id="leaderboard-heading"
-                title="Competition leaderboard"
-                aside={<span>Fair snapshot</span>}
-              />
               <div className="table-scroll">
                 <table className="data-table leaderboard-table">
                   <thead>
@@ -2085,16 +2385,23 @@ export function SimulatorApp() {
               <p className="snapshot-note">
                 Every team is valued from the same cached market-data snapshot.
               </p>
-            </section>
+            </AnimatedRailSection>
 
-            <section className="rail-section host-section" aria-labelledby="host-heading">
-              <PanelHeading id="host-heading" title="Host controls" icon={<LockIcon />} />
+            <AnimatedRailSection
+              className="host-section"
+              headingId="host-heading"
+              contentId="host-content"
+              title="Host controls"
+              icon={<LockIcon />}
+              isOpen={openRailSections.host}
+              onToggle={() => toggleRailSection("host")}
+            >
               {isHost ? (
                 <>
                   <div className="host-status">
                     <div>
                       <span>Competition</span>
-                      <strong>{dashboard.competition.status}</strong>
+                      <strong>{dashboard.competition.phase}</strong>
                     </div>
                     <div>
                       <span>Your access</span>
@@ -2117,16 +2424,103 @@ export function SimulatorApp() {
                         ? "Pause trading"
                         : "Resume trading"}
                     </button>
+                    {!isManaged ? (
+                      <button
+                        className={`button button--secondary ${resetArmed ? "button--danger" : ""}`}
+                        type="button"
+                        onClick={() => void resetPrototype()}
+                        disabled={hostBusy}
+                      >
+                        <RefreshIcon />
+                        {resetArmed ? "Confirm reset" : "Reset demo data"}
+                      </button>
+                    ) : null}
+                  </div>
+                  <a className="button button--secondary host-accounts-link" href="/admin/accounts">
+                    <UsersIcon />
+                    Accounts &amp; invitations
+                  </a>
+                  <form
+                    className="host-schedule"
+                    aria-label="Competition schedule"
+                    onSubmit={(event) => void saveCompetitionSchedule(event)}
+                  >
+                    <div className="host-schedule__heading">
+                      <strong>Competition schedule</strong>
+                      <span>
+                        Trading is open between the start and end below. It
+                        starts and stops automatically.
+                      </span>
+                    </div>
+                    <label htmlFor="schedule-start">
+                      <span>Start date &amp; time</span>
+                      <input
+                        id="schedule-start"
+                        type="datetime-local"
+                        value={
+                          scheduleStartDraft ??
+                          isoToLocalInputValue(dashboard.competition.startsAt)
+                        }
+                        onChange={(event) =>
+                          setScheduleStartDraft(event.target.value)
+                        }
+                        disabled={hostBusy}
+                      />
+                    </label>
+                    <label htmlFor="schedule-end">
+                      <span>End date &amp; time</span>
+                      <input
+                        id="schedule-end"
+                        type="datetime-local"
+                        value={
+                          scheduleEndDraft ??
+                          isoToLocalInputValue(dashboard.competition.endsAt)
+                        }
+                        onChange={(event) =>
+                          setScheduleEndDraft(event.target.value)
+                        }
+                        disabled={hostBusy}
+                      />
+                    </label>
+                    <label htmlFor="schedule-cash">
+                      <span>Team starting cash (CAD)</span>
+                      <input
+                        id="schedule-cash"
+                        type="number"
+                        min="0"
+                        max="1000000000000"
+                        step="0.01"
+                        inputMode="decimal"
+                        value={
+                          scheduleCashDraft ??
+                          (dashboard.competition.startingCashCents / 100).toFixed(2)
+                        }
+                        onChange={(event) =>
+                          setScheduleCashDraft(event.target.value)
+                        }
+                        disabled={hostBusy || competitionHasTrades}
+                      />
+                    </label>
+                    {competitionHasTrades ? (
+                      <p className="host-schedule__note">
+                        Starting cash is locked once trading has begun. Adjust
+                        individual team balances below instead.
+                      </p>
+                    ) : null}
                     <button
-                      className={`button button--secondary ${resetArmed ? "button--danger" : ""}`}
-                      type="button"
-                      onClick={() => void resetPrototype()}
+                      className="button button--secondary"
+                      type="submit"
                       disabled={hostBusy}
                     >
-                      <RefreshIcon />
-                      {resetArmed ? "Confirm reset" : "Reset demo data"}
+                      Save schedule
                     </button>
-                  </div>
+                  </form>
+                  {dashboard.currentUser.role === "platform_admin" ? (
+                    <a className="button button--secondary host-accounts-link" href="/admin/valuation-lab">
+                      <FlaskIcon />
+                      Past → Present valuation lab
+                    </a>
+                  ) : null}
                   <div className="host-teams" aria-label="Manage competition teams">
                     <div className="host-teams__heading">
                       <strong>Competition teams</strong>
@@ -2254,19 +2648,28 @@ export function SimulatorApp() {
                 </>
               ) : (
                 <div className="host-locked">
-                  <p>Switch to the host identity to pause trading or manage teams.</p>
-                  <button
-                    className="button button--secondary"
-                    type="button"
-                    onClick={() => void switchIdentity("host")}
-                    disabled={identityBusy}
-                  >
-                    <UserIcon />
-                    Open host view
-                  </button>
+                  {isManaged ? (
+                    <p>
+                      Host controls are reserved for the competition host. Ask
+                      your host if something about your team needs attention.
+                    </p>
+                  ) : (
+                    <>
+                      <p>Switch to the host identity to pause trading or manage teams.</p>
+                      <button
+                        className="button button--secondary"
+                        type="button"
+                        onClick={() => void switchIdentity("host")}
+                        disabled={identityBusy}
+                      >
+                        <UserIcon />
+                        Open host view
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
-            </section>
+            </AnimatedRailSection>
           </aside>
         </div>
 

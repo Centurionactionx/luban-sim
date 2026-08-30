@@ -4,7 +4,9 @@ import { ZodError } from "zod";
 import {
   AppError,
   SESSION_TTL_SECONDS,
+  canHostCompetitions,
   getSessionFromToken,
+  isManagedAuthMode,
   SESSION_COOKIE_NAME,
 } from "@/lib";
 
@@ -94,6 +96,15 @@ export async function parseJson(request: Request): Promise<unknown> {
 }
 
 export async function getAuthenticatedUser(): Promise<SessionUser | null> {
+  if (isManagedAuthMode()) {
+    // Imported on demand so demo-mode processes never load the Clerk SDK,
+    // which refuses to run without provider keys.
+    const { getManagedSessionUser } = await import(
+      "@/lib/server/managed-identity"
+    );
+    return getManagedSessionUser();
+  }
+
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE_NAME)?.value;
 
@@ -128,12 +139,40 @@ export async function requireAuthenticatedUser(): Promise<SessionUser> {
 export async function requireHostUser(): Promise<SessionUser> {
   const user = await requireAuthenticatedUser();
 
-  if (user.role !== "host") {
+  if (!canHostCompetitions(user.role)) {
     throw new ApiError(
       403,
       "HOST_ONLY",
       "Only a competition host can perform this action.",
     );
+  }
+
+  if (isManagedAuthMode()) {
+    const { assertAdminMfaSatisfied } = await import(
+      "@/lib/server/managed-identity"
+    );
+    await assertAdminMfaSatisfied(user);
+  }
+
+  return user;
+}
+
+export async function requirePlatformAdmin(): Promise<SessionUser> {
+  const user = await requireAuthenticatedUser();
+
+  if (user.role !== "platform_admin") {
+    throw new ApiError(
+      403,
+      "ADMIN_ONLY",
+      "Only a platform administrator can perform this action.",
+    );
+  }
+
+  if (isManagedAuthMode()) {
+    const { assertAdminMfaSatisfied } = await import(
+      "@/lib/server/managed-identity"
+    );
+    await assertAdminMfaSatisfied(user);
   }
 
   return user;

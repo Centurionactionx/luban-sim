@@ -1,5 +1,6 @@
 import type {
   ActivityItem,
+  CompetitionPhase,
   CompetitionStatus,
   CompetitionSummary,
   Dashboard,
@@ -103,6 +104,34 @@ export function requireSessionUser(userId: string): SessionUser {
   return user;
 }
 
+/**
+ * Where the competition stands right now. The stored status is the host's
+ * intent (draft/active/paused/ended); the schedule window turns "active"
+ * into "scheduled" before the start and "ended" after the end, so starting
+ * and stopping need no background job — every read and every trade computes
+ * this from the same clock.
+ */
+export function competitionPhaseFor(
+  competition: { status: CompetitionStatus; startsAt: string; endsAt: string },
+  now: Date = new Date(),
+): CompetitionPhase {
+  if (competition.status !== "active") {
+    return competition.status;
+  }
+
+  const nowIso = now.toISOString();
+
+  if (nowIso < competition.startsAt) {
+    return "scheduled";
+  }
+
+  if (nowIso >= competition.endsAt) {
+    return "ended";
+  }
+
+  return "open";
+}
+
 export function getCompetitionSummary(): CompetitionSummary {
   const row = getDatabase()
     .prepare(`
@@ -119,10 +148,18 @@ export function getCompetitionSummary(): CompetitionSummary {
     throw new AppError("COMPETITION_NOT_FOUND", "No competition is configured.", 404);
   }
 
+  const phase = competitionPhaseFor({
+    status: row.status,
+    startsAt: row.starts_at,
+    endsAt: row.ends_at,
+  });
+
   return {
     id: row.id,
     name: row.name,
     status: row.status,
+    phase,
+    tradingOpen: phase === "open",
     baseCurrency: row.base_currency,
     startingCashCents: Number(row.starting_cash_cents),
     startsAt: row.starts_at,

@@ -1,4 +1,9 @@
-import { getDashboard, listDemoUsers, refreshAllQuotes } from "@/lib";
+import {
+  getDashboard,
+  isDemoLoginAllowed,
+  listDemoUsers,
+  refreshAllQuotes,
+} from "@/lib";
 
 import {
   handleRouteError,
@@ -18,7 +23,10 @@ export async function GET(request: Request): Promise<Response> {
 
     return json({
       ...dashboard,
-      session: { user, demoUsers: listDemoUsers() },
+      session: {
+        user,
+        demoUsers: isDemoLoginAllowed() ? listDemoUsers() : [],
+      },
     });
   } catch (error) {
     return handleRouteError(error);

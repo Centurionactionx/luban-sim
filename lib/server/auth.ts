@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 
-import type { DemoUser, SessionUser, UserRole } from "../contracts";
+import type { DemoUser, SessionUser, UserRole, UserStatus } from "../contracts";
 import { AppError } from "../errors";
 import { getDatabase } from "./db";
 
@@ -20,6 +20,7 @@ interface UserRow {
   name: string;
   email: string;
   role: UserRole;
+  status: UserStatus;
   team_id: string | null;
   team_name: string | null;
 }
@@ -48,6 +49,7 @@ function rowToSessionUser(row: UserRow): SessionUser {
     name: row.name,
     email: row.email,
     role: row.role,
+    status: row.status,
     teamId: row.team_id,
     teamName: row.team_name,
     initials: initialsFor(row.name),
@@ -66,6 +68,7 @@ export function getSessionUser(userId: string): SessionUser | null {
         u.name,
         u.email,
         u.role,
+        u.status,
         tm.team_id,
         t.name AS team_name
       FROM users u
@@ -79,6 +82,10 @@ export function getSessionUser(userId: string): SessionUser | null {
 }
 
 export function listDemoUsers(): DemoUser[] {
+  // Only seeded demo identities are switchable. Accounts created through
+  // managed sign-in carry an auth_subject and must never be listed or
+  // assumable through the demo identity switcher, even if the same database
+  // is later reopened in demo mode.
   const rows = getDatabase()
     .prepare(`
       SELECT
@@ -86,11 +93,13 @@ export function listDemoUsers(): DemoUser[] {
         u.name,
         u.email,
         u.role,
+        u.status,
         tm.team_id,
         t.name AS team_name
       FROM users u
       LEFT JOIN team_members tm ON tm.user_id = u.id
       LEFT JOIN teams t ON t.id = tm.team_id
+      WHERE u.auth_subject IS NULL
       ORDER BY CASE u.role WHEN 'student' THEN 0 ELSE 1 END, u.name ASC
     `)
     .all() as unknown as UserRow[];
@@ -116,6 +125,18 @@ export function createSessionToken(
 
   if (!user) {
     throw new AppError("USER_NOT_FOUND", "That demo user does not exist.", 404);
+  }
+
+  const subjectRow = getDatabase()
+    .prepare("SELECT auth_subject FROM users WHERE id = ?")
+    .get(userId) as { auth_subject: string | null } | undefined;
+
+  if (subjectRow?.auth_subject) {
+    throw new AppError(
+      "DEMO_IDENTITY_REQUIRED",
+      "Managed accounts sign in through the identity provider, not the demo switcher.",
+      403,
+    );
   }
 
   if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds < 60) {
@@ -157,6 +178,7 @@ export function getSessionFromToken(token: string | null | undefined): SessionUs
         u.name,
         u.email,
         u.role,
+        u.status,
         tm.team_id,
         t.name AS team_name
       FROM sessions s
@@ -166,6 +188,7 @@ export function getSessionFromToken(token: string | null | undefined): SessionUs
       WHERE s.token_hash = ?
         AND s.revoked_at IS NULL
         AND s.expires_at > ?
+        AND u.status = 'active'
     `)
     .get(hashToken(token), now) as UserRow | undefined;
 

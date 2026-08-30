@@ -1,5 +1,6 @@
 import {
   QUOTE_RANGES,
+  assertRequestAllowed,
   getQuoteHistory,
   normalizeMarketSymbol,
   refreshQuote,
@@ -17,7 +18,12 @@ export const dynamic = "force-dynamic";
 
 export async function GET(request: Request): Promise<Response> {
   try {
-    await requireAuthenticatedUser();
+    const user = await requireAuthenticatedUser();
+
+    // History cache misses reach the upstream provider; cap the per-person
+    // miss rate the same way as quote search.
+    assertRequestAllowed(`quotes:${user.id}`, 60);
+
     const searchParams = new URL(request.url).searchParams;
     const rawSymbol = searchParams.get("symbol")?.trim();
     const symbol = rawSymbol ? normalizeMarketSymbol(rawSymbol) : undefined;

@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 import { IBM_Plex_Mono, Space_Grotesk } from "next/font/google";
 import type { ReactNode } from "react";
+
+import { isManagedAuthMode } from "@/lib/server/auth-mode";
+
 import "./globals.css";
 
 const spaceGrotesk = Space_Grotesk({
@@ -31,20 +34,54 @@ FORM: Team Trading Room, fifth-ranked grounded structure, seed bb9a5bdf.
 FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance.
 `.trim();
 
-export default function RootLayout({ children }: { children: ReactNode }) {
+export default async function RootLayout({ children }: { children: ReactNode }) {
+  const body = (
+    <body suppressHydrationWarning>
+      <script
+        data-direction-seed="bb9a5bdf"
+        dangerouslySetInnerHTML={{
+          __html: `document.currentScript?.before(document.createComment(${JSON.stringify(
+            DIRECTION_CONTRACT,
+          )}));`,
+        }}
+      />
+      {children}
+    </body>
+  );
+
+  // ClerkProvider mounts only in managed mode: the Clerk SDK requires
+  // provider keys, and demo mode must keep building and running without them.
+  if (isManagedAuthMode()) {
+    const { ClerkProvider } = await import("@clerk/nextjs");
+
+    return (
+      <html lang="en" className={`${spaceGrotesk.variable} ${plexMono.variable}`}>
+        <ClerkProvider
+          appearance={{
+            variables: {
+              colorPrimary: "#6757c3",
+              colorForeground: "#00171f",
+              colorBackground: "#ffffff",
+              colorInput: "#ffffff",
+              colorInputForeground: "#00171f",
+              colorDanger: "#a92f40",
+              colorSuccess: "#287337",
+              colorWarning: "#e85d75",
+              borderRadius: "0px",
+              fontFamily:
+                "var(--font-space-grotesk), 'Helvetica Neue', Arial, sans-serif",
+            },
+          }}
+        >
+          {body}
+        </ClerkProvider>
+      </html>
+    );
+  }
+
   return (
     <html lang="en" className={`${spaceGrotesk.variable} ${plexMono.variable}`}>
-      <body suppressHydrationWarning>
-        <script
-          data-direction-seed="bb9a5bdf"
-          dangerouslySetInnerHTML={{
-            __html: `document.currentScript?.before(document.createComment(${JSON.stringify(
-              DIRECTION_CONTRACT,
-            )}));`,
-          }}
-        />
-        {children}
-      </body>
+      {body}
     </html>
   );
 }

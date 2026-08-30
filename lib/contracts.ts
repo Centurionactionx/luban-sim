@@ -3,8 +3,23 @@
  * Monetary values are integer cents. Share quantities are whole integers.
  */
 
-export type UserRole = "student" | "host";
+export type UserRole = "student" | "host" | "platform_admin";
+export type UserStatus = "active" | "suspended";
+export type AuthMode = "demo" | "managed";
 export type CompetitionStatus = "draft" | "active" | "paused" | "ended";
+
+/**
+ * The competition's effective state, derived from the stored status plus the
+ * wall clock: an "active" competition is only "open" for trading between its
+ * scheduled start and end. Derived at read time — no scheduler process needed,
+ * so it works identically in a long-lived dev server and on serverless.
+ */
+export type CompetitionPhase =
+  | "draft"
+  | "scheduled"
+  | "open"
+  | "paused"
+  | "ended";
 export type TeamStatus = "active" | "frozen" | "disqualified";
 export type TradeSide = "BUY" | "SELL";
 export type OrderStatus = "FILLED" | "REJECTED";
@@ -22,12 +37,80 @@ export interface DemoUser {
 
 export interface SessionUser extends DemoUser {
   email: string;
+  status: UserStatus;
+}
+
+/**
+ * Hosts and platform administrators may run competitions. Platform
+ * administrators additionally manage accounts and invitations for every role.
+ */
+export function canHostCompetitions(role: UserRole): boolean {
+  return role === "host" || role === "platform_admin";
+}
+
+export type InvitationState = "active" | "used" | "revoked" | "expired";
+
+export interface InvitationSummary {
+  id: string;
+  role: UserRole;
+  state: InvitationState;
+  email: string | null;
+  invitedName: string | null;
+  teamId: string | null;
+  teamName: string | null;
+  competitionId: string | null;
+  createdByName: string | null;
+  createdAt: string;
+  expiresAt: string;
+  revokedAt: string | null;
+  usedAt: string | null;
+  usedByName: string | null;
+}
+
+/** Returned once at creation time; the raw token is never stored or listed. */
+export interface CreatedInvitation {
+  invitation: InvitationSummary;
+  token: string;
+  joinPath: string;
+}
+
+/** Safe to show to an unauthenticated visitor holding an invitation link. */
+export interface InvitationPreview {
+  state: InvitationState;
+  role: UserRole;
+  invitedName: string | null;
+  maskedEmail: string | null;
+  teamName: string | null;
+  competitionName: string | null;
+  expiresAt: string;
+}
+
+export interface CreateInvitationInput {
+  actorUserId: string;
+  role: UserRole;
+  teamId?: string | null;
+  email?: string | null;
+  invitedName?: string | null;
+  expiresInHours?: number;
+}
+
+export interface AuthAuditEventView {
+  id: string;
+  type: string;
+  actorName: string | null;
+  subjectName: string | null;
+  detail: string;
+  createdAt: string;
 }
 
 export interface CompetitionSummary {
   id: string;
   name: string;
   status: CompetitionStatus;
+  /** Effective state right now; trading is possible only while "open". */
+  phase: CompetitionPhase;
+  /** True exactly when phase is "open". */
+  tradingOpen: boolean;
   baseCurrency: "CAD";
   startingCashCents: number;
   startsAt: string;
@@ -149,6 +232,7 @@ export interface ActivityItem {
   type:
     | "ORDER_FILLED"
     | "COMPETITION_STATUS_CHANGED"
+    | "COMPETITION_SCHEDULE_CHANGED"
     | "TEAM_STATUS_CHANGED"
     | "TEAM_CASH_ADJUSTED"
     | "TEAM_CREATED"
@@ -242,6 +326,13 @@ export interface LedgerReconciliation {
 export interface UpdateCompetitionStatusInput {
   actorUserId: string;
   status: CompetitionStatus;
+}
+
+export interface UpdateCompetitionScheduleInput {
+  actorUserId: string;
+  startsAt?: string;
+  endsAt?: string;
+  startingCashCents?: number;
 }
 
 export interface UpdateTeamStatusInput {

@@ -41,7 +41,9 @@ export async function PATCH(
     }
 
     const { status } = statusSchema.parse(await parseJson(request));
-    await refreshAllQuotes();
+    // Best-effort valuation freshness only: a market-data outage must never
+    // block the host from pausing, scheduling, resetting, or fixing balances.
+    await refreshAllQuotes().catch(() => {});
     const overview = setTeamStatus({
       actorUserId: user.id,
       status,

@@ -1,4 +1,4 @@
-import { listDemoUsers } from "@/lib";
+import { getAuthMode, isDemoLoginAllowed, listDemoUsers } from "@/lib";
 
 import {
   getAuthenticatedUser,
@@ -10,19 +10,15 @@ export const dynamic = "force-dynamic";
 
 export async function GET(): Promise<Response> {
   try {
+    const authMode = getAuthMode();
     const user = await getAuthenticatedUser();
+    const demoUsers = isDemoLoginAllowed() ? listDemoUsers() : [];
 
     if (!user) {
-      const demoModeEnabled =
-        process.env.NODE_ENV !== "production" ||
-        process.env.LUBAN_DEMO_MODE === "true";
-      return json({
-        authenticated: false,
-        demoUsers: demoModeEnabled ? listDemoUsers() : [],
-      });
+      return json({ authenticated: false, authMode, demoUsers });
     }
 
-    return json({ authenticated: true, user, demoUsers: listDemoUsers() });
+    return json({ authenticated: true, authMode, user, demoUsers });
   } catch (error) {
     return handleRouteError(error);
   }

@@ -23,6 +23,7 @@ export default defineConfig({
         command: "pnpm start --hostname 127.0.0.1 --port 3010",
         url: baseURL,
         env: {
+          LUBAN_AUTH_MODE: "demo",
           LUBAN_DEMO_MODE: "true",
           LUBAN_MARKET_DATA_PROVIDER: "synthetic",
         },
