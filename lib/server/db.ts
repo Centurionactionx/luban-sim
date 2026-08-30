@@ -131,7 +131,67 @@ function createSqliteSchema(database: DatabaseSync): void {
   ensureOrderReceiptColumns(database);
   ensureInstrumentRefreshColumn(database);
   ensureAccountColumns(database);
+  ensureDeletedStatus(database);
   ensureAdminValuationColumns(database);
+}
+
+/**
+ * Schema v7 widens users.status to allow 'deleted'. SQLite cannot alter a
+ * CHECK constraint in place, so pre-v7 databases get the same rebuild
+ * treatment as the v4 account migration.
+ */
+function ensureDeletedStatus(database: DatabaseSync): void {
+  const table = database
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'")
+    .get() as { sql: string } | undefined;
+
+  if (!table || table.sql.includes("'deleted'")) {
+    return;
+  }
+
+  database.exec("PRAGMA foreign_keys = OFF;");
+
+  try {
+    database.exec(`
+      BEGIN IMMEDIATE;
+
+      CREATE TABLE users_status_migrated (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        email TEXT NOT NULL UNIQUE,
+        role TEXT NOT NULL CHECK (role IN ('student', 'host', 'platform_admin')),
+        status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended', 'deleted')),
+        auth_subject TEXT UNIQUE,
+        email_verified_at TEXT,
+        created_at TEXT NOT NULL,
+        last_login_at TEXT
+      );
+
+      INSERT INTO users_status_migrated (
+        id, name, email, role, status, auth_subject,
+        email_verified_at, created_at, last_login_at
+      )
+      SELECT
+        id, name, email, role, status, auth_subject,
+        email_verified_at, created_at, last_login_at
+      FROM users;
+
+      DROP TABLE users;
+      ALTER TABLE users_status_migrated RENAME TO users;
+
+      COMMIT;
+    `);
+  } catch (error) {
+    try {
+      database.exec("ROLLBACK;");
+    } catch {
+      // Preserve the migration error below.
+    }
+    database.exec("PRAGMA foreign_keys = ON;");
+    throw error;
+  }
+
+  database.exec("PRAGMA foreign_keys = ON;");
 }
 
 const SHARED_TABLE_BODIES = {
@@ -140,7 +200,7 @@ const SHARED_TABLE_BODIES = {
       name TEXT NOT NULL,
       email TEXT NOT NULL UNIQUE,
       role TEXT NOT NULL CHECK (role IN ('student', 'host', 'platform_admin')),
-      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended')),
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended', 'deleted')),
       auth_subject TEXT UNIQUE,
       email_verified_at TEXT,
       created_at TEXT NOT NULL,
@@ -455,8 +515,8 @@ export async function initializeAppDatabaseSchema(app: AppDatabase): Promise<voi
     if (app.engine === "postgres") {
       // Re-running the DDL is idempotent but not free: each ENABLE ROW LEVEL
       // SECURITY takes a brief exclusive table lock, so cold starts skip the
-      // whole pass once the schema exists. Keyed on the users table — any
-      // future schema change must ship its own explicit migration step.
+      // whole pass once the schema exists. Keyed on the users table; changes
+      // to an already-provisioned schema live in runPostgresMigrations.
       const provisioned = await tx.get<{ present: number }>(
         `SELECT 1 AS present
          FROM information_schema.tables
@@ -464,6 +524,7 @@ export async function initializeAppDatabaseSchema(app: AppDatabase): Promise<voi
       );
 
       if (provisioned) {
+        await runPostgresMigrations(tx);
         return;
       }
     }
@@ -475,6 +536,27 @@ export async function initializeAppDatabaseSchema(app: AppDatabase): Promise<voi
 
   await seedIfEmpty(app);
   await syncLocalDemoAdmin(app);
+}
+
+/**
+ * Idempotent, cheap migrations applied to an already-provisioned PostgreSQL
+ * schema on cold start (fresh databases get the current DDL directly).
+ */
+export async function runPostgresMigrations(tx: DbExecutor): Promise<void> {
+  // v7: users.status gains 'deleted'. PostgreSQL names the inline column
+  // check users_status_check; swap it only when it predates the new value.
+  const statusCheck = await tx.get<{ def: string }>(
+    `SELECT pg_get_constraintdef(oid) AS def
+     FROM pg_constraint
+     WHERE conrelid = 'users'::regclass AND conname = 'users_status_check'`,
+  );
+
+  if (!statusCheck || !statusCheck.def.includes("'deleted'")) {
+    await tx.run("ALTER TABLE users DROP CONSTRAINT IF EXISTS users_status_check");
+    await tx.run(
+      "ALTER TABLE users ADD CONSTRAINT users_status_check CHECK (status IN ('active', 'suspended', 'deleted'))",
+    );
+  }
 }
 
 /* ───────────────────────── Seed and reset (shared) ─────────────────── */
@@ -835,7 +917,7 @@ function ensureAccountColumns(database: DatabaseSync): void {
         name TEXT NOT NULL,
         email TEXT NOT NULL UNIQUE,
         role TEXT NOT NULL CHECK (role IN ('student', 'host', 'platform_admin')),
-        status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended')),
+        status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended', 'deleted')),
         auth_subject TEXT UNIQUE,
         email_verified_at TEXT,
         created_at TEXT NOT NULL,

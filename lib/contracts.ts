@@ -4,7 +4,7 @@
  */
 
 export type UserRole = "student" | "host" | "platform_admin";
-export type UserStatus = "active" | "suspended";
+export type UserStatus = "active" | "suspended" | "deleted";
 export type AuthMode = "demo" | "managed";
 export type CompetitionStatus = "draft" | "active" | "paused" | "ended";
 
@@ -101,6 +101,22 @@ export interface AuthAuditEventView {
   subjectName: string | null;
   detail: string;
   createdAt: string;
+}
+
+/** One row of the admin user-management list. */
+export interface AccountView {
+  id: string;
+  name: string;
+  email: string;
+  role: UserRole;
+  status: Exclude<UserStatus, "deleted">;
+  teamId: string | null;
+  teamName: string | null;
+  isManaged: boolean;
+  createdAt: string;
+  lastLoginAt: string | null;
+  /** Filled orders attributed to this user (locks hard deletion). */
+  orderCount: number;
 }
 
 export interface CompetitionSummary {

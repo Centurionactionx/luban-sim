@@ -4,6 +4,7 @@ import Link from "next/link";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 
 import type {
+  AccountView,
   AdminOverview,
   CreatedInvitation,
   InvitationSummary,
@@ -37,14 +38,20 @@ const ROLE_LABELS: Record<UserRole, string> = {
 
 export function AccountsPanel({
   managed,
+  actorId,
   canInviteAdmins,
 }: {
   managed: boolean;
+  actorId: string;
   canInviteAdmins: boolean;
 }) {
   const [invitations, setInvitations] = useState<InvitationSummary[] | null>(
     null,
   );
+  const [accounts, setAccounts] = useState<AccountView[] | null>(null);
+  const [accountBusy, setAccountBusy] = useState<string | null>(null);
+  const [deleteArmed, setDeleteArmed] = useState<string | null>(null);
+  const [accountFeedback, setAccountFeedback] = useState("");
   const [teams, setTeams] = useState<AdminOverview["teams"]>([]);
   const [role, setRole] = useState<UserRole>("student");
   const [teamId, setTeamId] = useState("");
@@ -58,16 +65,28 @@ export function AccountsPanel({
 
   const load = useCallback(async () => {
     try {
-      const [inviteResponse, overviewResponse] = await Promise.all([
-        fetch("/api/admin/invitations", {
-          cache: "no-store",
-          credentials: "same-origin",
-        }),
-        fetch("/api/admin/overview", {
-          cache: "no-store",
-          credentials: "same-origin",
-        }),
-      ]);
+      const [inviteResponse, overviewResponse, accountsResponse] =
+        await Promise.all([
+          fetch("/api/admin/invitations", {
+            cache: "no-store",
+            credentials: "same-origin",
+          }),
+          fetch("/api/admin/overview", {
+            cache: "no-store",
+            credentials: "same-origin",
+          }),
+          fetch("/api/admin/accounts", {
+            cache: "no-store",
+            credentials: "same-origin",
+          }),
+        ]);
+
+      const accountsPayload = await readJson(accountsResponse);
+      if (accountsResponse.ok) {
+        setAccounts((accountsPayload as { accounts: AccountView[] }).accounts);
+      } else {
+        setAccounts((current) => current ?? []);
+      }
 
       const invitePayload = await readJson(inviteResponse);
       if (!inviteResponse.ok) {
@@ -176,6 +195,85 @@ export function AccountsPanel({
     }
   };
 
+  const patchAccount = async (
+    userId: string,
+    body: Record<string, unknown>,
+    workingLabel: string,
+  ) => {
+    setAccountBusy(userId);
+    setAccountFeedback(workingLabel);
+
+    try {
+      const response = await fetch(`/api/admin/accounts/${userId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify(body),
+      });
+      const payload = await readJson(response);
+
+      if (!response.ok) {
+        throw new Error(extractError(payload, "The account could not be updated."));
+      }
+
+      const { account } = payload as { account: AccountView };
+      setAccounts((current) =>
+        (current ?? []).map((row) => (row.id === account.id ? account : row)),
+      );
+      setAccountFeedback("");
+    } catch (error) {
+      setAccountFeedback(
+        error instanceof Error ? error.message : "The account could not be updated.",
+      );
+    } finally {
+      setAccountBusy(null);
+    }
+  };
+
+  const removeAccount = async (userId: string) => {
+    if (deleteArmed !== userId) {
+      setDeleteArmed(userId);
+      setAccountFeedback(
+        "Deleting removes this person's access permanently. Click again to confirm.",
+      );
+      return;
+    }
+
+    setDeleteArmed(null);
+    setAccountBusy(userId);
+    setAccountFeedback("Deleting account…");
+
+    try {
+      const response = await fetch(`/api/admin/accounts/${userId}`, {
+        method: "DELETE",
+        credentials: "same-origin",
+      });
+      const payload = await readJson(response);
+
+      if (!response.ok) {
+        throw new Error(extractError(payload, "The account could not be deleted."));
+      }
+
+      const { result } = payload as {
+        result: { id: string; mode: "deleted" | "anonymized" };
+      };
+      setAccounts((current) =>
+        (current ?? []).filter((row) => row.id !== result.id),
+      );
+      setAccountFeedback(
+        result.mode === "anonymized"
+          ? "Account deleted. Their past trades remain on the team ledger, attributed to “Deleted user”."
+          : "Account deleted.",
+      );
+    } catch (error) {
+      setAccountFeedback(
+        error instanceof Error ? error.message : "The account could not be deleted.",
+      );
+    } finally {
+      setAccountBusy(null);
+    }
+  };
+
   const copyLink = async () => {
     if (!created?.joinUrl) return;
 
@@ -208,6 +306,158 @@ export function AccountsPanel({
             managed sign-in (LUBAN_AUTH_MODE=managed).
           </p>
         ) : null}
+
+        <section className="accounts-list" aria-labelledby="users-heading">
+          <h2 id="users-heading">User accounts</h2>
+          {accounts === null ? (
+            <p>Loading accounts…</p>
+          ) : accounts.length === 0 ? (
+            <p>No accounts yet.</p>
+          ) : (
+            <div className="accounts-table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">Name</th>
+                    <th scope="col">Email</th>
+                    <th scope="col">Role</th>
+                    <th scope="col">Team</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Last sign-in</th>
+                    <th scope="col">
+                      <span className="sr-only">Actions</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {accounts.map((account) => {
+                    const isSelf = account.id === actorId;
+                    const rowBusy = accountBusy === account.id;
+
+                    return (
+                      <tr key={account.id}>
+                        <td>{account.name}{isSelf ? " (you)" : ""}</td>
+                        <td>{account.email}</td>
+                        <td>
+                          {canInviteAdmins && !isSelf ? (
+                            <select
+                              aria-label={`Role for ${account.name}`}
+                              value={account.role}
+                              disabled={rowBusy}
+                              onChange={(event) =>
+                                void patchAccount(
+                                  account.id,
+                                  { role: event.target.value },
+                                  "Changing role…",
+                                )
+                              }
+                            >
+                              <option value="student">Student</option>
+                              <option value="host">Host</option>
+                              <option value="platform_admin">Platform admin</option>
+                            </select>
+                          ) : (
+                            ROLE_LABELS[account.role]
+                          )}
+                        </td>
+                        <td>
+                          {account.role === "student" && !isSelf ? (
+                            <select
+                              aria-label={`Team for ${account.name}`}
+                              value={account.teamId ?? ""}
+                              disabled={rowBusy}
+                              onChange={(event) =>
+                                void patchAccount(
+                                  account.id,
+                                  { teamId: event.target.value || null },
+                                  "Moving team…",
+                                )
+                              }
+                            >
+                              <option value="">No team</option>
+                              {teams.map((team) => (
+                                <option key={team.id} value={team.id}>
+                                  {team.name}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            account.teamName ?? "—"
+                          )}
+                        </td>
+                        <td>
+                          <span className={`invite-state invite-state--${account.status === "active" ? "active" : "revoked"}`}>
+                            {account.status}
+                          </span>
+                        </td>
+                        <td>
+                          {account.lastLoginAt
+                            ? new Date(account.lastLoginAt).toLocaleString("en-CA", {
+                                dateStyle: "medium",
+                                timeStyle: "short",
+                              })
+                            : "Never"}
+                        </td>
+                        <td>
+                          {!isSelf ? (
+                            <div className="accounts-row-actions">
+                              <button
+                                type="button"
+                                className="button button--secondary accounts-revoke"
+                                disabled={rowBusy}
+                                onClick={() =>
+                                  void patchAccount(
+                                    account.id,
+                                    {
+                                      status:
+                                        account.status === "active"
+                                          ? "suspended"
+                                          : "active",
+                                    },
+                                    account.status === "active"
+                                      ? "Suspending…"
+                                      : "Restoring…",
+                                  )
+                                }
+                              >
+                                {account.status === "active" ? "Suspend" : "Restore"}
+                              </button>
+                              {canInviteAdmins ? (
+                                <button
+                                  type="button"
+                                  className="button button--danger accounts-revoke"
+                                  disabled={rowBusy}
+                                  onClick={() => void removeAccount(account.id)}
+                                >
+                                  {deleteArmed === account.id
+                                    ? "Confirm delete"
+                                    : "Delete"}
+                                </button>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {managed ? (
+            <p className="accounts-note" role="note">
+              Deleting an account removes the person&apos;s access and identity
+              here; their sign-in at the identity provider is not touched, so
+              they can be invited again later. Accounts with recorded trades
+              are anonymized so team ledgers stay intact.
+            </p>
+          ) : null}
+          {accountFeedback ? (
+            <p className="accounts-feedback" role="alert">
+              {accountFeedback}
+            </p>
+          ) : null}
+        </section>
 
         <section className="accounts-create" aria-labelledby="invite-heading">
           <h2 id="invite-heading">Invite someone</h2>

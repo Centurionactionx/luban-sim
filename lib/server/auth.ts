@@ -101,7 +101,7 @@ export async function listDemoUsers(): Promise<DemoUser[]> {
       FROM users u
       LEFT JOIN team_members tm ON tm.user_id = u.id
       LEFT JOIN teams t ON t.id = tm.team_id
-      WHERE u.auth_subject IS NULL
+      WHERE u.auth_subject IS NULL AND u.status = 'active'
       ORDER BY CASE u.role WHEN 'student' THEN 0 ELSE 1 END, u.name ASC
     `);
 

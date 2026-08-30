@@ -48,6 +48,14 @@ export type { ManagedIdentity } from "./server/invitations";
 
 export { resolveManagedSubject, resolveManagedUser } from "./server/accounts";
 
+export {
+  deleteAccount,
+  listAccounts,
+  setAccountRole,
+  setAccountStatus,
+  setAccountTeam,
+} from "./server/account-management";
+
 export type { ManagedResolution } from "./server/accounts";
 
 export {

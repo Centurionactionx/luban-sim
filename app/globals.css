@@ -3152,3 +3152,22 @@ a {
 .host-schedule .button {
   min-height: 40px;
 }
+
+.accounts-list + .accounts-create {
+  border-top: 1px solid var(--rule);
+}
+
+.accounts-row-actions {
+  display: flex;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.accounts-table-wrap select {
+  min-height: 34px;
+  padding: 4px 6px;
+  border: 1.5px solid var(--rule);
+  border-radius: 4px;
+  background: var(--paper);
+  font-size: var(--type-description);
+}

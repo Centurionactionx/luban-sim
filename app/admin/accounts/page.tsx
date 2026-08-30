@@ -36,6 +36,7 @@ export default async function AccountsPage() {
     return (
       <AccountsPanel
         managed
+        actorId={state.user.id}
         canInviteAdmins={state.user.role === "platform_admin"}
       />
     );
@@ -51,6 +52,7 @@ export default async function AccountsPage() {
   return (
     <AccountsPanel
       managed={false}
+      actorId={user.id}
       canInviteAdmins={user.role === "platform_admin"}
     />
   );
