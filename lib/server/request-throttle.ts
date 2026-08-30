@@ -1,14 +1,17 @@
 import { AppError } from "../errors";
 
 /**
- * Small in-memory sliding-window throttle for endpoints whose cache misses
- * reach the upstream market-data provider. It is deliberately per-process
- * (good enough at competition scale) and best-effort: the durable,
- * transaction-enforced order rate limit in lib/server/trading.ts remains the
- * authoritative ceiling on trading itself.
+ * Small in-memory sliding-window throttle for expensive read and provider
+ * endpoints — market-data lookups whose cache misses reach Yahoo, and the
+ * heavy polled reads (dashboard, activity, admin overview) that recompute the
+ * leaderboard. It is deliberately per-process (each serverless instance is
+ * independently protected, which is what a saturation brake needs at
+ * competition scale) and best-effort: the durable, transaction-enforced
+ * order rate limit in lib/server/trading.ts remains the authoritative ceiling
+ * on trading itself.
  */
 const WINDOW_MS = 60_000;
-const MAX_TRACKED_KEYS = 2_000;
+const MAX_TRACKED_KEYS = 5_000;
 
 const windows = new Map<string, number[]>();
 
@@ -33,7 +36,7 @@ export function assertRequestAllowed(
 
     throw new AppError(
       "REQUEST_RATE_LIMITED",
-      "Too many market-data requests. Try again shortly.",
+      "Too many requests in a short time. Slow down and try again shortly.",
       429,
       { retryAfterSeconds, limitPerMinute },
     );

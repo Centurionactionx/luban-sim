@@ -6,8 +6,10 @@ export const dynamic = "force-dynamic";
 
 /**
  * Unauthenticated liveness probe: which database engine is configured and
- * whether a round trip works. Reports only the error class and message —
- * never connection details — so it is safe to expose.
+ * whether a round trip works. The failure branch reports only a coarse error
+ * class — never the driver message, which can embed the database host or
+ * user — so nothing sensitive is exposed to an anonymous caller. Full detail
+ * is written to the server log for the operator.
  */
 export async function GET(): Promise<Response> {
   const engine = getDbEngine();
@@ -25,11 +27,8 @@ export async function GET(): Promise<Response> {
       seeded: Number(users?.count ?? 0) > 0,
     });
   } catch (error) {
-    const message =
-      error instanceof Error ? `${error.name}: ${error.message}` : "unknown";
+    console.error("Health check database failure", error);
 
-    return json({ ok: false, engine, database: "down", error: message }, {
-      status: 503,
-    });
+    return json({ ok: false, engine, database: "down" }, { status: 503 });
   }
 }

@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { consumeInvitation, isManagedAuthMode } from "@/lib";
+import { assertRequestAllowed, consumeInvitation, isManagedAuthMode } from "@/lib";
 
 import {
   errorResponse,
@@ -29,9 +29,16 @@ export async function POST(request: Request): Promise<Response> {
 
     const { token } = acceptSchema.parse(await parseJson(request));
 
-    const { getManagedIdentity } = await import(
+    const { getManagedIdentity, getManagedUserId } = await import(
       "@/lib/server/managed-identity"
     );
+
+    // Each attempt makes a Clerk Backend API call; throttle by the verified
+    // session subject (no network) so a signed-in user cannot loop this into
+    // a Clerk-quota drain. Anonymous callers share one small bucket.
+    const subject = await getManagedUserId();
+    assertRequestAllowed(`invite-accept:${subject ?? "anon"}`, subject ? 12 : 20);
+
     const identity = await getManagedIdentity();
 
     if (!identity) {

@@ -57,6 +57,16 @@ export async function getManagedIdentity(): Promise<ManagedIdentity | null> {
 }
 
 /**
+ * The signed-in visitor's provider subject, verified from the session token
+ * alone (local cryptography, no Backend API call). Cheap enough to gate
+ * endpoints before they reach the network-bound getManagedIdentity().
+ */
+export async function getManagedUserId(): Promise<string | null> {
+  const { userId } = await auth();
+  return userId ?? null;
+}
+
+/**
  * The request-time session check. Verifying the Clerk session token is local
  * cryptography (no network); the Backend API is consulted only for visitors
  * who are signed in but not yet linked to a Luban account, because that is

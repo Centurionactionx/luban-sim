@@ -19,7 +19,18 @@ export const DEFAULT_INVITATION_TTL_HOURS = 72;
 export const MIN_INVITATION_TTL_HOURS = 1;
 export const MAX_INVITATION_TTL_HOURS = 24 * 14;
 const MAX_ACTIVE_INVITATIONS = 500;
+const DEFAULT_MAX_INVITATIONS_PER_MINUTE = 30;
 const INVITATION_ROLES: readonly UserRole[] = ["student", "host", "platform_admin"];
+
+function maxInvitationsPerMinute(): number {
+  const raw = Number(process.env.LUBAN_MAX_INVITATIONS_PER_MINUTE);
+
+  if (Number.isSafeInteger(raw) && raw >= 1 && raw <= 100_000) {
+    return raw;
+  }
+
+  return DEFAULT_MAX_INVITATIONS_PER_MINUTE;
+}
 
 /** Identity attributes asserted by the managed identity provider. */
 export interface ManagedIdentity {
@@ -339,11 +350,40 @@ async function insertInvitation(
   };
 }
 
+/**
+ * Durable brake on invitation creation, counted from the account_invitations
+ * table so it holds across processes and survives a create→revoke loop
+ * (revoked rows still count within the window). Generous for real onboarding,
+ * low enough to stop a compromised host account from flooding the table or
+ * blasting invitation emails.
+ */
+async function assertInvitationCreationAllowed(actorId: string): Promise<void> {
+  const limit = maxInvitationsPerMinute();
+  const db = await getDb();
+  const windowStartIso = new Date(Date.now() - 60_000).toISOString();
+  const recent = await db.get<{ count: number }>(
+    `SELECT COUNT(*) AS count
+     FROM account_invitations
+     WHERE created_by = ? AND created_at > ?`,
+    [actorId, windowStartIso],
+  );
+
+  if (Number(recent?.count ?? 0) >= limit) {
+    throw new AppError(
+      "INVITATION_RATE_LIMITED",
+      `Slow down: at most ${limit} invitations per minute. Try again shortly.`,
+      429,
+      { retryAfterSeconds: 60, limitPerMinute: limit },
+    );
+  }
+}
+
 export async function createInvitation(
   input: CreateInvitationInput,
 ): Promise<CreatedInvitation> {
   const actor = await requireInvitationManager(input.actorUserId);
   assertActorMayIssueRole(actor.role, input.role);
+  await assertInvitationCreationAllowed(actor.id);
 
   return insertInvitation({
     role: input.role,
