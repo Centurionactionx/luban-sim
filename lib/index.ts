@@ -74,6 +74,28 @@ export {
 } from "./server/admin";
 
 export {
+  MAX_ADMIN_VALUATION_CASH_CENTS,
+  clearAdminValuationPortfolio,
+  createAdminValuationPosition,
+  getAdminValuationPortfolio,
+  setAdminValuationCash,
+} from "./server/admin-valuation";
+
+export {
+  MAX_ADMIN_TRADING_CASH_CENTS,
+  getAdminTradingTeamId,
+  setAdminTradingCash,
+} from "./server/admin-trading";
+
+export type {
+  AdminValuationPortfolio,
+  AdminValuationPosition,
+  AdminValuationSummary,
+  CreateAdminValuationPositionInput,
+  SetAdminValuationCashInput,
+} from "./backtest-contracts";
+
+export {
   calculatePortfolio,
   competitionPhaseFor,
   getCompetitionSummary,

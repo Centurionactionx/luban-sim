@@ -18,6 +18,7 @@ import type {
 
 const REFRESH_INTERVAL_MS = 60_000;
 const TORONTO_TIME_ZONE = "America/Toronto";
+const MAX_TEST_CASH_CENTS = 100_000_000_000_000;
 
 type Feedback = {
   kind: "error" | "success";
@@ -73,7 +74,8 @@ function isPortfolio(payload: unknown): payload is AdminValuationPortfolio {
   const candidate = payload as Partial<AdminValuationPortfolio>;
   return Boolean(
     candidate.summary &&
-      typeof candidate.summary.currentValueCents === "number" &&
+      typeof candidate.summary.totalValueCents === "number" &&
+      typeof candidate.summary.availableCashCents === "number" &&
       Array.isArray(candidate.positions),
   );
 }
@@ -132,6 +134,18 @@ function toneClass(value: number): string {
   return styles.neutral;
 }
 
+function parseCashCents(value: string): number | null {
+  const normalized = value.trim();
+  if (!/^\d+(?:\.\d{1,2})?$/.test(normalized)) return null;
+
+  const [dollars, fractional = ""] = normalized.split(".");
+  const cents = Number(dollars) * 100 + Number(fractional.padEnd(2, "0"));
+
+  return Number.isSafeInteger(cents) && cents <= MAX_TEST_CASH_CENTS
+    ? cents
+    : null;
+}
+
 function PricePair({
   nativeCents,
   cadCents,
@@ -162,12 +176,15 @@ export function AdminValuationLab({
   const [symbol, setSymbol] = useState("");
   const [quantity, setQuantity] = useState("10");
   const [purchaseDate, setPurchaseDate] = useState(defaultPurchaseDate);
+  const [cashDraft, setCashDraft] = useState<string | null>(null);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isUpdatingCash, setIsUpdatingCash] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
   const [clearArmed, setClearArmed] = useState(false);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
+  const [cashFeedback, setCashFeedback] = useState<Feedback | null>(null);
   const [lastCheckedAt, setLastCheckedAt] = useState<string | null>(null);
   const refreshAbort = useRef<AbortController | null>(null);
   const mutationInFlight = useRef(false);
@@ -176,6 +193,9 @@ export function AdminValuationLab({
   const clearConfirmation = useRef<HTMLButtonElement | null>(null);
   const clearHeadingId = useId();
   const formHelpId = useId();
+  const cashInputId = useId();
+  const cashHelpId = useId();
+  const cashValidationId = useId();
 
   const applyPortfolio = useCallback((next: AdminValuationPortfolio) => {
     setPortfolio(next);
@@ -325,7 +345,7 @@ export function AdminValuationLab({
       setSymbol("");
       setFeedback({
         kind: "success",
-        message: `${quantityNumber.format(parsedQuantity)} ${normalizedSymbol} share${parsedQuantity === 1 ? "" : "s"} added to the test ledger.`,
+        message: `${quantityNumber.format(parsedQuantity)} ${normalizedSymbol} share${parsedQuantity === 1 ? "" : "s"} added. ${money(payload.summary.availableCashCents)} remains available.`,
       });
     } catch (error) {
       setFeedback({
@@ -338,6 +358,70 @@ export function AdminValuationLab({
     } finally {
       mutationInFlight.current = false;
       setIsSubmitting(false);
+    }
+  };
+
+  const updateTestCash = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const cashCents = parseCashCents(cashDraft ?? "");
+    const committedCostCents = portfolio?.summary.costBasisCents ?? 0;
+
+    if (cashCents === null) {
+      setCashFeedback({
+        kind: "error",
+        message:
+          "Enter a non-negative CAD amount with no more than two decimal places.",
+      });
+      return;
+    }
+    if (cashCents < committedCostCents) {
+      setCashFeedback({
+        kind: "error",
+        message: `The balance must be at least ${money(committedCostCents)} to cover existing purchases.`,
+      });
+      return;
+    }
+
+    refreshAbort.current?.abort();
+    mutationInFlight.current = true;
+    setIsUpdatingCash(true);
+    setCashFeedback(null);
+
+    try {
+      const response = await fetch("/api/admin/valuation-lab", {
+        method: "PATCH",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cashCents }),
+      });
+      const payload = await readJson(response);
+
+      if (!response.ok) {
+        throw new Error(
+          errorMessage(payload, "The test account cash could not be updated."),
+        );
+      }
+      if (!isPortfolio(payload)) {
+        throw new Error("The valuation lab returned an unexpected response.");
+      }
+
+      applyPortfolio(payload);
+      setCashDraft(null);
+      setCashFeedback({
+        kind: "success",
+        message: `Test account cash set to ${money(cashCents)}.`,
+      });
+    } catch (error) {
+      setCashFeedback({
+        kind: "error",
+        message:
+          error instanceof Error
+            ? error.message
+            : "The test account cash could not be updated.",
+      });
+    } finally {
+      mutationInFlight.current = false;
+      setIsUpdatingCash(false);
     }
   };
 
@@ -380,7 +464,20 @@ export function AdminValuationLab({
 
   const summary = portfolio?.summary;
   const hasPositions = Boolean(portfolio?.positions.length);
-  const busy = isSubmitting || isClearing;
+  const busy = isSubmitting || isUpdatingCash || isClearing;
+  const cashInputValue =
+    cashDraft ?? ((summary?.startingCashCents ?? 0) / 100).toFixed(2);
+  const parsedCashDraft = parseCashCents(cashInputValue);
+  const minimumCashCents = summary?.costBasisCents ?? 0;
+  const cashDraftError =
+    cashDraft === null
+      ? null
+      : parsedCashDraft === null
+        ? "Enter a non-negative amount with no more than two decimal places."
+        : parsedCashDraft < minimumCashCents
+          ? `Enter at least ${money(minimumCashCents)} to cover existing purchases.`
+          : null;
+  const cashIsUnchanged = parsedCashDraft === (summary?.startingCashCents ?? 0);
 
   return (
     <main className={styles.page}>
@@ -431,8 +528,8 @@ export function AdminValuationLab({
           <>
             <section className={styles.summary} aria-labelledby="valuation-summary-heading">
               <div className={styles.summaryPrimary}>
-                <p id="valuation-summary-heading">Present market value</p>
-                <strong>{money(summary?.currentValueCents ?? 0)}</strong>
+                <p id="valuation-summary-heading">Present portfolio value</p>
+                <strong>{money(summary?.totalValueCents ?? 0)}</strong>
                 <span className={toneClass(summary?.gainLossCents ?? 0)}>
                   {signedMoney(summary?.gainLossCents ?? 0)} ·{" "}
                   {signedPercent(summary?.returnPercent ?? 0)}
@@ -440,8 +537,16 @@ export function AdminValuationLab({
               </div>
               <dl className={styles.summaryLedger}>
                 <div>
-                  <dt>Historical cost</dt>
-                  <dd>{money(summary?.costBasisCents ?? 0)}</dd>
+                  <dt>Available cash</dt>
+                  <dd>{money(summary?.availableCashCents ?? 0)}</dd>
+                </div>
+                <div>
+                  <dt>Holdings value</dt>
+                  <dd>{money(summary?.holdingsValueCents ?? 0)}</dd>
+                </div>
+                <div>
+                  <dt>Starting cash</dt>
+                  <dd>{money(summary?.startingCashCents ?? 0)}</dd>
                 </div>
                 <div>
                   <dt>Gain / loss</dt>
@@ -449,25 +554,92 @@ export function AdminValuationLab({
                     {signedMoney(summary?.gainLossCents ?? 0)}
                   </dd>
                 </div>
-                <div>
-                  <dt>Positions</dt>
-                  <dd>{summary?.positionCount ?? 0}</dd>
-                </div>
-                <div>
-                  <dt>Quote status</dt>
-                  <dd>{summary?.hasStaleQuotes ? "Needs attention" : "Current"}</dd>
-                </div>
               </dl>
             </section>
 
             <div className={styles.workspace}>
               <aside className={styles.purchasePanel} aria-labelledby="purchase-heading">
-                <div>
+                <section
+                  className={styles.cashEditor}
+                  aria-labelledby="cash-editor-heading"
+                >
+                  <div className={styles.cashEditorHeading}>
+                    <div>
+                      <h2 id="cash-editor-heading">Test account cash</h2>
+                      <p id={cashHelpId}>
+                        Set this sandbox account&apos;s exact starting balance.
+                        Historical purchases debit available cash at their CAD
+                        cost and never affect competition teams.
+                      </p>
+                    </div>
+                    <span>{money(summary?.availableCashCents ?? 0)} available</span>
+                  </div>
+
+                  <form onSubmit={(event) => void updateTestCash(event)}>
+                    <fieldset disabled={busy || isInitialLoading}>
+                      <label htmlFor={cashInputId}>
+                        <span>Test account cash (CAD)</span>
+                        <input
+                          id={cashInputId}
+                          type="number"
+                          min="0"
+                          max="1000000000000"
+                          step="0.01"
+                          inputMode="decimal"
+                          value={cashInputValue}
+                          onChange={(event) => {
+                            setCashDraft(event.target.value);
+                            setCashFeedback(null);
+                          }}
+                          aria-describedby={`${cashHelpId}${cashDraftError ? ` ${cashValidationId}` : ""}`}
+                          aria-invalid={cashDraftError ? "true" : undefined}
+                          required
+                        />
+                      </label>
+                      {cashDraftError ? (
+                        <p
+                          className={styles.fieldError}
+                          id={cashValidationId}
+                          role="alert"
+                        >
+                          {cashDraftError}
+                        </p>
+                      ) : null}
+                      <button
+                        className={styles.secondaryButton}
+                        type="submit"
+                        disabled={
+                          parsedCashDraft === null ||
+                          cashDraftError !== null ||
+                          cashIsUnchanged
+                        }
+                      >
+                        {isUpdatingCash ? "Saving test cash…" : "Set test cash"}
+                      </button>
+                    </fieldset>
+                  </form>
+
+                  {cashFeedback ? (
+                    <p
+                      className={
+                        cashFeedback.kind === "error"
+                          ? styles.errorMessage
+                          : styles.successMessage
+                      }
+                      role={cashFeedback.kind === "error" ? "alert" : "status"}
+                    >
+                      {cashFeedback.message}
+                    </p>
+                  ) : null}
+                </section>
+
+                <div className={styles.purchaseIntro}>
                   <h2 id="purchase-heading">Add a historical purchase</h2>
                   <p id={formHelpId}>
                     Use the ticker format shown by its exchange, such as PET.TO
                     for the TSX. Non-trading dates resolve to the market session
-                    reported in the ledger.
+                    reported in the ledger. The purchase must fit within the
+                    test account&apos;s available cash.
                   </p>
                 </div>
 
@@ -529,8 +701,9 @@ export function AdminValuationLab({
                 <div className={styles.methodNote} role="note">
                   <strong>Test method</strong>
                   <p>
-                    Split-adjusted share quantities are included. Dividends,
-                    trading fees, taxes, and commissions are excluded.
+                    Every purchase debits available cash at its historical CAD
+                    cost. Split-adjusted share quantities are included.
+                    Dividends, trading fees, taxes, and commissions are excluded.
                   </p>
                 </div>
               </aside>
@@ -561,7 +734,7 @@ export function AdminValuationLab({
                   <div className={styles.clearConfirm} role="alert" aria-labelledby={clearHeadingId}>
                     <div>
                       <strong id={clearHeadingId}>Clear every test position?</strong>
-                      <span>This cannot be undone.</span>
+                      <span>Your configured test account cash will be kept.</span>
                     </div>
                     <div>
                       <button

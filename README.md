@@ -14,6 +14,8 @@ This is an educational simulator. It does not move real money, connect to a brok
 - Symbol search discovers stocks across the TSX, Nasdaq, and NYSE family, including obscure listings that were not pre-seeded, with explicit exchange, currency, and CAD conversion.
 - Quotes and `1D`/`5D`/`1M`/`3M` charts come from real timestamped Yahoo Finance market bars through a cached, replaceable server-side provider.
 - A host can set any team's exact CAD cash balance, pause/resume trading, freeze/disqualify/restore a team, and reset the local demonstration. Cash edits are audited and reconciled in the ledger.
+- A platform administrator can set an exact cash balance directly in the main trading workspace, then use the ordinary quote and order ticket against a private test portfolio. That account is excluded from teams, invitations, activity feeds, and the leaderboard.
+- A platform administrator has a separate cash-backed Past → Present test account: the admin sets its exact starting cash, historical purchases debit that budget, and current portfolio value includes remaining cash without touching any competition team.
 - The responsive web interface supports a 320 px viewport, so the same codebase covers laptops and phones.
 
 ## Architecture
@@ -32,6 +34,8 @@ Browser session (Johnny / Menon / Radin / Joe as Host)
           ├── transactional order engine
           ├── portfolio + leaderboard queries
           ├── host administration
+          ├── private admin live-trading sandbox
+          ├── isolated admin valuation sandbox
           └── cached MarketDataProvider interface ──► Yahoo search + chart feeds
                  │                                    (prototype only)
                  ▼
@@ -68,6 +72,7 @@ For Vercel and Supabase setup, including the current SQLite limitation, see [DEP
 | Menon | Student / trader | Northstar Capital |
 | Radin | Student / analyst | Northstar Capital |
 | Joe (Host) | Competition host | No trading team |
+| Ada (Admin) | Platform administrator | Private live-trading and valuation sandboxes |
 
 Demo sessions use opaque, hashed, HTTP-only cookies. They are intentionally not a production sign-in system.
 Production builds reject demo login unless `LUBAN_DEMO_MODE=true`; enable that flag only for a private preview, never as the authentication model for a real deployment.
@@ -142,6 +147,11 @@ pnpm test:e2e
 | `PATCH /api/admin/competition` | Pause/resume, set the schedule window, or set starting cash |
 | `PATCH /api/admin/teams/:teamId` | Freeze, disqualify, or restore a team |
 | `PATCH /api/admin/teams/:teamId/cash` | Set a team's exact CAD cash balance in cents |
+| `PATCH /api/admin/trading-account/cash` | Platform admin: set the caller's private main-trading cash balance in cents |
+| `GET /api/admin/valuation-lab` | Platform admin: read the isolated historical test portfolio |
+| `PATCH /api/admin/valuation-lab` | Platform admin: set the test account's exact starting cash in cents |
+| `POST /api/admin/valuation-lab` | Platform admin: record an affordable historical test purchase |
+| `DELETE /api/admin/valuation-lab` | Platform admin: clear test positions while retaining configured cash |
 | `POST /api/admin/reset` | Restore seeded prototype state (demo mode only) |
 
 All responses are private and `no-store`. Business conflicts return stable error codes such as `INSUFFICIENT_CASH`, `INSUFFICIENT_SHARES`, `TRADING_CLOSED`, and `IDEMPOTENCY_CONFLICT`. Order attempts are capped per trader per rolling minute (`ORDER_RATE_LIMITED`, default 20 via `LUBAN_MAX_ORDERS_PER_MINUTE`) — enough for continuous day trading, low enough to stop runaway scripts.

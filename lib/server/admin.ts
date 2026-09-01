@@ -132,7 +132,7 @@ export async function listAdminTeams(
         COUNT(o.id) AS trade_count
       FROM teams t
       LEFT JOIN orders o ON o.team_id = t.id AND o.status = 'FILLED'
-      WHERE t.competition_id = ?
+      WHERE t.competition_id = ? AND t.sandbox_owner_user_id IS NULL
       GROUP BY t.id
       ORDER BY t.name ASC
     `,
@@ -170,7 +170,7 @@ export async function getAdminOverview(
     return {
       competition: await getCompetitionSummary(),
       teams: await listAdminTeams(actorUserId),
-      recentActivity: await listActivity(actorUserId, 30),
+      recentActivity: await listActivity(actorUserId, 30, "competition"),
       generatedAt: new Date().toISOString(),
     };
   });
@@ -367,9 +367,12 @@ export async function updateCompetitionSchedule(
       // slipped in around the gate. SQLite's single-writer transactions
       // already serialize this; FOR UPDATE is not valid syntax there.
       if (tx.engine === "postgres") {
-        await tx.all("SELECT id FROM teams WHERE competition_id = ? FOR UPDATE", [
-          competition.id,
-        ]);
+        await tx.all(
+          `SELECT id FROM teams
+           WHERE competition_id = ? AND sandbox_owner_user_id IS NULL
+           FOR UPDATE`,
+          [competition.id],
+        );
       }
 
       const traded = await tx.get<{ count: number }>(
@@ -377,7 +380,7 @@ export async function updateCompetitionSchedule(
           SELECT COUNT(*) AS count
           FROM orders o
           JOIN teams t ON t.id = o.team_id
-          WHERE t.competition_id = ?
+          WHERE t.competition_id = ? AND t.sandbox_owner_user_id IS NULL
         `,
         [competition.id],
       );
@@ -400,7 +403,8 @@ export async function updateCompetitionSchedule(
       // entry (plus any pre-start host adjustments). Rebuild it as a single
       // fresh STARTING_CASH line so cash and ledger reconcile exactly.
       const teams = await tx.all<{ id: string }>(
-        "SELECT id FROM teams WHERE competition_id = ?",
+        `SELECT id FROM teams
+         WHERE competition_id = ? AND sandbox_owner_user_id IS NULL`,
         [competition.id],
       );
       const nowIso = new Date().toISOString();
@@ -485,7 +489,8 @@ export async function updateTeamStatus(
 
   await db.transaction(async (tx) => {
     const changed = await tx.run(
-      "UPDATE teams SET status = ?, version = version + 1 WHERE id = ? AND status = ?",
+      `UPDATE teams SET status = ?, version = version + 1
+       WHERE id = ? AND status = ? AND sandbox_owner_user_id IS NULL`,
       [status, input.teamId, team.status],
     );
 
@@ -531,7 +536,7 @@ export async function setTeamCash(input: SetTeamCashInput): Promise<AdminOvervie
       `
         SELECT id, competition_id, name, cash_cents, version
         FROM teams
-        WHERE id = ?
+        WHERE id = ? AND sandbox_owner_user_id IS NULL
       `,
       [input.teamId],
     );

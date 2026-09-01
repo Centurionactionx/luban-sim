@@ -45,8 +45,10 @@ interface IdempotencyRecordRow {
 interface TradingAccountRow {
   user_id: string;
   actor_name: string;
-  role: "student" | "host";
+  role: "student" | "host" | "platform_admin";
+  user_status: string;
   team_id: string | null;
+  sandbox_owner_user_id: string | null;
   team_name: string | null;
   team_status: TeamStatus | null;
   cash_cents: number | null;
@@ -299,13 +301,17 @@ export async function placeOrder(input: PlaceOrderInput): Promise<TradeReceipt> 
 
       const account = await tx.get<TradingAccountRow>(
         `SELECT
-           u.id AS user_id, u.name AS actor_name, u.role, tm.team_id,
+           u.id AS user_id, u.name AS actor_name, u.role, u.status AS user_status,
+           t.id AS team_id, t.sandbox_owner_user_id,
            t.name AS team_name, t.status AS team_status, t.cash_cents, t.version,
            c.id AS competition_id, c.status AS competition_status,
            c.starts_at AS competition_starts_at, c.ends_at AS competition_ends_at
          FROM users u
-         LEFT JOIN team_members tm ON tm.user_id = u.id
-         LEFT JOIN teams t ON t.id = tm.team_id
+         LEFT JOIN team_members tm ON tm.user_id = u.id AND u.role = 'student'
+         LEFT JOIN teams t ON
+           (u.role = 'student' AND t.id = tm.team_id)
+           OR
+           (u.role = 'platform_admin' AND t.sandbox_owner_user_id = u.id)
          LEFT JOIN competitions c ON c.id = t.competition_id
          WHERE u.id = ?`,
         [normalized.actorUserId],
@@ -314,10 +320,25 @@ export async function placeOrder(input: PlaceOrderInput): Promise<TradeReceipt> 
       if (!account) {
         throw new AppError("UNAUTHORIZED", "Sign in before placing an order.", 401);
       }
-      if (account.role !== "student") {
+      if (account.user_status !== "active") {
+        throw new AppError("ACCOUNT_SUSPENDED", "This account is suspended.", 403);
+      }
+      if (account.role === "host") {
         throw new AppError(
           "HOST_CANNOT_TRADE",
           "Host accounts cannot trade in a team portfolio.",
+          403,
+        );
+      }
+      const isAdminSandbox = account.role === "platform_admin";
+      if (
+        isAdminSandbox &&
+        (!account.team_id ||
+          account.sandbox_owner_user_id !== normalized.actorUserId)
+      ) {
+        throw new AppError(
+          "ADMIN_TRADING_ACCOUNT_REQUIRED",
+          "Set test-account cash before placing an admin sandbox order.",
           403,
         );
       }
@@ -328,9 +349,15 @@ export async function placeOrder(input: PlaceOrderInput): Promise<TradeReceipt> 
         account.version === null ||
         !account.competition_id
       ) {
-        throw new AppError("TEAM_REQUIRED", "Join a team before trading.", 403);
+        throw new AppError(
+          isAdminSandbox ? "ADMIN_TRADING_ACCOUNT_REQUIRED" : "TEAM_REQUIRED",
+          isAdminSandbox
+            ? "Set test-account cash before placing an admin sandbox order."
+            : "Join a team before trading.",
+          403,
+        );
       }
-      if (account.competition_status !== "active") {
+      if (!isAdminSandbox && account.competition_status !== "active") {
         throw new AppError(
           "TRADING_CLOSED",
           account.competition_status === "paused"
@@ -347,6 +374,7 @@ export async function placeOrder(input: PlaceOrderInput): Promise<TradeReceipt> 
       // trade can never slip through around the boundary.
       const nowIso = new Date().toISOString();
       if (
+        !isAdminSandbox &&
         account.competition_starts_at &&
         nowIso < account.competition_starts_at
       ) {
@@ -360,7 +388,11 @@ export async function placeOrder(input: PlaceOrderInput): Promise<TradeReceipt> 
           },
         );
       }
-      if (account.competition_ends_at && nowIso >= account.competition_ends_at) {
+      if (
+        !isAdminSandbox &&
+        account.competition_ends_at &&
+        nowIso >= account.competition_ends_at
+      ) {
         throw new AppError(
           "TRADING_CLOSED",
           "This competition has ended.",
@@ -368,7 +400,7 @@ export async function placeOrder(input: PlaceOrderInput): Promise<TradeReceipt> 
           { competitionStatus: "ended", endedAt: account.competition_ends_at },
         );
       }
-      if (account.team_status !== "active") {
+      if (!isAdminSandbox && account.team_status !== "active") {
         throw new AppError(
           "TEAM_NOT_ACTIVE",
           account.team_status === "frozen"
@@ -396,7 +428,9 @@ export async function placeOrder(input: PlaceOrderInput): Promise<TradeReceipt> 
         if (grossCents > Number(account.cash_cents)) {
           throw new AppError(
             "INSUFFICIENT_CASH",
-            "The team does not have enough buying power for this order.",
+            isAdminSandbox
+              ? "The test account does not have enough buying power for this order."
+              : "The team does not have enough buying power for this order.",
             409,
             {
               availableCents: Number(account.cash_cents),
@@ -414,7 +448,7 @@ export async function placeOrder(input: PlaceOrderInput): Promise<TradeReceipt> 
         if (normalized.quantity > currentQuantity) {
           throw new AppError(
             "INSUFFICIENT_SHARES",
-            `The team only owns ${currentQuantity} ${currentQuantity === 1 ? "share" : "shares"} of ${normalized.symbol}.`,
+            `${isAdminSandbox ? "The test account" : "The team"} only owns ${currentQuantity} ${currentQuantity === 1 ? "share" : "shares"} of ${normalized.symbol}.`,
             409,
             {
               availableShares: currentQuantity,

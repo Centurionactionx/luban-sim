@@ -363,6 +363,19 @@ export interface SetTeamCashInput {
   cashCents: number;
 }
 
+/** Sets the authenticated platform administrator's private trading cash. */
+export interface SetAdminTradingCashInput {
+  actorUserId: string;
+  cashCents: number;
+}
+
+export interface AdminTradingCashResult {
+  teamId: string;
+  cashCents: number;
+  portfolioVersion: number;
+  created: boolean;
+}
+
 export interface SerializedAppError {
   name: "AppError";
   code: string;

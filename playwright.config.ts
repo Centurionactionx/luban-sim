@@ -24,6 +24,7 @@ export default defineConfig({
         url: baseURL,
         env: {
           LUBAN_AUTH_MODE: "demo",
+          LUBAN_DATABASE_PROVIDER: "sqlite",
           LUBAN_DEMO_MODE: "true",
           LUBAN_MARKET_DATA_PROVIDER: "synthetic",
         },

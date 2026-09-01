@@ -4,11 +4,13 @@ import type {
   AdminValuationPortfolio,
   AdminValuationPosition,
   CreateAdminValuationPositionInput,
+  SetAdminValuationCashInput,
 } from "../backtest-contracts";
 import type { MarketDataSource } from "../contracts";
 import { AppError } from "../errors";
 import { MARKET_REFRESH_INTERVAL_MS } from "../market-config";
 import { getSessionUser } from "./auth";
+import type { DbExecutor } from "./database";
 import { getDb } from "./db";
 import {
   getHistoricalMarketPrice,
@@ -19,6 +21,7 @@ import {
 
 const MAX_POSITION_QUANTITY = 100_000;
 const MAX_POSITIONS_PER_ADMIN = 50;
+export const MAX_ADMIN_VALUATION_CASH_CENTS = 100_000_000_000_000;
 const SPLIT_MULTIPLIER_SCALE = 1_000_000;
 const SPLIT_REFRESH_INTERVAL_MS = 15 * 60_000;
 const SPLIT_REFRESH_CONCURRENCY = 4;
@@ -48,6 +51,11 @@ interface PositionRow {
 
 interface ExistingPositionRow {
   request_fingerprint: string;
+}
+
+interface ValuationAccountRow {
+  starting_cash_cents: number;
+  version: number;
 }
 
 interface NormalizedPositionInput {
@@ -80,6 +88,25 @@ async function requirePlatformAdminActor(actorUserId: string): Promise<void> {
       403,
     );
   }
+}
+
+function normalizeValuationCash(value: unknown): number {
+  if (
+    !Number.isSafeInteger(value) ||
+    Number(value) < 0 ||
+    Number(value) > MAX_ADMIN_VALUATION_CASH_CENTS
+  ) {
+    throw new AppError(
+      "INVALID_VALUATION_CASH",
+      "Test-account cash must be a non-negative amount within the supported CAD limit.",
+      400,
+      {
+        field: "cashCents",
+        maximumCents: MAX_ADMIN_VALUATION_CASH_CENTS,
+      },
+    );
+  }
+  return Number(value);
 }
 
 function normalizePositionInput(
@@ -139,8 +166,11 @@ function normalizePositionInput(
   };
 }
 
-async function readPositionRows(actorUserId: string): Promise<PositionRow[]> {
-  const db = await getDb();
+async function readPositionRows(
+  actorUserId: string,
+  executor?: DbExecutor,
+): Promise<PositionRow[]> {
+  const db = executor ?? (await getDb());
   return db.all<PositionRow>(
     `
       SELECT
@@ -158,6 +188,70 @@ async function readPositionRows(actorUserId: string): Promise<PositionRow[]> {
     `,
     [actorUserId],
   );
+}
+
+async function readValuationStartingCash(
+  actorUserId: string,
+  executor?: DbExecutor,
+): Promise<number> {
+  const db = executor ?? (await getDb());
+  const account = await db.get<ValuationAccountRow>(
+    `SELECT starting_cash_cents, version
+     FROM admin_valuation_accounts
+     WHERE admin_user_id = ?`,
+    [actorUserId],
+  );
+  return account ? Number(account.starting_cash_cents) : 0;
+}
+
+async function readInvestedCost(
+  executor: DbExecutor,
+  actorUserId: string,
+): Promise<number> {
+  const row = await executor.get<{ cost_basis_cents: number }>(
+    `SELECT COALESCE(SUM(fill_price_cad_cents * quantity), 0) AS cost_basis_cents
+     FROM admin_valuation_positions
+     WHERE admin_user_id = ?`,
+    [actorUserId],
+  );
+  return assertSafeMoney(Number(row?.cost_basis_cents ?? 0));
+}
+
+/**
+ * Ensures there is one row to lock before cash or positions mutate. The row
+ * lock serializes funding, purchases, and clears for this administrator on
+ * PostgreSQL; SQLite's write transaction already provides that guarantee.
+ */
+async function lockValuationAccount(
+  executor: DbExecutor,
+  actorUserId: string,
+  updatedAt: string,
+): Promise<ValuationAccountRow> {
+  await executor.run(
+    `INSERT INTO admin_valuation_accounts (
+       admin_user_id, starting_cash_cents, version, updated_at
+     ) VALUES (?, 0, 0, ?)
+     ON CONFLICT (admin_user_id) DO NOTHING`,
+    [actorUserId, updatedAt],
+  );
+
+  const account = await executor.get<ValuationAccountRow>(
+    `SELECT starting_cash_cents, version
+     FROM admin_valuation_accounts
+     WHERE admin_user_id = ?${executor.engine === "postgres" ? " FOR UPDATE" : ""}`,
+    [actorUserId],
+  );
+  if (!account) {
+    throw new AppError(
+      "VALUATION_ACCOUNT_UNAVAILABLE",
+      "The test cash account could not be opened.",
+      500,
+    );
+  }
+  return {
+    starting_cash_cents: Number(account.starting_cash_cents),
+    version: Number(account.version),
+  };
 }
 
 async function refreshSplitMultipliers(
@@ -265,7 +359,16 @@ export async function getAdminValuationPortfolio(
   at: Date = new Date(),
 ): Promise<AdminValuationPortfolio> {
   await requirePlatformAdminActor(actorUserId);
-  const rows = await readPositionRows(actorUserId);
+  const database = await getDb();
+  const { rows, startingCashCents } = await database.readTransaction(
+    async (tx) => {
+      const [positionRows, configuredCash] = await Promise.all([
+        readPositionRows(actorUserId, tx),
+        readValuationStartingCash(actorUserId, tx),
+      ]);
+      return { rows: positionRows, startingCashCents: configuredCash };
+    },
+  );
   const symbols = [...new Set(rows.map((row) => row.symbol))];
   const [refreshedQuotes, splitMultipliers] = await Promise.all([
     Promise.all(
@@ -341,21 +444,41 @@ export async function getAdminValuationPortfolio(
     };
   });
 
-  const costBasisCents = positions.reduce(
-    (total, position) => total + position.costBasisCents,
-    0,
+  const costBasisCents = assertSafeMoney(
+    positions.reduce(
+      (total, position) => total + position.costBasisCents,
+      0,
+    ),
   );
-  const currentValueCents = positions.reduce(
-    (total, position) => total + position.currentValueCents,
-    0,
+  const holdingsValueCents = assertSafeMoney(
+    positions.reduce(
+      (total, position) => total + position.currentValueCents,
+      0,
+    ),
   );
-  const gainLossCents = currentValueCents - costBasisCents;
+  const availableCashCents = startingCashCents - costBasisCents;
+  if (!Number.isSafeInteger(availableCashCents) || availableCashCents < 0) {
+    throw new AppError(
+      "VALUATION_ACCOUNT_OUT_OF_BALANCE",
+      "The test account's purchases exceed its configured cash.",
+      500,
+      { startingCashCents, costBasisCents },
+    );
+  }
+  const totalValueCents = assertSafeMoney(
+    availableCashCents + holdingsValueCents,
+  );
+  const gainLossCents = holdingsValueCents - costBasisCents;
 
   return {
     summary: {
       positionCount: positions.length,
+      startingCashCents,
+      availableCashCents,
       costBasisCents,
-      currentValueCents,
+      holdingsValueCents,
+      totalValueCents,
+      currentValueCents: holdingsValueCents,
       gainLossCents,
       returnPercent: roundPercent(gainLossCents, costBasisCents),
       asOf: at.toISOString(),
@@ -364,6 +487,52 @@ export async function getAdminValuationPortfolio(
     positions,
     refreshIntervalSeconds: Math.round(MARKET_REFRESH_INTERVAL_MS / 1_000),
   };
+}
+
+export async function setAdminValuationCash(
+  input: SetAdminValuationCashInput,
+  at: Date = new Date(),
+): Promise<AdminValuationPortfolio> {
+  await requirePlatformAdminActor(input.actorUserId);
+  const cashCents = normalizeValuationCash(input.cashCents);
+  const database = await getDb();
+  const updatedAt = at.toISOString();
+
+  await database.transaction(async (tx) => {
+    const account = await lockValuationAccount(tx, input.actorUserId, updatedAt);
+    const investedCents = await readInvestedCost(tx, input.actorUserId);
+    if (cashCents < investedCents) {
+      throw new AppError(
+        "VALUATION_CASH_BELOW_INVESTED",
+        "Test-account cash cannot be lower than the historical purchases already recorded.",
+        409,
+        {
+          field: "cashCents",
+          investedCents,
+          minimumCents: investedCents,
+        },
+      );
+    }
+    if (Number(account.starting_cash_cents) === cashCents) {
+      return;
+    }
+
+    const changed = await tx.run(
+      `UPDATE admin_valuation_accounts
+       SET starting_cash_cents = ?, version = version + 1, updated_at = ?
+       WHERE admin_user_id = ? AND version = ?`,
+      [cashCents, updatedAt, input.actorUserId, account.version],
+    );
+    if (changed.changes !== 1) {
+      throw new AppError(
+        "VALUATION_ACCOUNT_CONFLICT",
+        "The test account changed while its cash was being updated.",
+        409,
+      );
+    }
+  });
+
+  return getAdminValuationPortfolio(input.actorUserId, at);
 }
 
 export async function createAdminValuationPosition(
@@ -410,6 +579,11 @@ export async function createAdminValuationPosition(
   assertSafeMoney(grossCents);
 
   await database.transaction(async (tx) => {
+    const account = await lockValuationAccount(
+      tx,
+      normalized.actorUserId,
+      at.toISOString(),
+    );
     const replay = await tx.get<ExistingPositionRow>(
       `
         SELECT request_fingerprint
@@ -447,6 +621,22 @@ export async function createAdminValuationPosition(
       );
     }
 
+    const investedCents = await readInvestedCost(tx, normalized.actorUserId);
+    const availableCashCents =
+      Number(account.starting_cash_cents) - investedCents;
+    if (availableCashCents < grossCents) {
+      throw new AppError(
+        "INSUFFICIENT_VALUATION_CASH",
+        "Fund the test account before adding this historical purchase.",
+        409,
+        {
+          availableCashCents,
+          requiredCashCents: grossCents,
+          shortfallCents: grossCents - Math.max(0, availableCashCents),
+        },
+      );
+    }
+
     await tx.run(
       `
         INSERT INTO admin_valuation_positions (
@@ -480,6 +670,20 @@ export async function createAdminValuationPosition(
         at.toISOString(),
       ],
     );
+
+    const changed = await tx.run(
+      `UPDATE admin_valuation_accounts
+       SET version = version + 1, updated_at = ?
+       WHERE admin_user_id = ? AND version = ?`,
+      [at.toISOString(), normalized.actorUserId, account.version],
+    );
+    if (changed.changes !== 1) {
+      throw new AppError(
+        "VALUATION_ACCOUNT_CONFLICT",
+        "The test account changed while the purchase was being recorded.",
+        409,
+      );
+    }
   });
 
   return getAdminValuationPortfolio(normalized.actorUserId, at);
@@ -491,8 +695,29 @@ export async function clearAdminValuationPortfolio(
 ): Promise<AdminValuationPortfolio> {
   await requirePlatformAdminActor(actorUserId);
   const db = await getDb();
-  await db.run("DELETE FROM admin_valuation_positions WHERE admin_user_id = ?", [
-    actorUserId,
-  ]);
+  await db.transaction(async (tx) => {
+    const account = await lockValuationAccount(tx, actorUserId, at.toISOString());
+    const removed = await tx.run(
+      "DELETE FROM admin_valuation_positions WHERE admin_user_id = ?",
+      [actorUserId],
+    );
+    if (removed.changes === 0) {
+      return;
+    }
+
+    const changed = await tx.run(
+      `UPDATE admin_valuation_accounts
+       SET version = version + 1, updated_at = ?
+       WHERE admin_user_id = ? AND version = ?`,
+      [at.toISOString(), actorUserId, account.version],
+    );
+    if (changed.changes !== 1) {
+      throw new AppError(
+        "VALUATION_ACCOUNT_CONFLICT",
+        "The test account changed while its positions were being cleared.",
+        409,
+      );
+    }
+  });
   return getAdminValuationPortfolio(actorUserId, at);
 }

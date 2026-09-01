@@ -18,6 +18,7 @@ import type {
   TradeSide,
 } from "../contracts";
 import { AppError } from "../errors";
+import { getAdminTradingTeamId } from "./admin-trading";
 import { getSessionUser } from "./auth";
 import { getDb, withReadTransaction } from "./db";
 import { getQuote, listQuotes } from "./quotes";
@@ -38,6 +39,7 @@ interface TeamRow {
   status: TeamStatus;
   cash_cents: number;
   version: number;
+  sandbox_owner_user_id: string | null;
 }
 
 interface HoldingRow {
@@ -167,11 +169,22 @@ export async function getCompetitionSummary(): Promise<CompetitionSummary> {
   };
 }
 
-export async function getTeamSummary(teamId: string): Promise<TeamSummary> {
+export async function getTeamSummary(
+  teamId: string,
+  sandboxOwnerUserId?: string,
+): Promise<TeamSummary> {
   const db = await getDb();
+  const ownerVisibility = sandboxOwnerUserId
+    ? "AND sandbox_owner_user_id = ?"
+    : "AND sandbox_owner_user_id IS NULL";
+  const params = sandboxOwnerUserId
+    ? [teamId, sandboxOwnerUserId]
+    : [teamId];
   const row = await db.get<TeamRow>(
-    "SELECT id, name, status, cash_cents, version FROM teams WHERE id = ?",
-    [teamId],
+    `SELECT id, name, status, cash_cents, version, sandbox_owner_user_id
+     FROM teams
+     WHERE id = ? ${ownerVisibility}`,
+    params,
   );
 
   if (!row) {
@@ -206,11 +219,19 @@ export interface PortfolioCalculation {
 export async function calculatePortfolio(
   teamId: string,
   at: Date = new Date(),
+  sandboxOwnerUserId?: string,
 ): Promise<PortfolioCalculation> {
   const database = await getDb();
+  const ownerVisibility = sandboxOwnerUserId
+    ? "AND sandbox_owner_user_id = ?"
+    : "AND sandbox_owner_user_id IS NULL";
+  const params = sandboxOwnerUserId
+    ? [teamId, sandboxOwnerUserId]
+    : [teamId];
   const team = await database.get<TeamRow>(
-    "SELECT id, name, status, cash_cents, version FROM teams WHERE id = ?",
-    [teamId],
+    `SELECT id, name, status, cash_cents, version, sandbox_owner_user_id
+     FROM teams WHERE id = ? ${ownerVisibility}`,
+    params,
   );
 
   if (!team) {
@@ -273,6 +294,18 @@ export async function calculatePortfolio(
   );
   const cashCents = Number(team.cash_cents);
   const totalValueCents = cashCents + holdingsValueCents;
+  const sandboxFunding = team.sandbox_owner_user_id
+    ? await database.get<{ amount_cents: number }>(
+        `SELECT COALESCE(SUM(amount_cents), 0) AS amount_cents
+         FROM ledger_entries
+         WHERE team_id = ?
+           AND entry_type IN ('STARTING_CASH', 'ADJUSTMENT')`,
+        [teamId],
+      )
+    : null;
+  const startingValueCents = team.sandbox_owner_user_id
+    ? Number(sandboxFunding?.amount_cents ?? 0)
+    : competition.startingCashCents;
   const dayChangeCents = interim.reduce(
     (total, holding) => total + holding.dayChangeCents,
     0,
@@ -309,12 +342,12 @@ export async function calculatePortfolio(
       cashCents,
       holdingsValueCents,
       totalValueCents,
-      startingValueCents: competition.startingCashCents,
-      totalReturnCents: totalValueCents - competition.startingCashCents,
-      totalReturnPercent: roundPercent(
-        totalValueCents - competition.startingCashCents,
-        competition.startingCashCents,
-      ),
+      startingValueCents,
+      totalReturnCents: totalValueCents - startingValueCents,
+      totalReturnPercent:
+        startingValueCents > 0
+          ? roundPercent(totalValueCents - startingValueCents, startingValueCents)
+          : 0,
       dayChangeCents,
       dayChangePercent: roundPercent(dayChangeCents, priorValueCents),
       buyingPowerCents: cashCents,
@@ -383,7 +416,12 @@ export async function listOrders(
 ): Promise<OrderView[]> {
   const user = await requireSessionUser(userId);
   const resultLimit = normalizedLimit(limit, 12);
-  const teamId = user.role === "host" ? requestedTeamId : user.teamId;
+  const teamId =
+    user.role === "platform_admin"
+      ? await getAdminTradingTeamId(user.id)
+      : user.role === "host"
+        ? requestedTeamId
+        : user.teamId;
 
   if (user.role === "student" && !teamId) {
     throw new AppError("TEAM_REQUIRED", "Join a team to view orders.", 403);
@@ -391,6 +429,15 @@ export async function listOrders(
 
   const conditions: string[] = [];
   const parameters: Array<string | number> = [];
+
+  if (user.role === "host") {
+    // Hosts may inspect real competition teams, never a private admin row.
+    conditions.push("t.sandbox_owner_user_id IS NULL");
+  }
+
+  if (user.role === "platform_admin" && !teamId) {
+    return [];
+  }
 
   if (teamId) {
     conditions.push("o.team_id = ?");
@@ -439,6 +486,7 @@ function activityRowToItem(row: ActivityRow): ActivityItem {
 export async function listActivity(
   userId: string,
   limit?: number,
+  scope: "portfolio" | "competition" = "portfolio",
 ): Promise<ActivityItem[]> {
   const user = await requireSessionUser(userId);
   const resultLimit = normalizedLimit(limit, 16);
@@ -453,6 +501,16 @@ export async function listActivity(
 
     visibility = "AND (a.team_id = ? OR a.team_id IS NULL)";
     parameters.push(user.teamId);
+  } else if (user.role === "platform_admin" && scope === "portfolio") {
+    const teamId = await getAdminTradingTeamId(user.id);
+    visibility = teamId
+      ? "AND (a.team_id = ? OR a.team_id IS NULL)"
+      : "AND a.team_id IS NULL";
+    if (teamId) parameters.push(teamId);
+  } else {
+    // Competition oversight includes global events and real teams only.
+    visibility =
+      "AND (a.team_id IS NULL OR t.sandbox_owner_user_id IS NULL)";
   }
 
   parameters.push(resultLimit);
@@ -481,9 +539,9 @@ async function buildLeaderboard(user: SessionUser, at: Date): Promise<Leaderboar
   const db = await getDb();
   const teams = await db.all<TeamRow>(
     `
-      SELECT id, name, status, cash_cents, version
+      SELECT id, name, status, cash_cents, version, sandbox_owner_user_id
       FROM teams
-      WHERE competition_id = ?
+      WHERE competition_id = ? AND sandbox_owner_user_id IS NULL
     `,
     [competition.id],
   );
@@ -536,6 +594,7 @@ export async function getLeaderboard(userId: string): Promise<Leaderboard> {
 async function getPortfolioHistory(
   teamId: string,
   current: PortfolioSummary,
+  includeCash = false,
 ): Promise<PortfolioPoint[]> {
   const db = await getDb();
   const rows = await db.all<{
@@ -556,7 +615,12 @@ async function getPortfolioHistory(
     at: row.captured_at,
     valueCents: Number(row.total_value_cents),
   }));
-  history.push({ at: current.asOf, valueCents: current.holdingsValueCents });
+  history.push({
+    at: current.asOf,
+    valueCents: includeCash
+      ? current.totalValueCents
+      : current.holdingsValueCents,
+  });
   return history;
 }
 
@@ -565,11 +629,22 @@ export async function getDashboard(userId: string): Promise<Dashboard> {
     const currentUser = await requireSessionUser(userId);
     const now = new Date();
     const competition = await getCompetitionSummary();
-    const team = currentUser.teamId
-      ? await getTeamSummary(currentUser.teamId)
+    const portfolioTeamId =
+      currentUser.role === "platform_admin"
+        ? await getAdminTradingTeamId(currentUser.id)
+        : currentUser.teamId;
+    const team = portfolioTeamId
+      ? await getTeamSummary(
+          portfolioTeamId,
+          currentUser.role === "platform_admin" ? currentUser.id : undefined,
+        )
       : null;
-    const calculated = currentUser.teamId
-      ? await calculatePortfolio(currentUser.teamId, now)
+    const calculated = portfolioTeamId
+      ? await calculatePortfolio(
+          portfolioTeamId,
+          now,
+          currentUser.role === "platform_admin" ? currentUser.id : undefined,
+        )
       : null;
     const leaderboard = await buildLeaderboard(currentUser, now);
 
@@ -580,8 +655,12 @@ export async function getDashboard(userId: string): Promise<Dashboard> {
       portfolio: calculated?.summary ?? null,
       holdings: calculated?.holdings ?? [],
       portfolioHistory:
-        currentUser.teamId && calculated
-          ? await getPortfolioHistory(currentUser.teamId, calculated.summary)
+        portfolioTeamId && calculated
+          ? await getPortfolioHistory(
+              portfolioTeamId,
+              calculated.summary,
+              currentUser.role === "platform_admin",
+            )
           : [],
       recentOrders: await listOrders(currentUser.id, 8),
       recentActivity: await listActivity(currentUser.id, 10),

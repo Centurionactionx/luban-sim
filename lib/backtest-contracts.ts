@@ -48,7 +48,16 @@ export interface AdminValuationPosition {
 
 export interface AdminValuationSummary {
   positionCount: number;
+  /** Configured cash before any historical test purchases. */
+  startingCashCents: number;
+  /** Starting cash that has not been committed to historical purchases. */
+  availableCashCents: number;
   costBasisCents: number;
+  /** Current market value of the test positions, excluding available cash. */
+  holdingsValueCents: number;
+  /** Available cash plus the current market value of the test positions. */
+  totalValueCents: number;
+  /** @deprecated Compatibility alias for holdingsValueCents. */
   currentValueCents: number;
   gainLossCents: number;
   returnPercent: number;
@@ -68,4 +77,9 @@ export interface CreateAdminValuationPositionInput {
   symbol: string;
   quantity: number;
   purchaseDate: string;
+}
+
+export interface SetAdminValuationCashInput {
+  actorUserId: string;
+  cashCents: number;
 }

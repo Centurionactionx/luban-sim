@@ -261,9 +261,12 @@ async function insertInvitation(
         id: string;
         competition_id: string;
         status: string;
-      }>("SELECT id, competition_id, status FROM teams WHERE id = ?", [
-        params.teamId,
-      ]);
+      }>(
+        `SELECT id, competition_id, status
+         FROM teams
+         WHERE id = ? AND sandbox_owner_user_id IS NULL`,
+        [params.teamId],
+      );
 
       if (!team) {
         throw new AppError("TEAM_NOT_FOUND", "That team does not exist.", 404, {

@@ -19,7 +19,7 @@ import {
 } from "./database";
 
 const DEFAULT_DATABASE_PATH = join(process.cwd(), "data", "luban.sqlite");
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 9;
 
 const globalDatabase = globalThis as typeof globalThis & {
   __lubanSqliteHandle?: DatabaseSync;
@@ -132,7 +132,9 @@ function createSqliteSchema(database: DatabaseSync): void {
   ensureInstrumentRefreshColumn(database);
   ensureAccountColumns(database);
   ensureDeletedStatus(database);
+  ensureAdminSandboxOwnerColumn(database);
   ensureAdminValuationColumns(database);
+  backfillAdminValuationAccountsSqlite(database);
 }
 
 /**
@@ -217,6 +219,7 @@ const SHARED_TABLE_BODIES = {
   teams: (big: string) => `
       id TEXT PRIMARY KEY,
       competition_id TEXT NOT NULL REFERENCES competitions(id) ON DELETE CASCADE,
+      sandbox_owner_user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
       status TEXT NOT NULL CHECK (status IN ('active', 'frozen', 'disqualified')),
       cash_cents ${big} NOT NULL CHECK (cash_cents >= 0),
@@ -333,6 +336,11 @@ const SHARED_TABLE_BODIES = {
       detail TEXT NOT NULL,
       metadata_json TEXT,
       created_at TEXT NOT NULL`,
+  admin_valuation_accounts: (big: string) => `
+      admin_user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      starting_cash_cents ${big} NOT NULL CHECK (starting_cash_cents >= 0),
+      version ${big} NOT NULL DEFAULT 0 CHECK (version >= 0),
+      updated_at TEXT NOT NULL`,
   admin_valuation_positions: (big: string) => `
       id TEXT PRIMARY KEY,
       admin_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -379,6 +387,11 @@ function schemaStatements(engine: DatabaseEngine): string[] {
   const statements = [...tables, ...SCHEMA_INDEXES];
 
   if (engine === "postgres") {
+    statements.push(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_teams_sandbox_owner
+      ON teams (sandbox_owner_user_id)
+      WHERE sandbox_owner_user_id IS NOT NULL
+    `);
     // The server connects as the table owner; browsers must never reach these
     // tables through Supabase's anon/authenticated roles. RLS with no
     // policies makes that explicit.
@@ -543,6 +556,83 @@ export async function initializeAppDatabaseSchema(app: AppDatabase): Promise<voi
  * schema on cold start (fresh databases get the current DDL directly).
  */
 export async function runPostgresMigrations(tx: DbExecutor): Promise<void> {
+  // v9: a platform administrator may own one private simulator account. The
+  // row still uses the battle-tested team/holding/order ledger internally,
+  // but the nullable owner marker keeps it out of every competition surface.
+  await tx.run(`
+    ALTER TABLE teams
+    ADD COLUMN IF NOT EXISTS sandbox_owner_user_id TEXT
+      REFERENCES users(id) ON DELETE CASCADE
+  `);
+  await tx.run(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_teams_sandbox_owner
+    ON teams (sandbox_owner_user_id)
+    WHERE sandbox_owner_user_id IS NOT NULL
+  `);
+
+  // v8: provision the complete valuation sandbox on databases created before
+  // the lab existed. Creating both tables here matters for long-lived
+  // Supabase projects because initializeAppDatabaseSchema deliberately skips
+  // the full DDL pass once the users table is present.
+  await tx.run(`
+    CREATE TABLE IF NOT EXISTS admin_valuation_positions (
+      id TEXT PRIMARY KEY,
+      admin_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      idempotency_key TEXT NOT NULL,
+      request_fingerprint TEXT NOT NULL,
+      symbol TEXT NOT NULL REFERENCES instruments(symbol),
+      requested_date TEXT NOT NULL,
+      session_date TEXT NOT NULL,
+      session_at TEXT NOT NULL,
+      quantity BIGINT NOT NULL CHECK (quantity > 0),
+      fill_price_cents BIGINT NOT NULL CHECK (fill_price_cents > 0),
+      fill_price_cad_cents BIGINT NOT NULL CHECK (fill_price_cad_cents > 0),
+      historical_fx_rate_basis_points BIGINT NOT NULL
+        CHECK (historical_fx_rate_basis_points > 0),
+      split_multiplier_ppm BIGINT NOT NULL CHECK (split_multiplier_ppm > 0),
+      split_checked_at TEXT NOT NULL,
+      source TEXT NOT NULL CHECK (source IN ('YAHOO_FINANCE', 'LUBAN_SIMULATED')),
+      source_url TEXT,
+      created_at TEXT NOT NULL,
+      UNIQUE (admin_user_id, idempotency_key)
+    )
+  `);
+  await tx.run(`
+    ALTER TABLE admin_valuation_positions
+    ADD COLUMN IF NOT EXISTS split_checked_at TEXT NOT NULL
+      DEFAULT '1970-01-01T00:00:00.000Z'
+  `);
+  await tx.run(
+    "CREATE INDEX IF NOT EXISTS idx_admin_valuation_owner_created ON admin_valuation_positions (admin_user_id, created_at DESC)",
+  );
+  await tx.run("ALTER TABLE admin_valuation_positions ENABLE ROW LEVEL SECURITY");
+
+  // Every platform administrator's historical valuation lab gets its own
+  // cash account, deliberately separate from competition/team cash.
+  await tx.run(`
+    CREATE TABLE IF NOT EXISTS admin_valuation_accounts (
+      admin_user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      starting_cash_cents BIGINT NOT NULL CHECK (starting_cash_cents >= 0),
+      version BIGINT NOT NULL DEFAULT 0 CHECK (version >= 0),
+      updated_at TEXT NOT NULL
+    )
+  `);
+  await tx.run("ALTER TABLE admin_valuation_accounts ENABLE ROW LEVEL SECURITY");
+  await tx.run(
+    `INSERT INTO admin_valuation_accounts (
+       admin_user_id, starting_cash_cents, version, updated_at
+     )
+     SELECT
+       admin_user_id,
+       SUM(fill_price_cad_cents * quantity),
+       0,
+       ?
+     FROM admin_valuation_positions
+     GROUP BY admin_user_id
+     ON CONFLICT (admin_user_id) DO NOTHING`,
+    [new Date().toISOString()],
+  );
+
   // v7: users.status gains 'deleted'. PostgreSQL names the inline column
   // check users_status_check; swap it only when it predates the new value.
   const statusCheck = await tx.get<{ def: string }>(
@@ -618,6 +708,7 @@ async function clearDomainData(
 
   const tables = [
     "admin_valuation_positions",
+    "admin_valuation_accounts",
     "portfolio_snapshots",
     "activity_events",
     "ledger_entries",
@@ -876,6 +967,50 @@ function ensureAdminValuationColumns(database: DatabaseSync): void {
       ADD COLUMN split_checked_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z';
     `);
   }
+}
+
+/** Adds the v9 private-admin ownership marker to an existing local database. */
+function ensureAdminSandboxOwnerColumn(database: DatabaseSync): void {
+  const columns = database.prepare("PRAGMA table_info(teams)").all() as unknown as Array<{
+    name: string;
+  }>;
+
+  if (!columns.some((column) => column.name === "sandbox_owner_user_id")) {
+    database.exec(`
+      ALTER TABLE teams
+      ADD COLUMN sandbox_owner_user_id TEXT
+        REFERENCES users(id) ON DELETE CASCADE;
+    `);
+  }
+
+  database.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_teams_sandbox_owner
+    ON teams (sandbox_owner_user_id)
+    WHERE sandbox_owner_user_id IS NOT NULL;
+  `);
+}
+
+/**
+ * v8 compatibility for local databases that already contain valuation-lab
+ * purchases: funding them to their exact invested cost preserves every
+ * existing position while leaving zero uncommitted cash.
+ */
+function backfillAdminValuationAccountsSqlite(database: DatabaseSync): void {
+  database
+    .prepare(
+      `INSERT INTO admin_valuation_accounts (
+         admin_user_id, starting_cash_cents, version, updated_at
+       )
+       SELECT
+         admin_user_id,
+         SUM(fill_price_cad_cents * quantity),
+         0,
+         ?
+       FROM admin_valuation_positions
+       GROUP BY admin_user_id
+       ON CONFLICT (admin_user_id) DO NOTHING`,
+    )
+    .run(new Date().toISOString());
 }
 
 function usersTableNeedsAccountColumns(database: DatabaseSync): boolean {

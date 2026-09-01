@@ -284,7 +284,12 @@ export async function setAccountTeam(
         id: string;
         name: string;
         competition_id: string;
-      }>("SELECT id, name, competition_id FROM teams WHERE id = ?", [teamId]);
+      }>(
+        `SELECT id, name, competition_id
+         FROM teams
+         WHERE id = ? AND sandbox_owner_user_id IS NULL`,
+        [teamId],
+      );
 
       if (!team) {
         throw new AppError("TEAM_NOT_FOUND", "That team does not exist.", 404, {

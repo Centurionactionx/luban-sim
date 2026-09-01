@@ -1,9 +1,11 @@
 import { z } from "zod";
 
 import {
+  MAX_ADMIN_VALUATION_CASH_CENTS,
   clearAdminValuationPortfolio,
   createAdminValuationPosition,
   getAdminValuationPortfolio,
+  setAdminValuationCash,
 } from "@/lib/server/admin-valuation";
 
 import {
@@ -31,6 +33,16 @@ const createPositionSchema = z
   })
   .strict();
 
+const setCashSchema = z
+  .object({
+    cashCents: z
+      .number()
+      .int()
+      .min(0)
+      .max(MAX_ADMIN_VALUATION_CASH_CENTS),
+  })
+  .strict();
+
 export async function GET(): Promise<Response> {
   try {
     const user = await requirePlatformAdmin();
@@ -51,6 +63,18 @@ export async function POST(request: Request): Promise<Response> {
       ...input,
     });
     return json(portfolio, { status: 201 });
+  } catch (error) {
+    return handleRouteError(error);
+  }
+}
+
+export async function PATCH(request: Request): Promise<Response> {
+  try {
+    const user = await requirePlatformAdmin();
+    const { cashCents } = setCashSchema.parse(await parseJson(request));
+    return json(
+      await setAdminValuationCash({ actorUserId: user.id, cashCents }),
+    );
   } catch (error) {
     return handleRouteError(error);
   }

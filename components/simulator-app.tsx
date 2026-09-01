@@ -1038,6 +1038,11 @@ export function SimulatorApp({
   const [adminOverview, setAdminOverview] = useState<AdminOverview | null>(null);
   const [teamCashDrafts, setTeamCashDrafts] = useState<Record<string, string>>({});
   const [teamActionBusy, setTeamActionBusy] = useState<string | null>(null);
+  const [adminCashDraft, setAdminCashDraft] = useState<string | null>(null);
+  const [adminCashBusy, setAdminCashBusy] = useState(false);
+  const [adminCashFeedback, setAdminCashFeedback] = useState<TicketStatus | null>(
+    null,
+  );
   const [disqualifyArmed, setDisqualifyArmed] = useState<string | null>(null);
   const [hostFeedback, setHostFeedback] = useState("");
   const [resetArmed, setResetArmed] = useState(false);
@@ -1304,19 +1309,33 @@ export function SimulatorApp({
   const holdingForQuote = dashboard.holdings.find(
     (holding) => holding.symbol === selectedQuote.symbol,
   );
+  const isPlatformAdmin = dashboard.currentUser.role === "platform_admin";
+  const isCompetitionHost = dashboard.currentUser.role === "host";
+  const canManageCompetition = isCompetitionHost || isPlatformAdmin;
+  const hasAdminTradingAccount =
+    isPlatformAdmin && dashboard.team !== null && dashboard.portfolio !== null;
+  const tradingAccountIsOpen =
+    hasAdminTradingAccount ||
+    (dashboard.currentUser.role === "student" &&
+      dashboard.team?.status === "active" &&
+      dashboard.competition.tradingOpen);
   const canTrade =
     connection === "connected" &&
     !selectedQuote.isStale &&
-    dashboard.currentUser.role === "student" &&
-    dashboard.team?.status === "active" &&
-    dashboard.competition.tradingOpen &&
+    tradingAccountIsOpen &&
     quantityIsValid &&
     (side === "BUY"
       ? estimatedValue <= portfolio.buyingPowerCents
       : wholeQuantity <= (holdingForQuote?.quantity ?? 0));
-  const isHost =
-    dashboard.currentUser.role === "host" ||
-    dashboard.currentUser.role === "platform_admin";
+  const adminCashInputValue =
+    adminCashDraft ?? (portfolio.cashCents / 100).toFixed(2);
+  const parsedAdminCash = parseCashDraft(adminCashInputValue);
+  const adminCashDraftError =
+    adminCashDraft !== null && parsedAdminCash === null
+      ? "Enter a non-negative CAD amount with no more than two decimal places."
+      : null;
+  const adminCashIsUnchanged =
+    hasAdminTradingAccount && parsedAdminCash === portfolio.cashCents;
   const competitionHasTrades = (adminOverview?.teams ?? []).some(
     (team) => team.tradeCount > 0,
   );
@@ -1326,6 +1345,8 @@ export function SimulatorApp({
 
   const switchIdentity = async (userId: string) => {
     setIdentityBusy(true);
+    setAdminCashDraft(null);
+    setAdminCashFeedback(null);
     setTicketStatus({ kind: "working", message: "Switching demo identity…" });
     try {
       const response = await fetch("/api/auth/demo-login", {
@@ -1456,23 +1477,28 @@ export function SimulatorApp({
         : selectedQuote.isStale
           ? "Trading waits for a fresh market quote."
           : !quantityIsValid
-        ? "Enter a positive whole number of shares."
-        : side === "BUY" && estimatedValue > portfolio.buyingPowerCents
-          ? "This order is larger than the team’s available cash."
-          : side === "SELL" && wholeQuantity > (holdingForQuote?.quantity ?? 0)
-            ? `The team holds only ${holdingForQuote?.quantity ?? 0} shares of ${selectedQuote.symbol}.`
-            : dashboard.competition.phase === "scheduled"
-              ? `Trading opens ${formatScheduleInstant(dashboard.competition.startsAt)}.`
-              : dashboard.competition.phase === "ended"
-                ? `This competition ended ${formatScheduleInstant(dashboard.competition.endsAt)}.`
-                : "Trading is unavailable while the competition or team is paused.";
+            ? "Enter a positive whole number of shares."
+            : isPlatformAdmin && !hasAdminTradingAccount
+              ? "Set your admin test cash before placing an order."
+              : isCompetitionHost
+                ? "Host accounts are view-only and cannot place orders."
+                : side === "BUY" && estimatedValue > portfolio.buyingPowerCents
+                  ? `This order is larger than the ${isPlatformAdmin ? "admin test account’s" : "team’s"} available cash.`
+                  : side === "SELL" &&
+                      wholeQuantity > (holdingForQuote?.quantity ?? 0)
+                    ? `The ${isPlatformAdmin ? "admin test account" : "team"} holds only ${holdingForQuote?.quantity ?? 0} shares of ${selectedQuote.symbol}.`
+                    : dashboard.competition.phase === "scheduled"
+                      ? `Trading opens ${formatScheduleInstant(dashboard.competition.startsAt)}.`
+                      : dashboard.competition.phase === "ended"
+                        ? `This competition ended ${formatScheduleInstant(dashboard.competition.endsAt)}.`
+                        : "Trading is unavailable while the competition or team is paused.";
       setTicketStatus({ kind: "error", message: reason });
       return;
     }
 
     setTicketStatus({
       kind: "working",
-      message: `Recording ${side.toLowerCase()} order in the shared ledger…`,
+      message: `Recording ${side.toLowerCase()} order in the ${isPlatformAdmin ? "private admin" : "shared team"} ledger…`,
     });
 
     // Reuse the pending key only for a retry of the exact same ticket; any
@@ -1537,8 +1563,58 @@ export function SimulatorApp({
     }
   };
 
+  const updateAdminCash = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!isPlatformAdmin) return;
+
+    const cashCents = parseCashDraft(adminCashInputValue);
+    if (cashCents === null) {
+      setAdminCashFeedback({
+        kind: "error",
+        message:
+          "Enter a non-negative CAD amount with no more than two decimal places.",
+      });
+      return;
+    }
+
+    setAdminCashBusy(true);
+    setAdminCashFeedback({
+      kind: "working",
+      message: "Saving your private test balance…",
+    });
+    try {
+      const response = await fetch("/api/admin/trading-account/cash", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ cashCents }),
+      });
+      const payload = await readJson(response);
+      if (!response.ok) {
+        throw new Error(extractError(payload, "The admin test cash did not change."));
+      }
+
+      setAdminCashDraft(null);
+      setAdminCashFeedback({
+        kind: "success",
+        message: `Admin test cash set to ${formatMoney(cashCents)}.`,
+      });
+      await fetchDashboard(true, false);
+    } catch (error) {
+      setAdminCashFeedback({
+        kind: "error",
+        message:
+          error instanceof Error
+            ? error.message
+            : "The admin test cash did not change.",
+      });
+    } finally {
+      setAdminCashBusy(false);
+    }
+  };
+
   const updateCompetition = async () => {
-    if (!isHost) return;
+    if (!canManageCompetition) return;
     const nextStatus = dashboard.competition.status === "active" ? "paused" : "active";
     setHostBusy(true);
     try {
@@ -1568,7 +1644,7 @@ export function SimulatorApp({
 
   const saveCompetitionSchedule = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!isHost) return;
+    if (!canManageCompetition) return;
 
     const body: Record<string, unknown> = {};
 
@@ -1621,7 +1697,7 @@ export function SimulatorApp({
   };
 
   const resetPrototype = async () => {
-    if (!isHost) return;
+    if (!canManageCompetition) return;
     if (!resetArmed) {
       setResetArmed(true);
       return;
@@ -1652,7 +1728,7 @@ export function SimulatorApp({
   };
 
   const updateTeamStatus = async (teamId: string, status: TeamStatus) => {
-    if (!isHost) return;
+    if (!canManageCompetition) return;
     if (status === "disqualified" && disqualifyArmed !== teamId) {
       setDisqualifyArmed(teamId);
       setHostFeedback(
@@ -1700,7 +1776,7 @@ export function SimulatorApp({
     teamName: string,
   ) => {
     event.preventDefault();
-    if (!isHost) return;
+    if (!canManageCompetition) return;
 
     const cashCents = parseCashDraft(teamCashDrafts[teamId] ?? "");
     if (cashCents === null) {
@@ -1740,33 +1816,48 @@ export function SimulatorApp({
     }
   };
 
-  const memberRows = dashboard.team?.memberNames.map((name, index) => {
-    const user = dashboard.session.demoUsers.find((candidate) => candidate.name === name);
-    return {
-      id: user?.id ?? name,
-      name,
-      role: index === 0 ? "Captain" : index === 1 ? "Trader" : "Analyst",
-      presence:
-        dashboard.currentUser.name === name
-          ? "online"
-          : index === 2
-            ? "away"
-            : "online",
-      current: dashboard.currentUser.name === name,
-    };
-  }) ?? [
-    {
-      id: "host",
-      name: dashboard.currentUser.name,
-      role: "Competition host",
-      presence: "online",
-      current: true,
-    },
-  ];
+  const memberRows = isPlatformAdmin
+    ? [
+        {
+          id: dashboard.currentUser.id,
+          name: dashboard.currentUser.name,
+          role: "Platform administrator",
+          presence: "online",
+          current: true,
+        },
+      ]
+    : dashboard.team?.memberNames.map((name, index) => {
+        const user = dashboard.session.demoUsers.find(
+          (candidate) => candidate.name === name,
+        );
+        return {
+          id: user?.id ?? name,
+          name,
+          role: index === 0 ? "Captain" : index === 1 ? "Trader" : "Analyst",
+          presence:
+            dashboard.currentUser.name === name
+              ? "online"
+              : index === 2
+                ? "away"
+                : "online",
+          current: dashboard.currentUser.name === name,
+        };
+      }) ?? [
+        {
+          id: "host",
+          name: dashboard.currentUser.name,
+          role: "Competition host",
+          presence: "online",
+          current: true,
+        },
+      ];
 
   return (
     <main className="app-frame">
-      <h1 className="sr-only">Luban Market Lab team portfolio simulator</h1>
+      <h1 className="sr-only">
+        Luban Market Lab {isPlatformAdmin ? "admin test portfolio" : "team portfolio"}{" "}
+        simulator
+      </h1>
       <a className="skip-link" href="#order-ticket">
         Skip to order ticket
       </a>
@@ -1862,29 +1953,111 @@ export function SimulatorApp({
           >
             <PanelHeading
               id="portfolio-heading"
-              title="Team portfolio"
-              icon={<UsersIcon />}
-              aside={<span className="version-tag">v{teamVersion} shared</span>}
+              title={isPlatformAdmin ? "Admin test portfolio" : "Team portfolio"}
+              icon={isPlatformAdmin ? <UserIcon /> : <UsersIcon />}
+              aside={
+                <span className="version-tag">
+                  v{teamVersion} {isPlatformAdmin ? "private" : "shared"}
+                </span>
+              }
             />
 
             <div className="team-line">
-              <span>Team</span>
-              <strong>{dashboard.team?.name ?? "Host overview"}</strong>
-              <span className={`team-state team-state--${dashboard.team?.status ?? "active"}`}>
-                {dashboard.team?.status ?? "view only"}
+              <span>{isPlatformAdmin ? "Account" : "Team"}</span>
+              <strong>
+                {isPlatformAdmin
+                  ? "Personal test account"
+                  : dashboard.team?.name ?? "Host overview"}
+              </strong>
+              <span
+                className={`team-state team-state--${
+                  isPlatformAdmin ? "sandbox" : dashboard.team?.status ?? "active"
+                }`}
+              >
+                {isPlatformAdmin
+                  ? dashboard.team
+                    ? "personal sandbox"
+                    : "set cash to begin"
+                  : dashboard.team?.status ?? "view only"}
               </span>
             </div>
 
             <section className="portfolio-total" aria-label="Portfolio value">
               <span>Total portfolio value (CAD)</span>
-              <strong>{formatMoney(portfolio.holdingsValueCents)}</strong>
+              <strong>
+                {formatMoney(
+                  isPlatformAdmin
+                    ? portfolio.totalValueCents
+                    : portfolio.holdingsValueCents,
+                )}
+              </strong>
               <small>Price snapshot {formatTime(portfolio.asOf)}</small>
             </section>
 
             <dl className="metric-grid">
               <div>
                 <dt>Cash (CAD)</dt>
-                <dd>{formatMoney(portfolio.cashCents)}</dd>
+                {isPlatformAdmin ? (
+                  <dd className="admin-cash-editor">
+                    <form
+                      className="admin-cash-editor__form"
+                      onSubmit={(event) => void updateAdminCash(event)}
+                    >
+                      <label htmlFor="admin-test-cash" className="sr-only">
+                        Admin test cash (CAD)
+                      </label>
+                      <input
+                        id="admin-test-cash"
+                        aria-label="Admin test cash (CAD)"
+                        aria-describedby="admin-test-cash-feedback"
+                        aria-invalid={adminCashDraftError ? "true" : undefined}
+                        type="number"
+                        min="0"
+                        max="1000000000000"
+                        step="0.01"
+                        inputMode="decimal"
+                        value={adminCashInputValue}
+                        onChange={(event) => {
+                          setAdminCashDraft(event.target.value);
+                          setAdminCashFeedback(null);
+                        }}
+                        disabled={adminCashBusy}
+                      />
+                      <button
+                        type="submit"
+                        disabled={
+                          adminCashBusy ||
+                          parsedAdminCash === null ||
+                          adminCashIsUnchanged
+                        }
+                      >
+                        {adminCashBusy ? "Saving…" : "Set admin cash"}
+                      </button>
+                    </form>
+                    <small
+                      id="admin-test-cash-feedback"
+                      className={`admin-cash-editor__feedback${
+                        adminCashFeedback
+                          ? ` admin-cash-editor__feedback--${adminCashFeedback.kind}`
+                          : ""
+                      }`}
+                      role={
+                        adminCashFeedback
+                          ? adminCashFeedback.kind === "error"
+                            ? "alert"
+                            : "status"
+                          : undefined
+                      }
+                      aria-live={adminCashFeedback ? "polite" : undefined}
+                    >
+                      {adminCashDraftError ??
+                        adminCashFeedback?.message ??
+                        "Private test balance"}
+                    </small>
+                  </dd>
+                ) : (
+                  <dd>{formatMoney(portfolio.cashCents)}</dd>
+                )}
               </div>
               <div>
                 <dt>Buying power</dt>
@@ -1984,24 +2157,50 @@ export function SimulatorApp({
                 <div className="empty-state">
                   <LockIcon />
                   <p>
-                    {isHost
+                    {isCompetitionHost
                       ? "Hosts can monitor teams but do not trade from a team portfolio."
-                      : "No holdings yet. Buy a stock to begin building the team portfolio."}
+                      : isPlatformAdmin
+                        ? "No holdings yet. Buy a stock to begin building your private test portfolio."
+                        : "No holdings yet. Buy a stock to begin building the team portfolio."}
                   </p>
                 </div>
               )}
             </section>
 
-            <aside className="shared-callout">
-              <UsersIcon />
-              <div>
-                <strong>One shared account</strong>
-                <p>
-                  Every teammate’s committed order updates the same ledger. Each action stays
-                  attributed to its author.
-                </p>
-              </div>
-            </aside>
+            {isPlatformAdmin ? (
+              <aside className="shared-callout shared-callout--private">
+                <LockIcon />
+                <div>
+                  <strong>Private admin sandbox</strong>
+                  <p>
+                    Your cash, holdings, and orders are isolated from every team and
+                    never affect the competition leaderboard.
+                  </p>
+                </div>
+              </aside>
+            ) : isCompetitionHost ? (
+              <aside className="shared-callout">
+                <LockIcon />
+                <div>
+                  <strong>Competition oversight</strong>
+                  <p>
+                    Hosts can monitor team activity and manage the competition, but
+                    cannot trade from this overview.
+                  </p>
+                </div>
+              </aside>
+            ) : (
+              <aside className="shared-callout">
+                <UsersIcon />
+                <div>
+                  <strong>One shared account</strong>
+                  <p>
+                    Every teammate’s committed order updates the same ledger. Each
+                    action stays attributed to its author.
+                  </p>
+                </div>
+              </aside>
+            )}
           </section>
 
           <section
@@ -2243,7 +2442,13 @@ export function SimulatorApp({
                       ? formatMoney(portfolio.buyingPowerCents)
                       : number.format(holdingForQuote?.quantity ?? 0)}
                   </strong>
-                  <small>{side === "BUY" ? "Team account" : selectedQuote.symbol}</small>
+                  <small>
+                    {side === "BUY"
+                      ? isPlatformAdmin
+                        ? "Admin test account"
+                        : "Team account"
+                      : selectedQuote.symbol}
+                  </small>
                 </div>
                 <div>
                   <span>Estimated order value</span>
@@ -2297,7 +2502,11 @@ export function SimulatorApp({
               className="presence-section"
               headingId="presence-heading"
               contentId="presence-content"
-              title={`Team presence (${memberRows.length})`}
+              title={
+                isPlatformAdmin
+                  ? "Admin test account"
+                  : `Team presence (${memberRows.length})`
+              }
               icon={<span className="presence-signal" aria-hidden="true" />}
               isOpen={openRailSections.presence}
               onToggle={() => toggleRailSection("presence")}
@@ -2323,7 +2532,13 @@ export function SimulatorApp({
               className="activity-section sync-region"
               headingId="activity-heading"
               contentId="activity-content"
-              title="Team activity"
+              title={
+                isPlatformAdmin
+                  ? "Test account activity"
+                  : isCompetitionHost
+                    ? "Competition activity"
+                    : "Team activity"
+              }
               aside={<span>Immutable log</span>}
               isOpen={openRailSections.activity}
               onToggle={() => toggleRailSection("activity")}
@@ -2396,7 +2611,7 @@ export function SimulatorApp({
               isOpen={openRailSections.host}
               onToggle={() => toggleRailSection("host")}
             >
-              {isHost ? (
+              {canManageCompetition ? (
                 <>
                   <div className="host-status">
                     <div>
@@ -2405,7 +2620,7 @@ export function SimulatorApp({
                     </div>
                     <div>
                       <span>Your access</span>
-                      <strong>Host</strong>
+                      <strong>{isPlatformAdmin ? "Platform admin" : "Host"}</strong>
                     </div>
                   </div>
                   <p>
