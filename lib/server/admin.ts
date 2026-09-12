@@ -4,6 +4,9 @@ import type {
   AdminOverview,
   AdminTeamSummary,
   CompetitionStatus,
+  CreateCompetitionTeamInput,
+  RemoveCompetitionTeamInput,
+  RenameCompetitionTeamInput,
   SetTeamCashInput,
   TeamStatus,
   UpdateCompetitionScheduleInput,
@@ -16,6 +19,7 @@ import { getSessionUser } from "./auth";
 import {
   ADVISORY_LOCK_ACCOUNTS,
   acquireAdvisoryLock,
+  type DbExecutor,
 } from "./database";
 import {
   assertLedgerReconciles,
@@ -32,6 +36,7 @@ import {
 
 export const COMPETITION_STATUSES = ["draft", "active", "paused", "ended"] as const;
 export const TEAM_STATUSES = ["active", "frozen", "disqualified"] as const;
+export const MAX_TEAM_NAME_LENGTH = 80;
 export const MAX_TEAM_CASH_CENTS = 100_000_000_000_000;
 
 interface AdminTeamRow {
@@ -48,6 +53,13 @@ interface CashTeamRow {
   competition_id: string;
   name: string;
   cash_cents: number;
+  version: number;
+}
+
+interface MutableTeamRow {
+  id: string;
+  competition_id: string;
+  name: string;
   version: number;
 }
 
@@ -93,6 +105,54 @@ function normalizeTeamStatus(value: unknown): TeamStatus {
   }
 
   return normalized as TeamStatus;
+}
+
+function normalizeTeamName(value: unknown): string {
+  const normalized = String(value ?? "").trim().replace(/\s+/g, " ");
+
+  if (!normalized) {
+    throw new AppError("TEAM_NAME_REQUIRED", "Enter a team name.", 400, {
+      field: "name",
+    });
+  }
+  if (normalized.length > MAX_TEAM_NAME_LENGTH) {
+    throw new AppError(
+      "TEAM_NAME_TOO_LONG",
+      `Team names can be at most ${MAX_TEAM_NAME_LENGTH} characters.`,
+      400,
+      { field: "name", maximum: MAX_TEAM_NAME_LENGTH },
+    );
+  }
+
+  return normalized;
+}
+
+async function assertTeamNameAvailable(
+  executor: DbExecutor,
+  competitionId: string,
+  name: string,
+  excludedTeamId?: string,
+): Promise<void> {
+  const existing = await executor.get<{ id: string }>(
+    `SELECT id FROM teams
+     WHERE competition_id = ?
+       AND sandbox_owner_user_id IS NULL
+       AND LOWER(name) = LOWER(?)
+       ${excludedTeamId ? "AND id <> ?" : ""}
+     LIMIT 1`,
+    excludedTeamId
+      ? [competitionId, name, excludedTeamId]
+      : [competitionId, name],
+  );
+
+  if (existing) {
+    throw new AppError(
+      "TEAM_NAME_TAKEN",
+      "Another competition team already uses that name.",
+      409,
+      { field: "name" },
+    );
+  }
 }
 
 function normalizeCashCents(value: unknown): number {
@@ -469,6 +529,194 @@ export async function updateCompetitionSchedule(
 
       await assertLedgerReconciles();
     }
+  });
+
+  return getAdminOverview(input.actorUserId);
+}
+
+export async function createCompetitionTeam(
+  input: CreateCompetitionTeamInput,
+): Promise<AdminOverview> {
+  await requireHost(input.actorUserId);
+  const name = normalizeTeamName(input.name);
+  const db = await getDb();
+
+  await db.transaction(async (tx) => {
+    await acquireAdvisoryLock(tx, ADVISORY_LOCK_ACCOUNTS);
+    await requireHost(input.actorUserId);
+    const competition = await getCompetitionSummary();
+    await assertTeamNameAvailable(tx, competition.id, name);
+
+    const teamId = randomUUID();
+    const createdAt = new Date().toISOString();
+    await tx.run(
+      `INSERT INTO teams (
+         id, competition_id, name, status, cash_cents, version, created_at
+       ) VALUES (?, ?, ?, 'active', ?, 0, ?)`,
+      [teamId, competition.id, name, competition.startingCashCents, createdAt],
+    );
+    await tx.run(
+      `INSERT INTO ledger_entries (
+         id, team_id, order_id, entry_type, amount_cents,
+         symbol, quantity, note, created_at
+       ) VALUES (?, ?, NULL, 'STARTING_CASH', ?, NULL, NULL, ?, ?)`,
+      [
+        randomUUID(),
+        teamId,
+        competition.startingCashCents,
+        "Competition starting balance",
+        createdAt,
+      ],
+    );
+
+    const actor = await getSessionUser(input.actorUserId);
+    await tx.run(
+      `INSERT INTO activity_events (
+         id, competition_id, team_id, actor_user_id, type,
+         title, detail, created_at
+       ) VALUES (?, ?, ?, ?, 'TEAM_CREATED', ?, ?, ?)`,
+      [
+        randomUUID(),
+        competition.id,
+        teamId,
+        input.actorUserId,
+        `${name} added`,
+        `${actor?.name ?? "Host"} added ${name} to the competition.`,
+        createdAt,
+      ],
+    );
+
+    await assertLedgerReconciles();
+  });
+
+  return getAdminOverview(input.actorUserId);
+}
+
+export async function renameCompetitionTeam(
+  input: RenameCompetitionTeamInput,
+): Promise<AdminOverview> {
+  await requireHost(input.actorUserId);
+  const name = normalizeTeamName(input.name);
+  const db = await getDb();
+
+  await db.transaction(async (tx) => {
+    await acquireAdvisoryLock(tx, ADVISORY_LOCK_ACCOUNTS);
+    await requireHost(input.actorUserId);
+    const team = await tx.get<MutableTeamRow>(
+      `SELECT id, competition_id, name, version
+       FROM teams
+       WHERE id = ? AND sandbox_owner_user_id IS NULL`,
+      [input.teamId],
+    );
+
+    if (!team) {
+      throw new AppError("TEAM_NOT_FOUND", "That team does not exist.", 404);
+    }
+    if (team.name === name) return;
+
+    await assertTeamNameAvailable(tx, team.competition_id, name, team.id);
+    const changed = await tx.run(
+      `UPDATE teams SET name = ?, version = version + 1
+       WHERE id = ? AND version = ? AND sandbox_owner_user_id IS NULL`,
+      [name, team.id, team.version],
+    );
+    if (changed.changes !== 1) {
+      throw new AppError(
+        "ADMIN_CONFLICT",
+        "The team changed while it was being renamed.",
+        409,
+      );
+    }
+
+    const actor = await getSessionUser(input.actorUserId);
+    await tx.run(
+      `INSERT INTO activity_events (
+         id, competition_id, team_id, actor_user_id, type,
+         title, detail, created_at
+       ) VALUES (?, ?, ?, ?, 'TEAM_RENAMED', 'Team renamed', ?, ?)`,
+      [
+        randomUUID(),
+        team.competition_id,
+        team.id,
+        input.actorUserId,
+        `${actor?.name ?? "Host"} renamed ${team.name} to ${name}.`,
+        new Date().toISOString(),
+      ],
+    );
+  });
+
+  return getAdminOverview(input.actorUserId);
+}
+
+export async function removeCompetitionTeam(
+  input: RemoveCompetitionTeamInput,
+): Promise<AdminOverview> {
+  await requireHost(input.actorUserId);
+  const db = await getDb();
+
+  await db.transaction(async (tx) => {
+    await acquireAdvisoryLock(tx, ADVISORY_LOCK_ACCOUNTS);
+    await requireHost(input.actorUserId);
+    const team = await tx.get<MutableTeamRow>(
+      `SELECT id, competition_id, name, version
+       FROM teams
+       WHERE id = ? AND sandbox_owner_user_id IS NULL`,
+      [input.teamId],
+    );
+
+    if (!team) {
+      throw new AppError("TEAM_NOT_FOUND", "That team does not exist.", 404);
+    }
+
+    const memberCountRow = await tx.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM team_members WHERE team_id = ?",
+      [team.id],
+    );
+    const memberCount = Number(memberCountRow?.count ?? 0);
+
+    // Keep the immutable activity text for host audit, but detach it before
+    // the team row is deleted so the foreign-key cascade cannot erase it.
+    await tx.run("UPDATE activity_events SET team_id = NULL WHERE team_id = ?", [
+      team.id,
+    ]);
+    // A team membership row is the assignment. Removing these rows leaves the
+    // users intact and immediately blocks their team-scoped reads and trades.
+    await tx.run("DELETE FROM team_members WHERE team_id = ?", [team.id]);
+    const removed = await tx.run(
+      `DELETE FROM teams
+       WHERE id = ? AND version = ? AND sandbox_owner_user_id IS NULL`,
+      [team.id, team.version],
+    );
+    if (removed.changes !== 1) {
+      throw new AppError(
+        "ADMIN_CONFLICT",
+        "The team changed while it was being removed.",
+        409,
+      );
+    }
+
+    const actor = await getSessionUser(input.actorUserId);
+    const memberSummary =
+      memberCount === 0
+        ? "no members were assigned"
+        : memberCount === 1
+          ? "1 member is now unassigned"
+          : `${memberCount} members are now unassigned`;
+    await tx.run(
+      `INSERT INTO activity_events (
+         id, competition_id, team_id, actor_user_id, type,
+         title, detail, created_at
+       ) VALUES (?, ?, NULL, ?, 'TEAM_REMOVED', 'Team removed', ?, ?)`,
+      [
+        randomUUID(),
+        team.competition_id,
+        input.actorUserId,
+        `${actor?.name ?? "Host"} removed ${team.name}; ${memberSummary}.`,
+        new Date().toISOString(),
+      ],
+    );
+
+    await assertLedgerReconciles();
   });
 
   return getAdminOverview(input.actorUserId);

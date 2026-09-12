@@ -40,11 +40,13 @@ import {
 } from "@/lib/market-config";
 import {
   ArrowIcon,
+  CashIcon,
   ChevronDownIcon,
   FlaskIcon,
   InfoIcon,
   LockIcon,
   PauseIcon,
+  PencilIcon,
   PlayIcon,
   PulseIcon,
   RefreshIcon,
@@ -62,6 +64,7 @@ type DashboardPayload = Omit<Dashboard, "leaderboard"> & {
 };
 
 type RailSectionId = "presence" | "activity" | "leaderboard" | "host";
+type TeamEditorField = "name" | "cash";
 
 const INITIAL_RAIL_SECTIONS: Record<RailSectionId, boolean> = {
   presence: true,
@@ -355,6 +358,7 @@ const currency = new Intl.NumberFormat("en-CA", {
 });
 
 const number = new Intl.NumberFormat("en-CA");
+const TEAM_NAME_MAX_LENGTH = 80;
 
 function formatMoney(cents: number): string {
   return currency.format(cents / 100);
@@ -364,6 +368,10 @@ function cashDraftsForOverview(overview: AdminOverview): Record<string, string> 
   return Object.fromEntries(
     overview.teams.map((team) => [team.id, (team.cashCents / 100).toFixed(2)]),
   );
+}
+
+function nameDraftsForOverview(overview: AdminOverview): Record<string, string> {
+  return Object.fromEntries(overview.teams.map((team) => [team.id, team.name]));
 }
 
 function formatScheduleInstant(iso: string): string {
@@ -1037,6 +1045,12 @@ export function SimulatorApp({
   const [scheduleCashDraft, setScheduleCashDraft] = useState<string | null>(null);
   const [adminOverview, setAdminOverview] = useState<AdminOverview | null>(null);
   const [teamCashDrafts, setTeamCashDrafts] = useState<Record<string, string>>({});
+  const [teamNameDrafts, setTeamNameDrafts] = useState<Record<string, string>>({});
+  const [newTeamName, setNewTeamName] = useState("");
+  const [teamEditor, setTeamEditor] = useState<{
+    teamId: string;
+    field: TeamEditorField;
+  } | null>(null);
   const [teamActionBusy, setTeamActionBusy] = useState<string | null>(null);
   const [adminCashDraft, setAdminCashDraft] = useState<string | null>(null);
   const [adminCashBusy, setAdminCashBusy] = useState(false);
@@ -1044,6 +1058,7 @@ export function SimulatorApp({
     null,
   );
   const [disqualifyArmed, setDisqualifyArmed] = useState<string | null>(null);
+  const [removeTeamArmed, setRemoveTeamArmed] = useState<string | null>(null);
   const [hostFeedback, setHostFeedback] = useState("");
   const [resetArmed, setResetArmed] = useState(false);
   const [syncFlash, setSyncFlash] = useState(false);
@@ -1062,6 +1077,14 @@ export function SimulatorApp({
       [section]: !current[section],
     }));
   }, []);
+
+  const toggleTeamEditor = (teamId: string, field: TeamEditorField) => {
+    setTeamEditor((current) =>
+      current?.teamId === teamId && current.field === field
+        ? null
+        : { teamId, field },
+    );
+  };
 
   useEffect(() => {
     const timer = window.setTimeout(async () => {
@@ -1270,6 +1293,12 @@ export function SimulatorApp({
       const overview = payload as AdminOverview;
       setAdminOverview(overview);
       setTeamCashDrafts(cashDraftsForOverview(overview));
+      setTeamNameDrafts(nameDraftsForOverview(overview));
+      setTeamEditor((current) =>
+        current && overview.teams.some((team) => team.id === current.teamId)
+          ? current
+          : null,
+      );
     } catch (error) {
       setHostFeedback(
         error instanceof Error ? error.message : "The team controls could not be loaded.",
@@ -1730,6 +1759,7 @@ export function SimulatorApp({
   const updateTeamStatus = async (teamId: string, status: TeamStatus) => {
     if (!canManageCompetition) return;
     if (status === "disqualified" && disqualifyArmed !== teamId) {
+      setRemoveTeamArmed(null);
       setDisqualifyArmed(teamId);
       setHostFeedback(
         "Disqualification removes the team from active standings but remains reversible. Confirm to continue.",
@@ -1752,6 +1782,7 @@ export function SimulatorApp({
       const overview = payload as AdminOverview;
       setAdminOverview(overview);
       setTeamCashDrafts(cashDraftsForOverview(overview));
+      setTeamNameDrafts(nameDraftsForOverview(overview));
       setDisqualifyArmed(null);
       setHostFeedback(
         status === "active"
@@ -1764,6 +1795,147 @@ export function SimulatorApp({
     } catch (error) {
       setHostFeedback(
         error instanceof Error ? error.message : "The team status did not change.",
+      );
+    } finally {
+      setTeamActionBusy(null);
+    }
+  };
+
+  const addCompetitionTeam = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!canManageCompetition) return;
+
+    const name = newTeamName.trim();
+    if (!name) {
+      setHostFeedback("Enter a team name before adding it.");
+      return;
+    }
+
+    setTeamActionBusy("create");
+    setHostFeedback(`Adding ${name}…`);
+    try {
+      const response = await fetch("/api/admin/teams", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ name }),
+      });
+      const payload = await readJson(response);
+      if (!response.ok) {
+        throw new Error(extractError(payload, "The team could not be added."));
+      }
+
+      const overview = payload as AdminOverview;
+      setAdminOverview(overview);
+      setTeamCashDrafts(cashDraftsForOverview(overview));
+      setTeamNameDrafts(nameDraftsForOverview(overview));
+      setNewTeamName("");
+      setHostFeedback(
+        `${name} was added with the competition's starting cash balance.`,
+      );
+      await fetchDashboard(true);
+    } catch (error) {
+      setHostFeedback(
+        error instanceof Error ? error.message : "The team could not be added.",
+      );
+    } finally {
+      setTeamActionBusy(null);
+    }
+  };
+
+  const renameCompetitionTeam = async (
+    event: FormEvent<HTMLFormElement>,
+    teamId: string,
+    currentName: string,
+  ) => {
+    event.preventDefault();
+    if (!canManageCompetition) return;
+
+    const name = (teamNameDrafts[teamId] ?? "").trim();
+    if (!name) {
+      setHostFeedback("Enter a team name before saving it.");
+      return;
+    }
+    if (name === currentName) return;
+
+    setTeamActionBusy(`rename:${teamId}`);
+    setHostFeedback(`Renaming ${currentName}…`);
+    try {
+      const response = await fetch(`/api/admin/teams/${encodeURIComponent(teamId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ name }),
+      });
+      const payload = await readJson(response);
+      if (!response.ok) {
+        throw new Error(extractError(payload, "The team could not be renamed."));
+      }
+
+      const overview = payload as AdminOverview;
+      setAdminOverview(overview);
+      setTeamCashDrafts(cashDraftsForOverview(overview));
+      setTeamNameDrafts(nameDraftsForOverview(overview));
+      setTeamEditor(null);
+      setHostFeedback(`${currentName} is now ${name}.`);
+      await fetchDashboard(true);
+    } catch (error) {
+      setHostFeedback(
+        error instanceof Error ? error.message : "The team could not be renamed.",
+      );
+    } finally {
+      setTeamActionBusy(null);
+    }
+  };
+
+  const removeCompetitionTeam = async (
+    teamId: string,
+    teamName: string,
+    memberCount: number,
+  ) => {
+    if (!canManageCompetition) return;
+    if (removeTeamArmed !== teamId) {
+      setDisqualifyArmed(null);
+      setRemoveTeamArmed(teamId);
+      const memberImpact =
+        memberCount === 0
+          ? "It has no assigned members."
+          : memberCount === 1
+            ? "Its 1 member will become unassigned."
+            : `Its ${memberCount} members will become unassigned.`;
+      setHostFeedback(
+        `Removing ${teamName} permanently deletes its portfolio and trades. ${memberImpact} Confirm to continue.`,
+      );
+      return;
+    }
+
+    setTeamActionBusy(`remove:${teamId}`);
+    setHostFeedback(`Removing ${teamName}…`);
+    try {
+      const response = await fetch(`/api/admin/teams/${encodeURIComponent(teamId)}`, {
+        method: "DELETE",
+        credentials: "same-origin",
+      });
+      const payload = await readJson(response);
+      if (!response.ok) {
+        throw new Error(extractError(payload, "The team could not be removed."));
+      }
+
+      const overview = payload as AdminOverview;
+      setAdminOverview(overview);
+      setTeamCashDrafts(cashDraftsForOverview(overview));
+      setTeamNameDrafts(nameDraftsForOverview(overview));
+      setRemoveTeamArmed(null);
+      setTeamEditor(null);
+      setHostFeedback(
+        memberCount === 0
+          ? `${teamName} was removed.`
+          : `${teamName} was removed. ${memberCount === 1 ? "Its member is" : `Its ${memberCount} members are`} now unassigned.`,
+      );
+      await fetchDashboard(true);
+    } catch (error) {
+      setHostFeedback(
+        error instanceof Error ? error.message : "The team could not be removed.",
       );
     } finally {
       setTeamActionBusy(null);
@@ -1805,6 +1977,8 @@ export function SimulatorApp({
       const overview = payload as AdminOverview;
       setAdminOverview(overview);
       setTeamCashDrafts(cashDraftsForOverview(overview));
+      setTeamNameDrafts(nameDraftsForOverview(overview));
+      setTeamEditor(null);
       setHostFeedback(`${teamName}'s cash is now ${formatMoney(cashCents)}.`);
       await fetchDashboard(true);
     } catch (error) {
@@ -1826,31 +2000,33 @@ export function SimulatorApp({
           current: true,
         },
       ]
-    : dashboard.team?.memberNames.map((name, index) => {
-        const user = dashboard.session.demoUsers.find(
-          (candidate) => candidate.name === name,
-        );
-        return {
-          id: user?.id ?? name,
-          name,
-          role: index === 0 ? "Captain" : index === 1 ? "Trader" : "Analyst",
-          presence:
-            dashboard.currentUser.name === name
-              ? "online"
-              : index === 2
-                ? "away"
-                : "online",
-          current: dashboard.currentUser.name === name,
-        };
-      }) ?? [
-        {
-          id: "host",
-          name: dashboard.currentUser.name,
-          role: "Competition host",
-          presence: "online",
-          current: true,
-        },
-      ];
+    : dashboard.team
+      ? dashboard.team.memberNames.map((name, index) => {
+          const user = dashboard.session.demoUsers.find(
+            (candidate) => candidate.name === name,
+          );
+          return {
+            id: user?.id ?? name,
+            name,
+            role: index === 0 ? "Captain" : index === 1 ? "Trader" : "Analyst",
+            presence:
+              dashboard.currentUser.name === name
+                ? "online"
+                : index === 2
+                  ? "away"
+                  : "online",
+            current: dashboard.currentUser.name === name,
+          };
+        })
+      : [
+          {
+            id: dashboard.currentUser.id,
+            name: dashboard.currentUser.name,
+            role: isCompetitionHost ? "Competition host" : "Unassigned student",
+            presence: "online",
+            current: true,
+          },
+        ];
 
   return (
     <main className="app-frame">
@@ -1967,7 +2143,8 @@ export function SimulatorApp({
               <strong>
                 {isPlatformAdmin
                   ? "Personal test account"
-                  : dashboard.team?.name ?? "Host overview"}
+                  : dashboard.team?.name ??
+                    (isCompetitionHost ? "Host overview" : "Unassigned")}
               </strong>
               <span
                 className={`team-state team-state--${
@@ -1978,7 +2155,8 @@ export function SimulatorApp({
                   ? dashboard.team
                     ? "personal sandbox"
                     : "set cash to begin"
-                  : dashboard.team?.status ?? "view only"}
+                  : dashboard.team?.status ??
+                    (isCompetitionHost ? "view only" : "needs team")}
               </span>
             </div>
 
@@ -2545,18 +2723,35 @@ export function SimulatorApp({
               data-flash={syncFlash}
             >
               <ol className="activity-list">
-                {dashboard.recentActivity.slice(0, 5).map((item) => (
-                  <li key={item.id}>
-                    <time dateTime={item.createdAt}>{formatActivityTime(item.createdAt)}</time>
-                    <div>
-                      <strong>{item.title}</strong>
-                      <p>{item.detail}</p>
-                    </div>
-                    <span className={`activity-state activity-state--${item.type.toLowerCase()}`}>
-                      {item.type === "ORDER_FILLED" ? "Filled" : "Logged"}
-                    </span>
+                {dashboard.recentActivity.length === 0 ? (
+                  <li className="activity-list__empty">
+                    <p>
+                      {dashboard.currentUser.role === "student" && !dashboard.team
+                        ? "No team activity is available until a host assigns you to a team."
+                        : "No activity has been recorded yet."}
+                    </p>
                   </li>
-                ))}
+                ) : (
+                  dashboard.recentActivity.slice(0, 5).map((item) => (
+                    <li key={item.id}>
+                      <time dateTime={item.createdAt}>
+                        {formatActivityTime(item.createdAt)}
+                      </time>
+                      <div>
+                        <strong>{item.title}</strong>
+                        {isCompetitionHost && item.teamName ? (
+                          <small className="activity-team-name">{item.teamName}</small>
+                        ) : null}
+                        <p>{item.detail}</p>
+                      </div>
+                      <span
+                        className={`activity-state activity-state--${item.type.toLowerCase()}`}
+                      >
+                        {item.type === "ORDER_FILLED" ? "Filled" : "Logged"}
+                      </span>
+                    </li>
+                  ))
+                )}
               </ol>
             </AnimatedRailSection>
 
@@ -2748,61 +2943,169 @@ export function SimulatorApp({
                         Refresh
                       </button>
                     </div>
-                    {adminOverview ? (
+                    <form
+                      className="host-team__create"
+                      onSubmit={(event) => void addCompetitionTeam(event)}
+                    >
+                      <label htmlFor="new-team-name">
+                        <span>Add a team</span>
+                        <input
+                          id="new-team-name"
+                          type="text"
+                          maxLength={TEAM_NAME_MAX_LENGTH}
+                          autoComplete="off"
+                          value={newTeamName}
+                          onChange={(event) => setNewTeamName(event.target.value)}
+                          disabled={teamActionBusy !== null}
+                          placeholder="Team name"
+                        />
+                      </label>
+                      <button
+                        type="submit"
+                        disabled={teamActionBusy !== null || !newTeamName.trim()}
+                      >
+                        Add team
+                      </button>
+                    </form>
+                    {adminOverview?.teams.length ? (
                       <ul>
                         {adminOverview.teams.map((team) => (
                           <li key={team.id}>
                             <div className="host-team__summary">
-                              <span>
-                                <strong>{team.name}</strong>
+                              <div className="host-team__identity">
+                                <div className="host-team__name-line">
+                                  <strong>{team.name}</strong>
+                                  <span className="host-team__quick-actions">
+                                    <button
+                                      className="host-team__edit-trigger"
+                                      type="button"
+                                      aria-label={`Rename ${team.name}`}
+                                      aria-controls={`team-name-editor-${team.id}`}
+                                      aria-expanded={
+                                        teamEditor?.teamId === team.id &&
+                                        teamEditor.field === "name"
+                                      }
+                                      data-active={
+                                        teamEditor?.teamId === team.id &&
+                                        teamEditor.field === "name"
+                                      }
+                                      title="Rename team"
+                                      onClick={() => toggleTeamEditor(team.id, "name")}
+                                      disabled={teamActionBusy !== null}
+                                    >
+                                      <PencilIcon />
+                                    </button>
+                                    <button
+                                      className="host-team__edit-trigger"
+                                      type="button"
+                                      aria-label={`Set cash for ${team.name}`}
+                                      aria-controls={`team-cash-editor-${team.id}`}
+                                      aria-expanded={
+                                        teamEditor?.teamId === team.id &&
+                                        teamEditor.field === "cash"
+                                      }
+                                      data-active={
+                                        teamEditor?.teamId === team.id &&
+                                        teamEditor.field === "cash"
+                                      }
+                                      title="Set cash balance"
+                                      onClick={() => toggleTeamEditor(team.id, "cash")}
+                                      disabled={teamActionBusy !== null}
+                                    >
+                                      <CashIcon />
+                                    </button>
+                                  </span>
+                                </div>
                                 <small>{team.memberNames.join(", ") || "No members"}</small>
-                              </span>
+                              </div>
                               <span className={`team-state team-state--${team.status}`}>
                                 {team.status}
                               </span>
                             </div>
-                            <form
-                              className="host-team__cash"
-                              onSubmit={(event) =>
-                                void updateTeamCash(event, team.id, team.name)
-                              }
-                            >
-                              <label htmlFor={`team-cash-${team.id}`}>
-                                <span>Cash balance (CAD)</span>
-                                <input
-                                  id={`team-cash-${team.id}`}
-                                  aria-label={`Cash for ${team.name}`}
-                                  type="number"
-                                  min="0"
-                                  max="1000000000000"
-                                  step="0.01"
-                                  inputMode="decimal"
-                                  value={
-                                    teamCashDrafts[team.id] ??
-                                    (team.cashCents / 100).toFixed(2)
-                                  }
-                                  onChange={(event) =>
-                                    setTeamCashDrafts((current) => ({
-                                      ...current,
-                                      [team.id]: event.target.value,
-                                    }))
-                                  }
-                                  disabled={teamActionBusy !== null}
-                                />
-                              </label>
-                              <button
-                                type="submit"
-                                disabled={
-                                  teamActionBusy !== null ||
-                                  parseCashDraft(teamCashDrafts[team.id] ?? "") ===
-                                    null ||
-                                  parseCashDraft(teamCashDrafts[team.id] ?? "") ===
-                                    team.cashCents
+                            {teamEditor?.teamId === team.id &&
+                            teamEditor.field === "name" ? (
+                              <form
+                                id={`team-name-editor-${team.id}`}
+                                className="host-team__name"
+                                onSubmit={(event) =>
+                                  void renameCompetitionTeam(event, team.id, team.name)
                                 }
                               >
-                                Set cash
-                              </button>
-                            </form>
+                                <label htmlFor={`team-name-${team.id}`}>
+                                  <span>Team name</span>
+                                  <input
+                                    id={`team-name-${team.id}`}
+                                    type="text"
+                                    maxLength={TEAM_NAME_MAX_LENGTH}
+                                    autoComplete="off"
+                                    value={teamNameDrafts[team.id] ?? team.name}
+                                    onChange={(event) =>
+                                      setTeamNameDrafts((current) => ({
+                                        ...current,
+                                        [team.id]: event.target.value,
+                                      }))
+                                    }
+                                    disabled={teamActionBusy !== null}
+                                  />
+                                </label>
+                                <button
+                                  type="submit"
+                                  disabled={
+                                    teamActionBusy !== null ||
+                                    !teamNameDrafts[team.id]?.trim() ||
+                                    teamNameDrafts[team.id]?.trim() === team.name
+                                  }
+                                >
+                                  Rename
+                                </button>
+                              </form>
+                            ) : null}
+                            {teamEditor?.teamId === team.id &&
+                            teamEditor.field === "cash" ? (
+                              <form
+                                id={`team-cash-editor-${team.id}`}
+                                className="host-team__cash"
+                                onSubmit={(event) =>
+                                  void updateTeamCash(event, team.id, team.name)
+                                }
+                              >
+                                <label htmlFor={`team-cash-${team.id}`}>
+                                  <span>Cash balance (CAD)</span>
+                                  <input
+                                    id={`team-cash-${team.id}`}
+                                    aria-label={`Cash for ${team.name}`}
+                                    type="number"
+                                    min="0"
+                                    max="1000000000000"
+                                    step="0.01"
+                                    inputMode="decimal"
+                                    value={
+                                      teamCashDrafts[team.id] ??
+                                      (team.cashCents / 100).toFixed(2)
+                                    }
+                                    onChange={(event) =>
+                                      setTeamCashDrafts((current) => ({
+                                        ...current,
+                                        [team.id]: event.target.value,
+                                      }))
+                                    }
+                                    disabled={teamActionBusy !== null}
+                                  />
+                                </label>
+                                <button
+                                  type="submit"
+                                  disabled={
+                                    teamActionBusy !== null ||
+                                    parseCashDraft(teamCashDrafts[team.id] ?? "") ===
+                                      null ||
+                                    parseCashDraft(teamCashDrafts[team.id] ?? "") ===
+                                      team.cashCents
+                                  }
+                                >
+                                  Set cash
+                                </button>
+                              </form>
+                            ) : null}
                             <div className="host-team__actions">
                               {team.status === "active" ? (
                                 <button
@@ -2845,19 +3148,57 @@ export function SimulatorApp({
                                   Cancel
                                 </button>
                               ) : null}
+                              <button
+                                type="button"
+                                className={removeTeamArmed === team.id ? "is-danger" : ""}
+                                onClick={() =>
+                                  void removeCompetitionTeam(
+                                    team.id,
+                                    team.name,
+                                    team.memberNames.length,
+                                  )
+                                }
+                                disabled={teamActionBusy !== null}
+                              >
+                                {removeTeamArmed === team.id
+                                  ? "Confirm remove"
+                                  : "Remove team"}
+                              </button>
+                              {removeTeamArmed === team.id ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setRemoveTeamArmed(null);
+                                    setHostFeedback("Team removal cancelled.");
+                                  }}
+                                  disabled={teamActionBusy !== null}
+                                >
+                                  Cancel
+                                </button>
+                              ) : null}
                             </div>
                           </li>
                         ))}
                       </ul>
+                    ) : adminOverview ? (
+                      <p className="host-teams__empty">
+                        No competition teams yet. Add the first team above.
+                      </p>
                     ) : (
                       <p>Loading team controls…</p>
                     )}
                     <div className="host-feedback" role="status" aria-live="polite">
-                      {teamActionBusy?.startsWith("cash:")
-                        ? "Saving cash balance…"
-                        : teamActionBusy
-                          ? "Saving team status…"
-                          : hostFeedback}
+                      {teamActionBusy === "create"
+                        ? "Adding team…"
+                        : teamActionBusy?.startsWith("rename:")
+                          ? "Saving team name…"
+                          : teamActionBusy?.startsWith("remove:")
+                            ? "Removing team…"
+                            : teamActionBusy?.startsWith("cash:")
+                              ? "Saving cash balance…"
+                              : teamActionBusy
+                                ? "Saving team status…"
+                                : hostFeedback}
                     </div>
                   </div>
                 </>

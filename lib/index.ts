@@ -61,9 +61,13 @@ export type { ManagedResolution } from "./server/accounts";
 export {
   COMPETITION_STATUSES,
   MAX_TEAM_CASH_CENTS,
+  MAX_TEAM_NAME_LENGTH,
   TEAM_STATUSES,
+  createCompetitionTeam,
   getAdminOverview,
   listAdminTeams,
+  removeCompetitionTeam,
+  renameCompetitionTeam,
   resetPrototype,
   setCompetitionStatus,
   setTeamCash,

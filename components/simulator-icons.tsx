@@ -122,6 +122,24 @@ export function RefreshIcon(props: IconProps) {
   );
 }
 
+export function PencilIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="m4 20 4.1-1 10.7-10.7a2.1 2.1 0 0 0-3-3L5.1 16 4 20Z" />
+      <path d="m14.7 6.4 3 3" />
+    </IconBase>
+  );
+}
+
+export function CashIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <circle cx="12" cy="12" r="8" />
+      <path d="M15.2 8.6h-4.5a2 2 0 0 0 0 4h2.6a2 2 0 0 1 0 4H8.8M12 6.5v11" />
+    </IconBase>
+  );
+}
+
 export function LockIcon(props: IconProps) {
   return (
     <IconBase {...props}>

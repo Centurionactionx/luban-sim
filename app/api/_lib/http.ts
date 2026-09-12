@@ -72,6 +72,23 @@ export function errorResponse(
   );
 }
 
+export function requireTrustedOrigin(request: Request): void {
+  const site = request.headers.get("sec-fetch-site");
+  const origin = request.headers.get("origin");
+  // Next may normalize request.url to its listening hostname. The HTTP Host
+  // preserves the browser's actual target; never trust X-Forwarded-Host here.
+  const url = new URL(request.url);
+  const host = request.headers.get("host");
+  const targetOrigin = host ? `${url.protocol}//${host}` : url.origin;
+  if (
+    site === "cross-site" ||
+    site === "same-site" ||
+    (origin !== null && origin !== targetOrigin)
+  ) {
+    throw new ApiError(403, "UNTRUSTED_ORIGIN", "Submit this request from the application.");
+  }
+}
+
 export async function parseJson(request: Request): Promise<unknown> {
   const contentLength = request.headers.get("content-length");
   if (contentLength && Number(contentLength) > 16_384) {

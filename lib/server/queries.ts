@@ -424,7 +424,7 @@ export async function listOrders(
         : user.teamId;
 
   if (user.role === "student" && !teamId) {
-    throw new AppError("TEAM_REQUIRED", "Join a team to view orders.", 403);
+    return [];
   }
 
   const conditions: string[] = [];
@@ -496,10 +496,10 @@ export async function listActivity(
 
   if (user.role === "student") {
     if (!user.teamId) {
-      throw new AppError("TEAM_REQUIRED", "Join a team to view activity.", 403);
+      return [];
     }
 
-    visibility = "AND (a.team_id = ? OR a.team_id IS NULL)";
+    visibility = "AND a.team_id = ?";
     parameters.push(user.teamId);
   } else if (user.role === "platform_admin" && scope === "portfolio") {
     const teamId = await getAdminTradingTeamId(user.id);

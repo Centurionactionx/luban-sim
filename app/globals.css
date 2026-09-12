@@ -1722,6 +1722,25 @@ a {
   line-height: 1.4;
 }
 
+.activity-team-name {
+  display: block;
+  margin-top: 2px;
+  color: var(--purple-deep);
+  font-family: var(--font-data);
+  font-size: 8px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.activity-list li.activity-list__empty {
+  min-height: 54px;
+  display: block;
+}
+
+.activity-list__empty p {
+  margin-top: 0;
+}
+
 .activity-state {
   min-height: 24px;
   padding: 4px 6px;
@@ -1915,6 +1934,15 @@ a {
   border-top: 1px solid var(--hairline);
 }
 
+.host-teams__empty {
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--hairline);
+  color: var(--muted);
+  font-size: var(--type-description);
+  line-height: 1.45;
+}
+
 .host-team__summary {
   display: flex;
   align-items: flex-start;
@@ -1922,13 +1950,23 @@ a {
   gap: 12px;
 }
 
-.host-team__summary > span:first-child {
+.host-team__identity {
   min-width: 0;
 }
 
+.host-team__name-line {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .host-team__summary strong {
-  display: block;
+  min-width: 0;
+  overflow: hidden;
   font-size: var(--type-item-title);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .host-team__summary small {
@@ -1941,20 +1979,69 @@ a {
   white-space: nowrap;
 }
 
+.host-team__quick-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 3px;
+}
+
+.host-team__edit-trigger {
+  width: 28px;
+  height: 28px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--hairline);
+  border-radius: 3px;
+  background: var(--paper);
+  color: var(--purple-deep);
+}
+
+.host-team__edit-trigger:hover:not(:disabled),
+.host-team__edit-trigger[data-active="true"] {
+  border-color: var(--purple);
+  background: var(--quiet-purple);
+}
+
+.host-team__edit-trigger:focus-visible {
+  outline: 2px solid var(--purple);
+  outline-offset: 1px;
+}
+
+.host-team__edit-trigger svg {
+  width: 13px;
+  height: 13px;
+}
+
+.host-team__create,
+.host-team__name,
 .host-team__cash {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: end;
   gap: 7px;
+}
+
+.host-team__create {
+  margin: 6px 0 10px;
+  padding: 10px;
+  border: 1px solid var(--hairline);
+}
+
+.host-team__name,
+.host-team__cash {
   margin-top: 10px;
 }
 
+.host-team__create label,
+.host-team__name label,
 .host-team__cash label {
   min-width: 0;
   display: grid;
   gap: 4px;
 }
 
+.host-team__create label > span,
+.host-team__name label > span,
 .host-team__cash label > span {
   color: var(--muted);
   font-family: var(--font-data);
@@ -1963,6 +2050,8 @@ a {
   text-transform: uppercase;
 }
 
+.host-team__create input,
+.host-team__name input,
 .host-team__cash input {
   width: 100%;
   min-height: 36px;
@@ -1975,11 +2064,15 @@ a {
   font-size: 10px;
 }
 
+.host-team__create input:focus-visible,
+.host-team__name input:focus-visible,
 .host-team__cash input:focus-visible {
   outline: 2px solid var(--purple);
   outline-offset: 1px;
 }
 
+.host-team__create button,
+.host-team__name button,
 .host-team__cash button {
   min-height: 36px;
   padding: 6px 10px;
@@ -1992,6 +2085,8 @@ a {
   text-transform: uppercase;
 }
 
+.host-team__create button:hover:not(:disabled),
+.host-team__name button:hover:not(:disabled),
 .host-team__cash button:hover:not(:disabled) {
   background: #5143a7;
 }
@@ -3258,4 +3353,22 @@ a {
   border-radius: 4px;
   background: var(--paper);
   font-size: var(--type-description);
+}
+
+/* ── Dashboard column spacing only ────────────────────────────────────── */
+
+.trading-grid {
+  column-gap: clamp(12px, 1.5vw, 24px);
+}
+
+@media (max-width: 1260px) {
+  .trading-grid {
+    gap: clamp(12px, 1.5vw, 20px);
+  }
+}
+
+@media (max-width: 960px) {
+  .trading-grid {
+    gap: 0;
+  }
 }

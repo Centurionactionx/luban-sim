@@ -357,6 +357,22 @@ export interface UpdateTeamStatusInput {
   status: TeamStatus;
 }
 
+export interface CreateCompetitionTeamInput {
+  actorUserId: string;
+  name: string;
+}
+
+export interface RenameCompetitionTeamInput {
+  actorUserId: string;
+  teamId: string;
+  name: string;
+}
+
+export interface RemoveCompetitionTeamInput {
+  actorUserId: string;
+  teamId: string;
+}
+
 export interface SetTeamCashInput {
   actorUserId: string;
   teamId: string;
