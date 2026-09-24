@@ -1,6 +1,7 @@
 import { isManagedAuthMode, refreshAllQuotes, resetPrototype } from "@/lib";
 
 import {
+  requireTrustedOrigin,
   errorResponse,
   handleRouteError,
   json,
@@ -9,8 +10,9 @@ import {
 
 export const dynamic = "force-dynamic";
 
-export async function POST(): Promise<Response> {
+export async function POST(request: Request): Promise<Response> {
   try {
+    requireTrustedOrigin(request);
     // Resetting rebuilds the seeded demo world: it deletes every team and
     // membership while real accounts survive, which would strand every
     // invitation-registered student with no way back onto a team. It is a

@@ -158,6 +158,15 @@ export interface Quote {
   source: MarketDataSource;
   sourceUrl: string | null;
   isStale: boolean;
+  /**
+   * Whether the listing exchange's regular session was open when the quote
+   * was fetched. Providers fail closed: unknown session data reports false.
+   */
+  marketOpen: boolean;
+  /** Regular-session close for an open market; null when unknown or closed. */
+  marketClosesAt: string | null;
+  /** Next or current regular-session open when known; otherwise null. */
+  marketOpensAt: string | null;
 }
 
 export interface InstrumentSearchResult {

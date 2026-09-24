@@ -72,6 +72,7 @@ export {
   setCompetitionStatus,
   setTeamCash,
   setTeamStatus,
+  updateCompetition,
   updateCompetitionSchedule,
   updateCompetitionStatus,
   updateTeamStatus,
@@ -143,5 +144,6 @@ export { placeOrder, replayOrder } from "./server/trading";
 
 export {
   assertLedgerReconciles,
+  assertTeamLedgerReconciles,
   reconcileLedgers,
 } from "./server/db";

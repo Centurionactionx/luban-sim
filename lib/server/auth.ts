@@ -128,6 +128,10 @@ export async function createSessionToken(
     throw new AppError("USER_NOT_FOUND", "That demo user does not exist.", 404);
   }
 
+  if (user.status !== "active") {
+    throw new AppError("ACCOUNT_SUSPENDED", "This account is suspended.", 403);
+  }
+
   const db = await getDb();
   const subjectRow = await db.get<{ auth_subject: string | null }>(
     "SELECT auth_subject FROM users WHERE id = ?",
@@ -236,7 +240,11 @@ export function readSessionTokenFromCookieHeader(
     const [rawName, ...rawValue] = segment.trim().split("=");
 
     if (rawName === SESSION_COOKIE_NAME) {
-      return decodeURIComponent(rawValue.join("="));
+      try {
+        return decodeURIComponent(rawValue.join("="));
+      } catch {
+        return null;
+      }
     }
   }
 

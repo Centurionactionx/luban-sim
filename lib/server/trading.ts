@@ -10,12 +10,29 @@ import type {
   TradeSide,
 } from "../contracts";
 import { AppError } from "../errors";
-import { assertLedgerReconciles, getDb } from "./db";
-import { normalizeMarketSymbol, requireQuote } from "./quotes";
+import { acquireAccountReadLock } from "./database";
+import { assertTeamLedgerReconciles, getDb } from "./db";
+import { marketDataNow, normalizeMarketSymbol, requireQuote } from "./quotes";
 
 const MAX_ORDER_QUANTITY = 100_000;
 const DEFAULT_MAX_ORDERS_PER_MINUTE = 20;
 const ORDER_RATE_WINDOW_MS = 60_000;
+const DEFAULT_MAX_QUOTE_AGE_MINUTES = 20;
+
+/**
+ * Oldest quote an order may fill against. Free TSX data runs about fifteen
+ * minutes behind, so the default leaves a small margin above that delay
+ * while refusing fills at prices from a previous session or a dead feed.
+ */
+function maxQuoteAgeMs(): number {
+  const raw = Number(process.env.LUBAN_MAX_QUOTE_AGE_MINUTES);
+
+  if (Number.isSafeInteger(raw) && raw >= 1 && raw <= 1_440) {
+    return raw * 60_000;
+  }
+
+  return DEFAULT_MAX_QUOTE_AGE_MINUTES * 60_000;
+}
 
 /**
  * Anti-spam ceiling on order attempts per student per rolling minute. The
@@ -224,7 +241,10 @@ export async function placeOrder(input: PlaceOrderInput): Promise<TradeReceipt> 
 
   // Market data lives outside the ledger; read it before the write
   // transaction so no transaction ever waits on quote state.
-  const quote = await requireQuote(normalized.symbol, new Date());
+  // One clock reading (the provider's, so injected test clocks agree with
+  // the quotes they produce) drives the quote lookup and both freshness checks.
+  const marketNow = marketDataNow();
+  const quote = await requireQuote(normalized.symbol, marketNow);
   if (quote.isStale) {
     throw new AppError(
       "MARKET_DATA_STALE",
@@ -232,6 +252,40 @@ export async function placeOrder(input: PlaceOrderInput): Promise<TradeReceipt> 
       503,
       { symbol: quote.symbol, quoteAsOf: quote.asOf },
     );
+  }
+  // A quote that refreshed successfully can still be old: a thinly traded
+  // listing, an upstream that stopped updating, or a price carried over from
+  // the previous session. Unparseable timestamps are treated as stale.
+  const quoteAgeMs = marketNow.getTime() - Date.parse(quote.asOf);
+  if (!Number.isFinite(quoteAgeMs) || quoteAgeMs > maxQuoteAgeMs()) {
+    throw new AppError(
+      "MARKET_DATA_STALE",
+      `Trading in ${quote.symbol} is paused because the latest market quote is too old.`,
+      503,
+      { symbol: quote.symbol, quoteAsOf: quote.asOf },
+    );
+  }
+  // Competition orders only fill during the listing's regular session, so
+  // nobody can buy at a pre-news close after hours or over a weekend. The
+  // admin sandbox is exempt; the transaction re-derives the same role.
+  // marketClosesAt also guards a quote cached shortly before the bell.
+  const marketOpen =
+    quote.marketOpen &&
+    (quote.marketClosesAt === null ||
+      marketNow.getTime() < Date.parse(quote.marketClosesAt));
+  if (!marketOpen) {
+    const actor = await db.get<{ role: string }>(
+      "SELECT role FROM users WHERE id = ?",
+      [normalized.actorUserId],
+    );
+    if (actor?.role !== "platform_admin") {
+      throw new AppError(
+        "MARKET_CLOSED",
+        `The market for ${quote.symbol} is closed. Orders can be placed during regular trading hours.`,
+        409,
+        { symbol: quote.symbol, opensAt: quote.marketOpensAt },
+      );
+    }
   }
   const grossCents = quote.priceCadCents * normalized.quantity;
   if (!Number.isSafeInteger(grossCents)) {
@@ -242,10 +296,21 @@ export async function placeOrder(input: PlaceOrderInput): Promise<TradeReceipt> 
     );
   }
 
-  let outcome: PlaceOrderOutcome;
-
-  try {
-    outcome = await db.transaction(async (tx): Promise<PlaceOrderOutcome> => {
+  const outcome = await db.transaction(async (tx): Promise<PlaceOrderOutcome> => {
+    await acquireAccountReadLock(tx);
+    if (tx.engine === "postgres") {
+      // Serialize a trader's idempotency/rate-limit checks across instances.
+      await tx.all("SELECT pg_advisory_xact_lock(823653, hashtext(?))", [normalized.actorUserId]);
+      // Read holdings and cash only after obtaining the shared team's lock.
+      await tx.all(
+        `SELECT id FROM teams
+         WHERE id IN (SELECT team_id FROM team_members WHERE user_id = ?)
+            OR sandbox_owner_user_id = ?
+         ORDER BY id FOR UPDATE`,
+        [normalized.actorUserId, normalized.actorUserId],
+      );
+    }
+    try {
       const existing = await tx.get<IdempotencyRecordRow>(
         `SELECT request_fingerprint, outcome_type, result_json, error_json
          FROM idempotency_records
@@ -609,37 +674,30 @@ export async function placeOrder(input: PlaceOrderInput): Promise<TradeReceipt> 
         ],
       );
 
-      await assertLedgerReconciles(tx);
+      await assertTeamLedgerReconciles([account.team_id], tx);
       return { kind: "receipt", receipt };
-    });
-  } catch (error) {
-    // Domain rejections (thrown before any write) are persisted in their own
-    // small transaction so a replay of the same key returns the same answer.
-    if (shouldPersistRejection(error)) {
-      try {
-        await db.transaction(async (tx) => {
-          await tx.run(
-            `INSERT INTO idempotency_records (
-               actor_user_id, idempotency_key, request_fingerprint, outcome_type,
-               order_id, result_json, error_json, created_at
-             ) VALUES (?, ?, ?, 'REJECTED', NULL, NULL, ?, ?)`,
-            [
-              normalized.actorUserId,
-              normalized.idempotencyKey,
-              normalized.fingerprint,
-              JSON.stringify(error.toJSON()),
-              new Date().toISOString(),
-            ],
-          );
-        });
-      } catch {
-        // A concurrent attempt already recorded this key; the stored outcome
-        // wins and the thrown error below still describes this attempt.
+    } catch (error) {
+      // Persist business rejections while still holding the trader's lock,
+      // so a simultaneous retry cannot commit a contradictory outcome.
+      if (shouldPersistRejection(error)) {
+        await tx.run(
+          `INSERT INTO idempotency_records (
+             actor_user_id, idempotency_key, request_fingerprint, outcome_type,
+             order_id, result_json, error_json, created_at
+           ) VALUES (?, ?, ?, 'REJECTED', NULL, NULL, ?, ?)`,
+          [
+            normalized.actorUserId,
+            normalized.idempotencyKey,
+            normalized.fingerprint,
+            JSON.stringify(error.toJSON()),
+            new Date().toISOString(),
+          ],
+        );
+        return { kind: "replayed-error", error };
       }
+      throw error;
     }
-
-    throw error;
-  }
+  });
 
   if (outcome.kind === "replayed-error") {
     throw outcome.error;

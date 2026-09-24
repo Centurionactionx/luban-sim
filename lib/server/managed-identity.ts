@@ -6,6 +6,7 @@ import { AppError } from "../errors";
 import { resolveManagedSubject, resolveManagedUser } from "./accounts";
 import { isManagedAuthMode } from "./auth-mode";
 import type { ManagedIdentity } from "./invitations";
+import { assertRequestAllowed } from "./request-throttle";
 
 /**
  * Clerk adapter. This module is only imported on demand from managed-mode
@@ -67,10 +68,65 @@ export async function getManagedUserId(): Promise<string | null> {
 }
 
 /**
+ * Signed-in visitors who are not linked to a Luban account can call any
+ * authenticated route in a loop (sign-up is open so invitees can register),
+ * and each unlinked request would otherwise reach the Clerk Backend API. The
+ * lookup exists only for the admin-bootstrap rule, so its answer is cached
+ * briefly per verified subject and the lookups themselves are throttled.
+ * Per-process and best-effort, like request-throttle.ts.
+ */
+const UNLINKED_CACHE_TTL_MS = 30_000;
+const MAX_UNLINKED_CACHE_ENTRIES = 5_000;
+const UNLINKED_LOOKUPS_PER_SUBJECT_PER_MINUTE = 10;
+const UNLINKED_LOOKUPS_GLOBAL_PER_MINUTE = 300;
+
+/** Subject -> time it was last confirmed unlinked and not bootstrap-eligible. */
+const unlinkedSubjectCache = new Map<string, number>();
+
+function isCachedUnlinked(subject: string, now: number): boolean {
+  const at = unlinkedSubjectCache.get(subject);
+
+  if (at === undefined) {
+    return false;
+  }
+
+  if (now - at < UNLINKED_CACHE_TTL_MS) {
+    return true;
+  }
+
+  unlinkedSubjectCache.delete(subject);
+  return false;
+}
+
+function rememberUnlinked(subject: string, now: number): void {
+  unlinkedSubjectCache.delete(subject);
+
+  while (unlinkedSubjectCache.size >= MAX_UNLINKED_CACHE_ENTRIES) {
+    const oldest = unlinkedSubjectCache.keys().next().value;
+    if (oldest === undefined) break;
+    unlinkedSubjectCache.delete(oldest);
+  }
+
+  unlinkedSubjectCache.set(subject, now);
+}
+
+function isBootstrapConfigured(): boolean {
+  return Boolean(process.env.LUBAN_BOOTSTRAP_ADMIN_EMAIL?.trim());
+}
+
+/** Test seam: forgets every cached unlinked subject. */
+export function resetManagedSessionCache(): void {
+  unlinkedSubjectCache.clear();
+}
+
+/**
  * The request-time session check. Verifying the Clerk session token is local
  * cryptography (no network); the Backend API is consulted only for visitors
  * who are signed in but not yet linked to a Luban account, because that is
- * the single moment the admin-bootstrap rule may apply.
+ * the single moment the admin-bootstrap rule may apply. That lookup is skipped
+ * entirely when no bootstrap email is configured, cached negatively per
+ * subject, and throttled; a throttled or failed lookup degrades to "unlinked"
+ * rather than an error.
  */
 export async function getManagedSessionState(): Promise<ManagedSessionState> {
   const { isAuthenticated, userId } = await auth();
@@ -79,17 +135,53 @@ export async function getManagedSessionState(): Promise<ManagedSessionState> {
     return { kind: "signed-out" };
   }
 
+  // Always consult the local database first so a subject linked since the
+  // last lookup (invitation redeemed, admin bootstrapped elsewhere) is seen
+  // immediately, regardless of the negative cache below.
   const local = await resolveManagedSubject(userId);
 
   if (local.kind === "linked") {
+    unlinkedSubjectCache.delete(userId);
     return { kind: "linked", user: local.user, subject: userId };
   }
 
   if (local.kind === "suspended") {
+    unlinkedSubjectCache.delete(userId);
     return { kind: "suspended", subject: userId };
   }
 
-  const identity = await getManagedIdentity();
+  const unlinked: ManagedSessionState = { kind: "unlinked", subject: userId };
+
+  if (!isBootstrapConfigured()) {
+    return unlinked;
+  }
+
+  if (isCachedUnlinked(userId, Date.now())) {
+    return unlinked;
+  }
+
+  try {
+    assertRequestAllowed(
+      `managed-identity:${userId}`,
+      UNLINKED_LOOKUPS_PER_SUBJECT_PER_MINUTE,
+    );
+    assertRequestAllowed(
+      "managed-identity:*",
+      UNLINKED_LOOKUPS_GLOBAL_PER_MINUTE,
+    );
+  } catch {
+    return unlinked;
+  }
+
+  let identity: ManagedIdentity | null;
+
+  try {
+    identity = await getManagedIdentity();
+  } catch {
+    // Provider failure: do not cache, so the bootstrap path is retried once
+    // the provider recovers (the throttle above still bounds the retries).
+    return unlinked;
+  }
 
   if (identity) {
     const bootstrapped = await resolveManagedUser(identity);
@@ -103,7 +195,8 @@ export async function getManagedSessionState(): Promise<ManagedSessionState> {
     }
   }
 
-  return { kind: "unlinked", subject: userId };
+  rememberUnlinked(userId, Date.now());
+  return unlinked;
 }
 
 export async function getManagedSessionUser(): Promise<SessionUser | null> {
@@ -112,7 +205,27 @@ export async function getManagedSessionUser(): Promise<SessionUser | null> {
 }
 
 const MFA_CACHE_TTL_MS = 60_000;
-const mfaEnrollmentCache = new Map<string, { enrolled: boolean; at: number }>();
+/** Provider failures are denied but retried soon, not pinned for a minute. */
+const MFA_ERROR_CACHE_TTL_MS = 3_000;
+const MAX_MFA_CACHE_ENTRIES = 1_000;
+const mfaEnrollmentCache = new Map<
+  string,
+  { enrolled: boolean; at: number; ttl: number }
+>();
+
+function rememberMfaEnrollment(
+  subject: string,
+  entry: { enrolled: boolean; at: number; ttl: number },
+): void {
+  if (
+    mfaEnrollmentCache.size >= MAX_MFA_CACHE_ENTRIES &&
+    !mfaEnrollmentCache.has(subject)
+  ) {
+    mfaEnrollmentCache.clear();
+  }
+
+  mfaEnrollmentCache.set(subject, entry);
+}
 
 export function isAdminMfaRequired(): boolean {
   return (
@@ -124,17 +237,19 @@ export function isAdminMfaRequired(): boolean {
  * Whether the managed account has any second factor enrolled, per the
  * provider. Cached briefly per subject so admin polling does not turn into a
  * Backend API call per request. A provider failure counts as NOT enrolled:
- * the gate must fail closed.
+ * the gate must fail closed. That failure is cached only for a few seconds so
+ * a transient provider error cannot lock every host out for the full TTL.
  */
 export async function hasManagedMfaEnrolled(subject: string): Promise<boolean> {
   const cached = mfaEnrollmentCache.get(subject);
   const now = Date.now();
 
-  if (cached && now - cached.at < MFA_CACHE_TTL_MS) {
+  if (cached && now - cached.at < cached.ttl) {
     return cached.enrolled;
   }
 
   let enrolled = false;
+  let ttl = MFA_CACHE_TTL_MS;
 
   try {
     const client = await clerkClient();
@@ -142,9 +257,10 @@ export async function hasManagedMfaEnrolled(subject: string): Promise<boolean> {
     enrolled = user.twoFactorEnabled === true;
   } catch {
     enrolled = false;
+    ttl = MFA_ERROR_CACHE_TTL_MS;
   }
 
-  mfaEnrollmentCache.set(subject, { enrolled, at: now });
+  rememberMfaEnrollment(subject, { enrolled, at: now, ttl });
   return enrolled;
 }
 
@@ -158,7 +274,11 @@ export function primeMfaEnrollmentCache(
     return;
   }
 
-  mfaEnrollmentCache.set(subject, { enrolled: enrolled === true, at: Date.now() });
+  rememberMfaEnrollment(subject, {
+    enrolled: enrolled === true,
+    at: Date.now(),
+    ttl: MFA_CACHE_TTL_MS,
+  });
 }
 
 /**
@@ -172,12 +292,19 @@ export async function assertAdminMfaSatisfied(user: SessionUser): Promise<void> 
     return;
   }
 
-  const { userId } = await auth();
+  const { userId, sessionClaims } = await auth();
+  const secondFactorAge = sessionClaims?.fva?.[1];
 
-  if (!userId || !(await hasManagedMfaEnrolled(userId))) {
+  if (
+    !userId ||
+    typeof secondFactorAge !== "number" ||
+    !Number.isFinite(secondFactorAge) ||
+    secondFactorAge < 0 ||
+    !(await hasManagedMfaEnrolled(userId))
+  ) {
     throw new AppError(
       "MFA_REQUIRED",
-      "Host accounts must enable multi-factor authentication. Open Account security to enroll.",
+      "Host accounts must enable multi-factor authentication and sign in with a second factor. Open Account security to enroll, then sign in again.",
       403,
     );
   }

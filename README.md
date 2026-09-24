@@ -62,7 +62,7 @@ No market-data API key is required. The default provider calls Yahoo Finance fro
 
 The database seeds itself on first use. To start over, switch to `Joe (Host)` and use **Reset demo data**. The same reset is available through `POST /api/admin/reset` for automated verification.
 
-For Vercel and Supabase setup, including the current SQLite limitation, see [DEPLOYMENT.md](./DEPLOYMENT.md).
+For Vercel and Supabase setup, including PostgreSQL TLS and managed authentication, see [DEPLOYMENT.md](./DEPLOYMENT.md).
 
 ## Demo identities
 
@@ -100,8 +100,8 @@ checked by the server on every protected operation.
   platform-admin invitation link — or set `LUBAN_BOOTSTRAP_ADMIN_EMAIL` so the
   first verified sign-in with that email becomes the only bootstrapped admin.
 - **Admin MFA.** In managed mode, host and admin actions require the account
-  to have multi-factor authentication enrolled (verified against Clerk
-  server-side, failing closed). `LUBAN_REQUIRE_ADMIN_MFA=false` disables the
+  to have multi-factor authentication enrolled and a second factor verified in
+  the current session (checked server-side, failing closed). `LUBAN_REQUIRE_ADMIN_MFA=false` disables the
   gate only while a Clerk plan without MFA strategies is in use.
 - **Audit trail.** Invitation creation/revocation/acceptance, account
   creation, and admin bootstrap are recorded in `auth_audit_events` without
@@ -174,7 +174,7 @@ The data layer now runs on managed PostgreSQL when `LUBAN_DATABASE_PROVIDER=post
 
 ## Not production-ready yet
 
-- Real authentication now exists behind `LUBAN_AUTH_MODE=managed` (Clerk sign-in, invitation-only registration, bootstrapped admin, admin MFA). Still open: suspension tooling UI, rate limiting, session-revocation UI, and email delivery of invitations (links are currently copied by the host).
+- Real authentication now exists behind `LUBAN_AUTH_MODE=managed` (Clerk sign-in, invitation-only registration, bootstrapped admin, admin MFA). Suspension, role/team management, order limits, and invitation limits are implemented. Still open: provider-session-revocation UI, shared read-endpoint rate limits, and email delivery of invitations (links are currently copied by the host).
 - Define privacy, parental-consent, safeguarding, retention, and account-deletion policies for minors.
 - PostgreSQL support has landed (dual-engine data layer, tested against embedded Postgres). Still open: formal migration tooling for future schema changes, backups, and monitoring.
 - Replace the working Yahoo prototype feed with licensed Canadian/U.S. market data before public or commercial redistribution; keep brokerage execution out of scope unless Luban deliberately enters a regulated workflow.
@@ -190,3 +190,5 @@ The data layer now runs on managed PostgreSQL when `LUBAN_DATABASE_PROVIDER=post
 - `lib/server/db.ts` — schema, seed data, WAL configuration, and reset
 - `tests/integration/concurrency.test.ts` — real two-process cash contention proof
 - `tests/e2e/` — browser-level multi-session and accessibility verification
+
+Browser tests build in isolated demo/SQLite mode and use `data/luban.e2e.sqlite`. They refuse remote targets or an already-running server. Run `pnpm test:e2e`; use port 3010 only for this disposable test server. See [AUDIT.md](./AUDIT.md) for the security review and remaining deployment checks.

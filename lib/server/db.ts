@@ -18,8 +18,10 @@ import {
   type PgQueryFn,
 } from "./database";
 
+import { postgresConnectionOptions } from "./postgres-config";
+
 const DEFAULT_DATABASE_PATH = join(process.cwd(), "data", "luban.sqlite");
-const SCHEMA_VERSION = 9;
+const SCHEMA_VERSION = 10;
 
 const globalDatabase = globalThis as typeof globalThis & {
   __lubanSqliteHandle?: DatabaseSync;
@@ -133,6 +135,7 @@ function createSqliteSchema(database: DatabaseSync): void {
   ensureAccountColumns(database);
   ensureDeletedStatus(database);
   ensureAdminSandboxOwnerColumn(database);
+  ensureInvitationOperatorColumn(database);
   ensureAdminValuationColumns(database);
   backfillAdminValuationAccountsSqlite(database);
 }
@@ -322,6 +325,7 @@ const SHARED_TABLE_BODIES = {
       team_id TEXT REFERENCES teams(id) ON DELETE CASCADE,
       competition_id TEXT REFERENCES competitions(id) ON DELETE CASCADE,
       created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      issued_by_operator INTEGER NOT NULL DEFAULT 0 CHECK (issued_by_operator IN (0, 1)),
       created_at TEXT NOT NULL,
       expires_at TEXT NOT NULL,
       revoked_at TEXT,
@@ -447,31 +451,34 @@ function requirePostgresUrl(): string {
   return raw;
 }
 
-function createPgPoolDriver(): PgDriver {
-  // Providers embed sslmode=require in their URLs, and node-postgres lets
-  // that override an explicit ssl option — which then fails against
-  // Supabase's self-signed pooler CA. Strip the URL's ssl parameters so the
-  // pool option below is the single authority: TLS on, chain unverified
-  // (the standard arrangement for Supabase's pooler).
-  const url = new URL(requirePostgresUrl());
-  for (const param of ["sslmode", "ssl", "sslcert", "sslkey", "sslrootcert"]) {
-    url.searchParams.delete(param);
-  }
-  const connectionString = url.toString();
-  const host = url.hostname;
-  const local = host === "localhost" || host === "127.0.0.1";
+const DEFAULT_POSTGRES_POOL_MAX = 10;
 
+/**
+ * Connections per process. Dashboard reads and trades each hold a connection
+ * for a whole transaction, so three was too few for a class polling at once.
+ * Keep instances x this value within the pooler's client limit.
+ */
+function postgresPoolMax(): number {
+  const raw = Number(process.env.LUBAN_DATABASE_POOL_MAX);
+
+  if (Number.isSafeInteger(raw) && raw >= 1 && raw <= 50) {
+    return raw;
+  }
+
+  return DEFAULT_POSTGRES_POOL_MAX;
+}
+
+function createPgPoolDriver(): PgDriver {
   // int8 and numeric arrive as strings by default; every value in this
   // schema fits safely in a JS number.
   pgTypes.setTypeParser(20, (value) => Number(value));
   pgTypes.setTypeParser(1700, (value) => Number(value));
 
   const pool = new Pool({
-    connectionString,
-    max: 3,
+    ...postgresConnectionOptions(requirePostgresUrl()),
+    max: postgresPoolMax(),
     idleTimeoutMillis: 10_000,
     connectionTimeoutMillis: 10_000,
-    ssl: local ? undefined : { rejectUnauthorized: false },
   });
 
   // An idle client dropped by the server (pooler timeout, network blip)
@@ -556,6 +563,15 @@ export async function initializeAppDatabaseSchema(app: AppDatabase): Promise<voi
  * schema on cold start (fresh databases get the current DDL directly).
  */
 export async function runPostgresMigrations(tx: DbExecutor): Promise<void> {
+  // v10: only invitations minted by the out-of-band bootstrap script may lack
+  // a creator. Existing rows default to 0, so a creatorless invitation left
+  // over from a deleted account fails closed.
+  await tx.run(`
+    ALTER TABLE account_invitations
+    ADD COLUMN IF NOT EXISTS issued_by_operator INTEGER NOT NULL DEFAULT 0
+      CHECK (issued_by_operator IN (0, 1))
+  `);
+
   // v9: a platform administrator may own one private simulator account. The
   // row still uses the battle-tested team/holding/order ledger internally,
   // but the nullable owner marker keeps it out of every competition surface.
@@ -883,13 +899,22 @@ export async function resetPrototypeDatabase(): Promise<void> {
 
 async function reconcileLedgerRows(
   executor: DbExecutor,
+  teamIds?: readonly string[],
 ): Promise<LedgerReconciliation[]> {
+  const scoped = teamIds !== undefined;
+  const uniqueTeamIds = scoped ? [...new Set(teamIds)] : [];
+  if (scoped && uniqueTeamIds.length === 0) return [];
+
+  const where = scoped
+    ? `WHERE t.id IN (${uniqueTeamIds.map(() => "?").join(", ")})`
+    : "";
   const rows = await executor.all<{
     team_id: string;
     team_name: string;
     cash_cents: number;
     ledger_balance_cents: number;
-  }>(`
+  }>(
+    `
     SELECT
       t.id AS team_id,
       t.name AS team_name,
@@ -897,9 +922,12 @@ async function reconcileLedgerRows(
       COALESCE(SUM(l.amount_cents), 0) AS ledger_balance_cents
     FROM teams t
     LEFT JOIN ledger_entries l ON l.team_id = t.id
+    ${where}
     GROUP BY t.id, t.name, t.cash_cents
     ORDER BY t.name ASC
-  `);
+  `,
+    uniqueTeamIds,
+  );
 
   return rows.map((row) => {
     const cashCents = Number(row.cash_cents);
@@ -918,14 +946,17 @@ async function reconcileLedgerRows(
 
 async function assertLedgerBalances(
   executor: DbExecutor,
+  teamIds?: readonly string[],
 ): Promise<LedgerReconciliation[]> {
-  const report = await reconcileLedgerRows(executor);
+  const report = await reconcileLedgerRows(executor, teamIds);
   const failures = report.filter((team) => !team.reconciled);
 
   if (failures.length > 0) {
+    // The message carries no team data; `details` is server-side only because
+    // handleRouteError logs 5xx details instead of returning them.
     throw new AppError(
       "LEDGER_OUT_OF_BALANCE",
-      "One or more team cash balances do not reconcile to the ledger.",
+      "Team cash does not reconcile to the ledger.",
       500,
       { teams: failures },
     );
@@ -934,17 +965,35 @@ async function assertLedgerBalances(
   return report;
 }
 
+/**
+ * Full-platform report. Aggregates every team's ledger, so keep it to ops /
+ * admin checks and seeding rather than per-request write paths.
+ */
 export async function reconcileLedgers(): Promise<LedgerReconciliation[]> {
   return reconcileLedgerRows(await getDb());
 }
 
 /**
- * Inside a transaction pass that transaction's executor; outside, omit it.
+ * Global check across every team. Inside a transaction pass that
+ * transaction's executor; outside, omit it. Prefer
+ * `assertTeamLedgerReconciles` on hot write paths.
  */
 export async function assertLedgerReconciles(
   executor?: DbExecutor,
 ): Promise<LedgerReconciliation[]> {
   return assertLedgerBalances(executor ?? (await getDb()));
+}
+
+/**
+ * Reconciles only the given teams, so one out-of-balance team cannot block
+ * writes for everyone else and the cost scales with the touched ledgers only.
+ * Inside a transaction pass its executor or rely on the ambient transaction.
+ */
+export async function assertTeamLedgerReconciles(
+  teamIds: readonly string[],
+  executor?: DbExecutor,
+): Promise<LedgerReconciliation[]> {
+  return assertLedgerBalances(executor ?? (await getDb()), teamIds);
 }
 
 export async function withReadTransaction<T>(
@@ -965,6 +1014,21 @@ function ensureAdminValuationColumns(database: DatabaseSync): void {
     database.exec(`
       ALTER TABLE admin_valuation_positions
       ADD COLUMN split_checked_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z';
+    `);
+  }
+}
+
+/** Adds the v10 operator-issued invitation marker to an existing local database. */
+function ensureInvitationOperatorColumn(database: DatabaseSync): void {
+  const columns = database
+    .prepare("PRAGMA table_info(account_invitations)")
+    .all() as unknown as Array<{ name: string }>;
+
+  if (!columns.some((column) => column.name === "issued_by_operator")) {
+    database.exec(`
+      ALTER TABLE account_invitations
+      ADD COLUMN issued_by_operator INTEGER NOT NULL DEFAULT 0
+        CHECK (issued_by_operator IN (0, 1));
     `);
   }
 }

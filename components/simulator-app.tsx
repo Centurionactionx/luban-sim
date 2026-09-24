@@ -170,6 +170,9 @@ const fallbackQuotes: Quote[] = [
     source: "LUBAN_SIMULATED",
     sourceUrl: null,
     isStale: true,
+    marketOpen: false,
+    marketClosesAt: null,
+    marketOpensAt: null,
   },
   {
     symbol: "RY.TO",
@@ -188,6 +191,9 @@ const fallbackQuotes: Quote[] = [
     source: "LUBAN_SIMULATED",
     sourceUrl: null,
     isStale: true,
+    marketOpen: false,
+    marketClosesAt: null,
+    marketOpensAt: null,
   },
   {
     symbol: "AAPL",
@@ -206,6 +212,9 @@ const fallbackQuotes: Quote[] = [
     source: "LUBAN_SIMULATED",
     sourceUrl: null,
     isStale: true,
+    marketOpen: false,
+    marketClosesAt: null,
+    marketOpensAt: null,
   },
 ];
 
@@ -1063,7 +1072,7 @@ export function SimulatorApp({
   const [resetArmed, setResetArmed] = useState(false);
   const [syncFlash, setSyncFlash] = useState(false);
   const [openRailSections, setOpenRailSections] = useState(INITIAL_RAIL_SECTIONS);
-  const pollInFlight = useRef(false);
+  const dashboardRequest = useRef<AbortController | null>(null);
   // Survives an ambiguous network failure so a manual retry of the same
   // ticket replays idempotently instead of double-filling.
   const pendingOrder = useRef<{ key: string; fingerprint: string } | null>(null);
@@ -1132,13 +1141,16 @@ export function SimulatorApp({
     announce = false,
     refreshMarket = false,
   ) => {
-    if (pollInFlight.current) return;
-    pollInFlight.current = true;
+    if (dashboardRequest.current && !announce) return;
+    dashboardRequest.current?.abort();
+    const controller = new AbortController();
+    dashboardRequest.current = controller;
     if (refreshMarket) lastMarketRefreshAttemptAt.current = Date.now();
     const dashboardUrl = `/api/dashboard?refreshMarket=${refreshMarket ? "1" : "0"}`;
 
     try {
       let response = await fetch(dashboardUrl, {
+        signal: controller.signal,
         cache: "no-store",
         credentials: "same-origin",
       });
@@ -1158,6 +1170,7 @@ export function SimulatorApp({
         });
         if (login.ok) {
           response = await fetch(dashboardUrl, {
+            signal: controller.signal,
             cache: "no-store",
             credentials: "same-origin",
           });
@@ -1175,7 +1188,7 @@ export function SimulatorApp({
         try {
           const quoteResponse = await fetch(
             `/api/quotes?symbol=${encodeURIComponent(selectedSymbol)}`,
-            { cache: "no-store", credentials: "same-origin" },
+            { cache: "no-store", credentials: "same-origin", signal: controller.signal },
           );
           const quotePayload = (await readJson(quoteResponse)) as {
             results?: Quote[];
@@ -1188,6 +1201,7 @@ export function SimulatorApp({
           // The dashboard remains usable with its last disclosed market snapshot.
         }
       }
+      if (controller.signal.aborted) return;
       const nextVersion = nextDashboard.team?.version ?? 0;
       const changed = nextVersion > knownVersion.current;
       knownVersion.current = nextVersion;
@@ -1196,7 +1210,9 @@ export function SimulatorApp({
         const liveQuote = nextDashboard.availableSymbols.find(
           (quote) => quote.symbol === current.symbol,
         );
-        return refreshedSelectedQuote ?? liveQuote ?? current;
+        return refreshedSelectedQuote?.symbol === current.symbol
+          ? refreshedSelectedQuote
+          : liveQuote ?? current;
       });
       setConnection("connected");
       setConnectionError("");
@@ -1206,6 +1222,7 @@ export function SimulatorApp({
         window.setTimeout(() => setSyncFlash(false), 900);
       }
     } catch (error) {
+      if (controller.signal.aborted) return;
       setConnection((current) =>
         current === "connecting" ? "connecting" : "reconnecting",
       );
@@ -1213,7 +1230,7 @@ export function SimulatorApp({
         error instanceof Error ? error.message : "Could not reach the local server.",
       );
     } finally {
-      pollInFlight.current = false;
+      if (dashboardRequest.current === controller) dashboardRequest.current = null;
     }
   }, [isManaged, router, selectedSymbol]);
 
@@ -1230,6 +1247,8 @@ export function SimulatorApp({
     return () => {
       window.clearTimeout(initial);
       window.clearInterval(interval);
+      dashboardRequest.current?.abort();
+      dashboardRequest.current = null;
     };
   }, [fetchDashboard, sessionReady]);
 
@@ -1532,7 +1551,7 @@ export function SimulatorApp({
 
     // Reuse the pending key only for a retry of the exact same ticket; any
     // edit to symbol, side, or quantity is a new order with a new key.
-    const orderFingerprint = `${selectedQuote.symbol}|${side}|${wholeQuantity}`;
+    const orderFingerprint = `${dashboard.currentUser.id}|${selectedQuote.symbol}|${side}|${wholeQuantity}`;
     const idempotencyKey =
       pendingOrder.current?.fingerprint === orderFingerprint
         ? pendingOrder.current.key
@@ -1563,15 +1582,20 @@ export function SimulatorApp({
         );
       }
 
-      // A response, success or rejection, is a definitive outcome; the next
-      // attempt is a genuinely new order.
-      pendingOrder.current = null;
-
       const payload = await readJson(response);
       if (!response.ok) {
+        // A gateway/server failure can arrive after the trade committed.
+        // Keep the same key until a definitive result arrives.
+        if (response.status < 500 && response.status !== 408 && response.status !== 429) {
+          pendingOrder.current = null;
+        }
         throw new Error(extractError(payload, "The order could not be recorded."));
       }
       const result = payload as OrderResult;
+      if (!result.order?.id || !Number.isSafeInteger(result.portfolioVersion)) {
+        throw new Error("The order response was incomplete. Retry this ticket with the same order key.");
+      }
+      pendingOrder.current = null;
       setTicketStatus({
         kind: "success",
         message: `${result.order.side} ${result.order.quantity} ${

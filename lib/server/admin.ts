@@ -22,7 +22,7 @@ import {
   type DbExecutor,
 } from "./database";
 import {
-  assertLedgerReconciles,
+  assertTeamLedgerReconciles,
   getDb,
   resetPrototypeDatabase,
   withReadTransaction,
@@ -249,6 +249,8 @@ export async function updateCompetitionStatus(
   }
 
   await db.transaction(async (tx) => {
+    await acquireAdvisoryLock(tx, ADVISORY_LOCK_ACCOUNTS);
+    await requireHost(input.actorUserId);
     const changed = await tx.run(
       "UPDATE competitions SET status = ? WHERE id = ? AND status = ?",
       [status, competition.id, competition.status],
@@ -337,6 +339,7 @@ export async function updateCompetitionSchedule(
 
   await db.transaction(async (tx) => {
     await acquireAdvisoryLock(tx, ADVISORY_LOCK_ACCOUNTS);
+    await requireHost(input.actorUserId);
 
     const competition = await tx.get<{
       id: string;
@@ -400,6 +403,7 @@ export async function updateCompetitionSchedule(
     }
 
     let cashChanged = false;
+    const rebuiltTeamIds: string[] = [];
 
     if (
       input.startingCashCents !== undefined &&
@@ -475,6 +479,7 @@ export async function updateCompetitionSchedule(
           [cashCents, team.id],
         );
         await tx.run("DELETE FROM ledger_entries WHERE team_id = ?", [team.id]);
+        rebuiltTeamIds.push(team.id);
         await tx.run(
           `
             INSERT INTO ledger_entries (
@@ -527,7 +532,9 @@ export async function updateCompetitionSchedule(
         ],
       );
 
-      await assertLedgerReconciles();
+      // Only a starting-cash change rewrites ledgers; a schedule-only change
+      // leaves every ledger untouched and has nothing to reconcile.
+      await assertTeamLedgerReconciles(rebuiltTeamIds);
     }
   });
 
@@ -586,7 +593,7 @@ export async function createCompetitionTeam(
       ],
     );
 
-    await assertLedgerReconciles();
+    await assertTeamLedgerReconciles([teamId]);
   });
 
   return getAdminOverview(input.actorUserId);
@@ -716,7 +723,8 @@ export async function removeCompetitionTeam(
       ],
     );
 
-    await assertLedgerReconciles();
+    // No ledger check: the team's ledger rows cascade-delete with the team
+    // and no other team's cash or ledger is touched here.
   });
 
   return getAdminOverview(input.actorUserId);
@@ -736,6 +744,8 @@ export async function updateTeamStatus(
   }
 
   await db.transaction(async (tx) => {
+    await acquireAdvisoryLock(tx, ADVISORY_LOCK_ACCOUNTS);
+    await requireHost(input.actorUserId);
     const changed = await tx.run(
       `UPDATE teams SET status = ?, version = version + 1
        WHERE id = ? AND status = ? AND sandbox_owner_user_id IS NULL`,
@@ -780,6 +790,8 @@ export async function setTeamCash(input: SetTeamCashInput): Promise<AdminOvervie
   const db = await getDb();
 
   await db.transaction(async (tx) => {
+    await acquireAdvisoryLock(tx, ADVISORY_LOCK_ACCOUNTS);
+    await requireHost(input.actorUserId);
     const team = await tx.get<CashTeamRow>(
       `
         SELECT id, competition_id, name, cash_cents, version
@@ -852,7 +864,7 @@ export async function setTeamCash(input: SetTeamCashInput): Promise<AdminOvervie
       ],
     );
 
-    await assertLedgerReconciles();
+    await assertTeamLedgerReconciles([team.id]);
   });
 
   return getAdminOverview(input.actorUserId);
@@ -862,6 +874,50 @@ export async function setCompetitionStatus(
   input: UpdateCompetitionStatusInput,
 ): Promise<AdminOverview> {
   return updateCompetitionStatus(input);
+}
+
+/**
+ * Applies a schedule/starting-cash change and a status change as one unit:
+ * either both commit or neither does, so a failed status change can never
+ * leave a half-applied update behind an error response.
+ */
+export async function updateCompetition(
+  input: Omit<UpdateCompetitionScheduleInput, "actorUserId"> & {
+    actorUserId: string;
+    status?: CompetitionStatus;
+  },
+): Promise<AdminOverview> {
+  const hasSchedule =
+    input.startsAt !== undefined ||
+    input.endsAt !== undefined ||
+    input.startingCashCents !== undefined;
+
+  if (!hasSchedule && input.status === undefined) {
+    throw new AppError(
+      "EMPTY_COMPETITION_UPDATE",
+      "Provide a status or schedule change.",
+      400,
+    );
+  }
+
+  const db = await getDb();
+  await db.transaction(async () => {
+    if (hasSchedule) {
+      await updateCompetitionSchedule({
+        actorUserId: input.actorUserId,
+        startsAt: input.startsAt,
+        endsAt: input.endsAt,
+        startingCashCents: input.startingCashCents,
+      });
+    }
+    if (input.status !== undefined) {
+      await updateCompetitionStatus({
+        actorUserId: input.actorUserId,
+        status: input.status,
+      });
+    }
+  });
+  return getAdminOverview(input.actorUserId);
 }
 
 export async function setTeamStatus(

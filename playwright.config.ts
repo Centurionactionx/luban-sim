@@ -1,6 +1,11 @@
 import { defineConfig } from "@playwright/test";
+import { join } from "node:path";
 
 const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:3010";
+const testUrl = new URL(baseURL);
+if (testUrl.origin !== "http://127.0.0.1:3010" || process.env.PLAYWRIGHT_SKIP_WEBSERVER) {
+  throw new Error("Destructive simulator tests require their own local server at http://127.0.0.1:3010.");
+}
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -17,18 +22,17 @@ export default defineConfig({
     screenshot: "only-on-failure",
     video: "retain-on-failure",
   },
-  webServer: process.env.PLAYWRIGHT_SKIP_WEBSERVER
-    ? undefined
-    : {
-        command: "pnpm start --hostname 127.0.0.1 --port 3010",
-        url: baseURL,
-        env: {
-          LUBAN_AUTH_MODE: "demo",
-          LUBAN_DATABASE_PROVIDER: "sqlite",
-          LUBAN_DEMO_MODE: "true",
-          LUBAN_MARKET_DATA_PROVIDER: "synthetic",
-        },
-        reuseExistingServer: true,
-        timeout: 120_000,
-      },
+  webServer: {
+    command: "pnpm start --hostname 127.0.0.1 --port 3010",
+    url: baseURL,
+    env: {
+      LUBAN_AUTH_MODE: "demo",
+      LUBAN_DATABASE_PROVIDER: "sqlite",
+      LUBAN_DATABASE_PATH: join(process.cwd(), "data", "luban.e2e.sqlite"),
+      LUBAN_DEMO_MODE: "true",
+      LUBAN_MARKET_DATA_PROVIDER: "synthetic",
+    },
+    reuseExistingServer: false,
+    timeout: 120_000,
+  },
 });

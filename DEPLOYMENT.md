@@ -1,95 +1,59 @@
-# Vercel deployment handoff
+# Deploying Luban Market Lab
 
-The application now runs on either of two database engines behind one async
-data layer:
+The current simulator supports SQLite for local development and PostgreSQL for durable hosting. Managed sign-in is implemented with Clerk. The separate `codex/supabase-persistence` worktree is an older prototype; use the current simulator for account management and managed authentication.
 
-- **SQLite** (default): zero-setup local file, used for development and the
-  automated test suites. On Vercel it is ephemeral — fine for a stateless
-  demo, wrong for real accounts.
-- **PostgreSQL** (durable): selected only when `LUBAN_DATABASE_PROVIDER=postgres`
-  is explicitly set, connecting via `LUBAN_DATABASE_URL` (or the
-  `POSTGRES_URL` the Supabase Vercel integration provides — use the pooled,
-  transaction-mode URL). Tables are created and the demo world seeded
-  automatically on first boot, serialized by an advisory lock, with row-level
-  security enabled and no anon policies. The engine choice is never inferred
-  from the mere presence of credentials.
+## Production configuration
 
-To make the live site durable: install the Supabase integration (or create a
-Supabase project and copy its pooled connection string), set the two
-variables above in Vercel, and redeploy. The PostgreSQL code paths are
-exercised in CI against an embedded Postgres, and the ledger invariants
-(atomic orders, idempotent replays, optimistic portfolio versioning) are
-enforced identically on both engines.
-
-## Recommended service stack
-
-| Service | Required now? | Purpose |
-| --- | --- | --- |
-| Vercel | Yes | Hosts the Next.js UI and route handlers and deploys from GitHub. |
-| Supabase | Yes for a durable deployment | Managed PostgreSQL. It can also provide authentication later. |
-| Transactional email provider | Required when real email registration launches | SMTP delivery for account verification, invitations, and password resets. |
-| Upstash Redis | Optional initially | Shared rate limiting and cross-instance market/search cache when traffic grows. |
-| Licensed market-data provider | Required before a public or commercial launch | Replaces the keyless Yahoo prototype feed with defined redistribution and availability terms. |
-
-## What the Supabase Marketplace integration automates
-
-Installing Supabase from the Vercel Marketplace can create or connect a Supabase project and synchronize its database and API environment variables into the linked Vercel project.
-
-It does **not** automatically:
-
-- convert the existing `node:sqlite` code to PostgreSQL;
-- create the Luban tables, indexes, constraints, or seed data;
-- rewrite synchronous database transactions as asynchronous server-side queries;
-- configure Row Level Security policies;
-- replace the demo identity switcher with real registration and login;
-- create application roles such as student, competition host, or platform administrator;
-- configure production email delivery, backups, monitoring, or rate limits.
-
-Those are application migrations that must be implemented and tested in this repository.
-
-## Safe setup order
-
-1. Import `Centurionactionx/luban-sim` into Vercel as a Next.js project. The repository root is the application root.
-2. Create/connect Supabase through the Vercel Marketplace so its environment variables are scoped to Development, Preview, and Production.
-3. Pull Development variables locally into the ignored `.env.local` file with `vercel env pull .env.local --yes`.
-4. Add a PostgreSQL migration system and port the SQLite schema, queries, transactions, reconciliation checks, and seed process.
-5. Run migrations against a non-production Supabase project and execute `pnpm verify`.
-6. Deploy a Vercel Preview and test simultaneous orders, idempotency, portfolio reconciliation, host controls, and resets.
-7. Add Supabase Auth or another managed identity provider. Do not expose a public admin-registration route; bootstrap the first platform administrator out of band and invite additional administrators.
-8. Configure a custom SMTP provider before enabling email registration for real users.
-9. Give Production its own database and secrets. Preview deployments must not share the Production database.
-10. Promote the tested Preview deployment to Production.
-
-## Current environment variables
+Configure the simulator project separately from the public static website. Set these values in the hosting environment; never commit credentials:
 
 ```env
+LUBAN_AUTH_MODE=managed
+LUBAN_DATABASE_PROVIDER=postgres
+LUBAN_DATABASE_URL=postgresql://USER:PASSWORD@DATABASE_HOST:6543/postgres
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=YOUR_PUBLISHABLE_KEY
+CLERK_SECRET_KEY=YOUR_SERVER_SECRET
+LUBAN_REQUIRE_ADMIN_MFA=true
 LUBAN_MARKET_DATA_PROVIDER=yahoo
-LUBAN_DEMO_MODE=true
-
-# Managed sign-in (see "Authentication choice" below)
-# LUBAN_AUTH_MODE=managed
-# NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_live_...
-# CLERK_SECRET_KEY=sk_live_...
-# LUBAN_BOOTSTRAP_ADMIN_EMAIL=admin@example.ca   # remove after first admin exists
-# LUBAN_REQUIRE_ADMIN_MFA=true
+LUBAN_APP_URL=https://sim.lubancanada.com
 ```
 
-`LUBAN_DEMO_MODE=true` permits anyone with access to switch among the seeded identities, including the host. Use it only for a private demonstration. It is not an authentication system and must be disabled before a public deployment.
+`LUBAN_DATABASE_URL` falls back to `POSTGRES_URL`, then `DATABASE_URL`. The engine is selected only by `LUBAN_DATABASE_PROVIDER`; credentials alone do not select PostgreSQL. Use the provider's pooled connection string. SQLite is a local file and is unsuitable for durable state on an ephemeral serverless filesystem.
 
-`LUBAN_AUTH_MODE=managed` switches the deployment to real Clerk sign-in: demo identity switching is refused, registration is invitation-only, and host/admin actions require MFA enrollment (unless `LUBAN_REQUIRE_ADMIN_MFA=false`, for Clerk plans without MFA strategies). The publishable key is inlined at build time, so both Clerk keys must be present in the build environment for a managed deployment.
+Leave `LUBAN_DEMO_MODE` unset on public deployments. Managed mode refuses demo authentication regardless of that flag. Disabling demo mode also rejects previously issued demo cookies. Keep preview and production databases separate, and start managed authentication with a fresh database so invitations created through a previous demo cannot carry over.
 
-The Supabase Marketplace integration supplies its own connection and API variables. Never commit those values. Only public/publishable Supabase variables may use a `NEXT_PUBLIC_` prefix; database passwords and secret/service-role keys must remain server-only.
+## Domain
 
-## Authentication choice
+Production is served at `https://sim.lubancanada.com`, a subdomain of the public site. The simulator stays a separate Vercel project; the public site links to it and shares no code. DNS: `CNAME sim -> cname.vercel-dns.com`. Clerk runs a production instance for `lubancanada.com`, and its DNS records live on the same zone. `luban-sim.vercel.app` redirects to the subdomain.
 
-The application now ships a managed-identity integration built on Clerk, behind `LUBAN_AUTH_MODE=managed`. Clerk handles passwords, email verification, password resets, MFA, and session cookies; Luban keeps authorization (roles, teams, account status, audit history) in its own database and re-checks it on every protected operation. Do not run two independent authentication systems.
+## Database TLS
 
-Bootstrap and operations in managed mode:
+Remote PostgreSQL connections verify both certificate trust and hostname. URL flags such as `sslmode=require`, `sslmode=disable`, or `sslmode=no-verify` cannot disable verification. Plaintext is permitted only for loopback development databases unless TLS is explicitly requested.
 
-1. Create a Clerk application and set `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY`. In the Clerk dashboard, require email verification at sign-up and enable the Authenticator-application (TOTP) MFA strategy — MFA strategies need a paid Clerk plan; until then set `LUBAN_REQUIRE_ADMIN_MFA=false` explicitly, and remove it as soon as the plan allows.
-2. Create the first platform administrator out of band: run `pnpm bootstrap:admin -- --email you@example.ca` on the machine that owns the database and open the printed single-use link, or set `LUBAN_BOOTSTRAP_ADMIN_EMAIL` and sign in once with that verified email. Remove the variable afterwards; it can never mint a second admin while one exists.
-3. The administrator invites hosts and administrators, and hosts invite students, from **Accounts & invitations** in the app. Invitation links are single-use, expire (72 h by default), are stored only as hashes, and every issue/revoke/accept is audited.
-4. Keep `LUBAN_DEMO_MODE` unset in managed deployments. Demo login is refused in managed mode regardless, and the seeded demo accounts have no managed sign-in linked to them.
-5. Give a managed deployment a fresh database rather than promoting one that ran in demo mode: invitations minted during a demo session would otherwise remain redeemable after the switch. (Managed accounts are protected in the other direction — they can never be assumed through the demo identity switcher.)
+If the provider requires a private certificate authority, obtain its CA certificate from the provider and set `LUBAN_DATABASE_CA_CERT` to the complete PEM text. Alternatively, use `sslrootcert=/absolute/path/to/provider-ca.pem` in the connection URL. Client `sslcert` and `sslkey` paths are preserved when supplied. Missing or invalid trust configuration fails closed; configure the CA before deploying this change to a provider that uses one.
 
-Note the SQLite caveat above: on Vercel the database is ephemeral, so managed-mode accounts and invitations only become durable after the PostgreSQL migration. Test managed sign-in on a private preview first.
+The explicit TLS object must not be overwritten by connection-string SSL options; the adapter extracts those options first. See [node-postgres SSL configuration](https://node-postgres.com/features/ssl).
+
+## Managed accounts
+
+1. Configure the Clerk application with verified email addresses and a supported second-factor strategy. Make its keys available during both build and runtime.
+2. Bootstrap the first administrator with `pnpm bootstrap:admin -- --email you@example.ca`, run against the intended database. Alternatively, set `LUBAN_BOOTSTRAP_ADMIN_EMAIL`, sign in once using that verified email, and remove the variable.
+3. Complete second-factor enrollment and sign in with it. Host and administrator operations check both enrollment and the current session's verified second factor. Enrollment alone does not authorize an old session. `LUBAN_REQUIRE_ADMIN_MFA=false` is an explicit opt-out and removes this protection.
+4. Use **Accounts & invitations** to issue single-use invitations and manage roles, team membership, suspension, and deletion. Invitation links are copied by the host; automatic invitation email delivery is not implemented.
+
+Clerk's session `fva` claim distinguishes an enrolled account from a session that verified a second factor. See [Clerk session tokens](https://clerk.com/docs/guides/sessions/session-tokens).
+
+Account deletion preserves trading attribution. Audit text and the upstream identity provider have separate retention behavior; this is not a complete personal-data erasure workflow.
+
+## Schema and transactions
+
+The application creates and seeds its schema on first use, with an advisory lock coordinating PostgreSQL initialization. Incremental schema changes are implemented in `lib/server/db.ts`. Row-level security is enabled without anonymous policies; browser clients do not access the database directly. Formal versioned migration tooling, backups, and operational monitoring remain deployment work.
+
+PostgreSQL orders hold a shared account-administration lock, a per-trader advisory lock, and the affected team's row lock. Account, invitation, and competition administration uses the exclusive account lock. This protects permission changes, invitation limits, idempotency, order limits, and portfolio updates across application instances. SQLite serializes writers with `BEGIN IMMEDIATE`.
+
+## Verification and release
+
+Run `pnpm verify` locally. The browser-test runner forces demo authentication, synthetic market data, and an isolated SQLite file for both build and runtime. It refuses a remote target or reusing an existing server. Tests never require a production database.
+
+Unit/integration tests exercise PostgreSQL SQL through embedded PGlite. PGlite is a single-connection engine: a staging test with multiple real PostgreSQL connections is still required to validate pooler behavior and lock contention. Also verify real Clerk sign-in, invitation acceptance, second-factor enforcement, suspension, and the production hostname in staging.
+
+The Yahoo adapter is a prototype feed. Verify the intended market-data provider's availability and redistribution terms before public operation. The public site's EmailJS contact delivery, provider abuse controls, production TLS certificates, backups, and deployed headers require checks in their respective environments; local test success does not establish those settings.

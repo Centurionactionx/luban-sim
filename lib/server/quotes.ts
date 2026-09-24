@@ -91,6 +91,12 @@ export interface MarketInstrument {
  */
 export interface MarketDataProvider {
   readonly id: string;
+  /**
+   * The provider's clock in epoch milliseconds. Order checks that compare
+   * quote timestamps and session bounds use it so an injected test clock and
+   * the quote it produced always agree.
+   */
+  now?(): number;
   quote(instrument: MarketInstrument, at: Date): Quote;
   refreshQuote?(instrument: MarketInstrument, at: Date): Promise<Quote>;
   search?(query: string): Promise<InstrumentSearchResult[]>;
@@ -134,6 +140,8 @@ interface YahooChartMeta {
   previousClose?: unknown;
   exchangeTimezoneName?: unknown;
   dataGranularity?: unknown;
+  currentTradingPeriod?: unknown;
+  marketState?: unknown;
 }
 
 interface YahooIndicatorQuote {
@@ -206,6 +214,30 @@ interface YahooMarketState {
 const yahooGlobal = globalThis as typeof globalThis & {
   __lubanYahooMarketState?: YahooMarketState;
 };
+
+/**
+ * Every provider cache is keyed partly by user input (search text, symbols,
+ * dates), so each map is capped. Map preserves insertion order; re-inserting
+ * on write keeps recently refreshed entries and evicts the oldest first.
+ */
+const MAX_CACHE_ENTRIES = 2_000;
+
+let quoteGeneration = 0;
+
+/** Changes whenever a cached quote is written; lets callers memoize valuations. */
+export function quoteCacheGeneration(): number {
+  return quoteGeneration;
+}
+
+function boundedSet<K, V>(map: Map<K, V>, key: K, value: V): void {
+  map.delete(key);
+  map.set(key, value);
+  while (map.size > MAX_CACHE_ENTRIES) {
+    const oldest = map.keys().next();
+    if (oldest.done) break;
+    map.delete(oldest.value);
+  }
+}
 
 function yahooState(): YahooMarketState {
   if (!yahooGlobal.__lubanYahooMarketState) {
@@ -598,10 +630,65 @@ function parseYahooChart(payload: unknown, symbol: string): ParsedYahooChart {
   };
 }
 
+export interface MarketSession {
+  marketOpen: boolean;
+  marketClosesAt: string | null;
+  marketOpensAt: string | null;
+}
+
+/**
+ * Derive whether the regular session is open from Yahoo chart metadata.
+ * `currentTradingPeriod.regular` carries unix-second bounds; `marketState`,
+ * when Yahoo includes it, must also say REGULAR. Anything missing or
+ * malformed fails closed so orders never fill against an unknown session.
+ */
+export function marketSessionFromYahooMeta(
+  meta: YahooChartMeta,
+  nowMs: number,
+): MarketSession {
+  const closed: MarketSession = {
+    marketOpen: false,
+    marketClosesAt: null,
+    marketOpensAt: null,
+  };
+  const period =
+    meta.currentTradingPeriod && typeof meta.currentTradingPeriod === "object"
+      ? (meta.currentTradingPeriod as { regular?: unknown }).regular
+      : null;
+  if (!period || typeof period !== "object") return closed;
+  const start = finiteNumber((period as { start?: unknown }).start);
+  const end = finiteNumber((period as { end?: unknown }).end);
+  if (start === null || end === null || start <= 0 || end <= start) {
+    return closed;
+  }
+
+  const startMs = start * 1_000;
+  const endMs = end * 1_000;
+  const upcomingOpen =
+    startMs > nowMs ? new Date(startMs).toISOString() : null;
+  if (
+    meta.marketState !== undefined &&
+    meta.marketState !== null &&
+    meta.marketState !== "REGULAR"
+  ) {
+    return { ...closed, marketOpensAt: upcomingOpen };
+  }
+  if (nowMs < startMs || nowMs >= endMs) {
+    return { ...closed, marketOpensAt: upcomingOpen };
+  }
+
+  return {
+    marketOpen: true,
+    marketClosesAt: new Date(endMs).toISOString(),
+    marketOpensAt: new Date(startMs).toISOString(),
+  };
+}
+
 function quoteFromYahooChart(
   instrument: MarketInstrument,
   chart: ParsedYahooChart,
   fxRateBasisPoints: number,
+  nowMs: number,
 ): Quote {
   const closes = numberArray(chart.quote.close);
   const lastClose = [...closes].reverse().find((value) => value !== null) ?? null;
@@ -647,6 +734,7 @@ function quoteFromYahooChart(
     source: "YAHOO_FINANCE",
     sourceUrl: sourceUrl(instrument.symbol),
     isStale: false,
+    ...marketSessionFromYahooMeta(chart.meta, nowMs),
   };
 }
 
@@ -754,6 +842,11 @@ export class DeterministicMarketDataProvider implements MarketDataProvider {
       source: "LUBAN_SIMULATED",
       sourceUrl: null,
       isStale: false,
+      // The synthetic market never closes so tests and demos can trade at
+      // any hour; only real providers enforce exchange sessions.
+      marketOpen: true,
+      marketClosesAt: null,
+      marketOpensAt: null,
     };
   }
 
@@ -862,7 +955,7 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
 
   constructor(
     private readonly fetcher: typeof fetch = fetch,
-    private readonly now: () => number = Date.now,
+    readonly now: () => number = Date.now,
   ) {}
 
   quote(instrument: MarketInstrument): Quote {
@@ -912,8 +1005,14 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
             : Promise.resolve(10_000),
         ]);
         validateYahooInstrument(instrument, chart);
-        const value = quoteFromYahooChart(instrument, chart, fxRateBasisPoints);
-        this.state.quotes.set(instrument.symbol, {
+        const value = quoteFromYahooChart(
+          instrument,
+          chart,
+          fxRateBasisPoints,
+          this.now(),
+        );
+        quoteGeneration += 1;
+        boundedSet(this.state.quotes, instrument.symbol, {
           value,
           fetchedAtMs: refreshedNow,
         });
@@ -925,14 +1024,15 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
         error,
         `The market quote for ${instrument.symbol}`,
       );
-      this.state.quoteFailures.set(instrument.symbol, {
+      boundedSet(this.state.quoteFailures, instrument.symbol, {
         error: normalized,
         attemptedAtMs: this.now(),
       });
       const staleCache = this.state.quotes.get(instrument.symbol);
       if (staleCache) {
         const stale = { ...staleCache.value, isStale: true };
-        this.state.quotes.set(instrument.symbol, {
+        quoteGeneration += 1;
+        boundedSet(this.state.quotes, instrument.symbol, {
           value: stale,
           fetchedAtMs: staleCache.fetchedAtMs,
         });
@@ -972,19 +1072,19 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
         }
 
         const value = await this.fetchSearch(providerQuery);
-        this.state.searches.set(cacheKey, {
+        boundedSet(this.state.searches, cacheKey, {
           value,
           fetchedAtMs: refreshedNow,
         });
         for (const instrument of value) {
-          this.state.discoveredInstruments.set(instrument.symbol, instrument);
+          boundedSet(this.state.discoveredInstruments, instrument.symbol, instrument);
         }
         this.state.searchFailures.delete(cacheKey);
         return value;
       });
     } catch (error) {
       const normalized = normalizeProviderError(error, "The market symbol search");
-      this.state.searchFailures.set(cacheKey, {
+      boundedSet(this.state.searchFailures, cacheKey, {
         error: normalized,
         attemptedAtMs: this.now(),
       });
@@ -1040,14 +1140,14 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
           chart,
           new Date(refreshedNow),
         );
-        this.state.histories.set(key, { value, fetchedAtMs: refreshedNow });
+        boundedSet(this.state.histories, key, { value, fetchedAtMs: refreshedNow });
         return value;
       });
     } catch (error) {
       const staleCache = this.state.histories.get(key);
       if (staleCache) {
         const stale = { ...staleCache.value, isStale: true };
-        this.state.histories.set(key, {
+        boundedSet(this.state.histories, key, {
           value: stale,
           fetchedAtMs: staleCache.fetchedAtMs,
         });
@@ -1145,7 +1245,7 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
           source: "YAHOO_FINANCE",
           sourceUrl: sourceUrl(instrument.symbol),
         };
-        this.state.historicalPrices.set(key, {
+        boundedSet(this.state.historicalPrices, key, {
           value,
           fetchedAtMs: refreshedNow,
         });
@@ -1207,7 +1307,7 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
             splitMultiplierAfter(chart, sessionDate, at),
           ]),
         );
-        this.state.splitMultipliers.set(key, {
+        boundedSet(this.state.splitMultipliers, key, {
           value,
           fetchedAtMs: refreshedNow,
         });
@@ -1390,6 +1490,11 @@ export function setMarketDataProvider(provider: MarketDataProvider): void {
 
 export function getMarketDataProvider(): MarketDataProvider {
   return activeProvider;
+}
+
+/** Current time on the active provider's clock (wall clock by default). */
+export function marketDataNow(): Date {
+  return new Date(activeProvider.now ? activeProvider.now() : Date.now());
 }
 
 function normalizeAt(at?: Date | string): Date {

@@ -11,6 +11,7 @@ import {
 } from "@/lib";
 
 import {
+  requireTrustedOrigin,
   errorResponse,
   handleRouteError,
   json,
@@ -28,6 +29,7 @@ const loginSchema = z
 
 export async function POST(request: Request): Promise<Response> {
   try {
+    requireTrustedOrigin(request);
     if (!isDemoLoginAllowed()) {
       return errorResponse(
         503,

@@ -10,7 +10,7 @@ import type { MarketDataSource } from "../contracts";
 import { AppError } from "../errors";
 import { MARKET_REFRESH_INTERVAL_MS } from "../market-config";
 import { getSessionUser } from "./auth";
-import type { DbExecutor } from "./database";
+import { acquireAccountReadLock, type DbExecutor } from "./database";
 import { getDb } from "./db";
 import {
   getHistoricalMarketPrice,
@@ -227,6 +227,8 @@ async function lockValuationAccount(
   actorUserId: string,
   updatedAt: string,
 ): Promise<ValuationAccountRow> {
+  await acquireAccountReadLock(executor);
+  await requirePlatformAdminActor(actorUserId);
   await executor.run(
     `INSERT INTO admin_valuation_accounts (
        admin_user_id, starting_cash_cents, version, updated_at

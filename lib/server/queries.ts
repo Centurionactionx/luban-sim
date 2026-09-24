@@ -21,7 +21,7 @@ import { AppError } from "../errors";
 import { getAdminTradingTeamId } from "./admin-trading";
 import { getSessionUser } from "./auth";
 import { getDb, withReadTransaction } from "./db";
-import { getQuote, listQuotes } from "./quotes";
+import { getQuote, listQuotes, quoteCacheGeneration } from "./quotes";
 
 interface CompetitionRow {
   id: string;
@@ -385,7 +385,8 @@ export async function getOrderByIdempotencyKey(
   // `? IS NULL` SQL trick: PostgreSQL cannot infer a type for a parameter
   // that only appears in an IS NULL test.
   const actorFilter = actorUserId ? "AND ir.actor_user_id = ?" : "";
-  const params = actorUserId ? [key, actorUserId, key] : [key, key];
+  const legacyActorFilter = actorUserId ? "AND o.actor_user_id = ?" : "";
+  const params = actorUserId ? [key, actorUserId, key, actorUserId] : [key, key];
   const row = await db.get<OrderRow>(
     `
       SELECT
@@ -400,7 +401,7 @@ export async function getOrderByIdempotencyKey(
       LEFT JOIN idempotency_records ir ON ir.order_id = o.id
       WHERE
         (ir.idempotency_key = ? ${actorFilter})
-        OR (ir.order_id IS NULL AND o.idempotency_key = ?)
+        OR (ir.order_id IS NULL AND o.idempotency_key = ? ${legacyActorFilter})
       LIMIT 1
     `,
     params,
@@ -534,6 +535,16 @@ export async function listActivity(
   return rows.map(activityRowToItem);
 }
 
+type RankedRow = Omit<LeaderboardRow, "rank" | "isCurrentTeam">;
+
+/**
+ * Every dashboard poll needs the leaderboard, and valuing each team costs
+ * several queries. The ranking only changes when a team row changes (every
+ * trade, cash, status, or name change bumps its version) or a quote changes,
+ * so it is memoized per process on exactly those inputs.
+ */
+const leaderboardCache = new Map<string, { key: string; rows: RankedRow[] }>();
+
 async function buildLeaderboard(user: SessionUser, at: Date): Promise<Leaderboard> {
   const competition = await getCompetitionSummary();
   const db = await getDb();
@@ -542,47 +553,70 @@ async function buildLeaderboard(user: SessionUser, at: Date): Promise<Leaderboar
       SELECT id, name, status, cash_cents, version, sandbox_owner_user_id
       FROM teams
       WHERE competition_id = ? AND sandbox_owner_user_id IS NULL
+      ORDER BY id ASC
     `,
     [competition.id],
   );
+  const cacheKey = JSON.stringify([
+    competition.startingCashCents,
+    quoteCacheGeneration(),
+    Math.floor(at.getTime() / 60_000),
+    teams.map((team) => [team.id, Number(team.version)]),
+  ]);
+  let ranked = leaderboardCache.get(competition.id);
 
-  const rows: Array<Omit<LeaderboardRow, "rank">> = [];
-
-  for (const team of teams) {
-    const portfolio = (await calculatePortfolio(team.id, at)).summary;
-    const countRow = await db.get<{ count: number }>(
-      "SELECT COUNT(*) AS count FROM orders WHERE team_id = ? AND status = 'FILLED'",
-      [team.id],
+  if (!ranked || ranked.key !== cacheKey) {
+    const counts = await db.all<{ team_id: string; count: number }>(
+      `
+        SELECT o.team_id, COUNT(*) AS count
+        FROM orders o
+        JOIN teams t ON t.id = o.team_id
+        WHERE t.competition_id = ? AND t.sandbox_owner_user_id IS NULL
+          AND o.status = 'FILLED'
+        GROUP BY o.team_id
+      `,
+      [competition.id],
     );
+    const tradeCounts = new Map(
+      counts.map((row) => [row.team_id, Number(row.count)]),
+    );
+    const rows: RankedRow[] = [];
 
-    rows.push({
-      teamId: team.id,
-      teamName: team.name,
-      teamStatus: team.status,
-      totalValueCents: portfolio.totalValueCents,
-      returnCents: portfolio.totalReturnCents,
-      returnPercent: portfolio.totalReturnPercent,
-      tradeCount: Number(countRow?.count ?? 0),
-      isCurrentTeam: team.id === user.teamId,
+    for (const team of teams) {
+      const portfolio = (await calculatePortfolio(team.id, at)).summary;
+      rows.push({
+        teamId: team.id,
+        teamName: team.name,
+        teamStatus: team.status,
+        totalValueCents: portfolio.totalValueCents,
+        returnCents: portfolio.totalReturnCents,
+        returnPercent: portfolio.totalReturnPercent,
+        tradeCount: tradeCounts.get(team.id) ?? 0,
+      });
+    }
+
+    rows.sort((left, right) => {
+      const leftDisqualified = left.teamStatus === "disqualified" ? 1 : 0;
+      const rightDisqualified = right.teamStatus === "disqualified" ? 1 : 0;
+      return (
+        leftDisqualified - rightDisqualified ||
+        right.totalValueCents - left.totalValueCents ||
+        left.teamName.localeCompare(right.teamName)
+      );
     });
-  }
 
-  rows.sort((left, right) => {
-    const leftDisqualified = left.teamStatus === "disqualified" ? 1 : 0;
-    const rightDisqualified = right.teamStatus === "disqualified" ? 1 : 0;
-    return (
-      leftDisqualified - rightDisqualified ||
-      right.totalValueCents - left.totalValueCents ||
-      left.teamName.localeCompare(right.teamName)
-    );
-  });
+    ranked = { key: cacheKey, rows };
+    leaderboardCache.clear();
+    leaderboardCache.set(competition.id, ranked);
+  }
 
   return {
     competitionId: competition.id,
     asOf: at.toISOString(),
-    rows: rows.map((row, index): LeaderboardRow => ({
+    rows: ranked.rows.map((row, index): LeaderboardRow => ({
       rank: index + 1,
       ...row,
+      isCurrentTeam: row.teamId === user.teamId,
     })),
   };
 }

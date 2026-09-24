@@ -3,6 +3,7 @@ import { z } from "zod";
 import { MAX_TEAM_CASH_CENTS, refreshAllQuotes, setTeamCash } from "@/lib";
 
 import {
+  requireTrustedOrigin,
   ApiError,
   handleRouteError,
   json,
@@ -23,6 +24,7 @@ export async function PATCH(
   context: { params: Promise<{ teamId: string }> },
 ): Promise<Response> {
   try {
+    requireTrustedOrigin(request);
     const user = await requireHostUser();
     const { teamId: rawTeamId } = await context.params;
     const teamId = rawTeamId.trim();

@@ -13,6 +13,7 @@ import { canHostCompetitions } from "../contracts";
 import { AppError } from "../errors";
 import { recordAuthAuditEvent } from "./audit";
 import { getSessionUser } from "./auth";
+import { ADVISORY_LOCK_ACCOUNTS, acquireAdvisoryLock } from "./database";
 import { getDb } from "./db";
 
 export const DEFAULT_INVITATION_TTL_HOURS = 72;
@@ -49,6 +50,7 @@ interface InvitationRow {
   team_name: string | null;
   competition_id: string | null;
   created_by: string | null;
+  issued_by_operator: number;
   created_by_name: string | null;
   created_at: string;
   expires_at: string;
@@ -68,6 +70,7 @@ const INVITATION_SELECT = `
     t.name AS team_name,
     i.competition_id,
     i.created_by,
+    i.issued_by_operator,
     creator.name AS created_by_name,
     i.created_at,
     i.expires_at,
@@ -202,6 +205,30 @@ async function requireInvitationManager(actorUserId: string): Promise<SessionUse
   return actor;
 }
 
+/**
+ * The single issuing rule: platform administrators may invite anyone, hosts
+ * may invite students only, and students may invite nobody. Enforced when an
+ * invitation is created, again when it is redeemed (against the creator's
+ * current role), and by account management when a creator loses authority.
+ */
+export function roleMayIssueInvitation(
+  issuerRole: UserRole,
+  inviteRole: UserRole,
+): boolean {
+  if (issuerRole === "platform_admin") {
+    return INVITATION_ROLES.includes(inviteRole);
+  }
+
+  return issuerRole === "host" && inviteRole === "student";
+}
+
+/** Invitation roles an account in `role` may still issue. */
+export function invitationRolesIssuableBy(role: UserRole): UserRole[] {
+  return INVITATION_ROLES.filter((inviteRole) =>
+    roleMayIssueInvitation(role, inviteRole),
+  );
+}
+
 function assertActorMayIssueRole(actorRole: UserRole, inviteRole: UserRole): void {
   if (!INVITATION_ROLES.includes(inviteRole)) {
     throw new AppError(
@@ -212,7 +239,7 @@ function assertActorMayIssueRole(actorRole: UserRole, inviteRole: UserRole): voi
     );
   }
 
-  if (actorRole !== "platform_admin" && inviteRole !== "student") {
+  if (!roleMayIssueInvitation(actorRole, inviteRole)) {
     throw new AppError(
       "ADMIN_REQUIRED",
       "Only a platform administrator can invite hosts or administrators.",
@@ -245,6 +272,12 @@ async function insertInvitation(
   const id = randomUUID();
 
   await db.transaction(async (tx) => {
+    await acquireAdvisoryLock(tx, ADVISORY_LOCK_ACCOUNTS);
+    if (params.createdBy) {
+      const actor = await requireInvitationManager(params.createdBy);
+      assertActorMayIssueRole(actor.role, params.role);
+      await assertInvitationCreationAllowed(actor.id);
+    }
     let competitionId: string | null = null;
 
     if (params.role === "student") {
@@ -305,8 +338,9 @@ async function insertInvitation(
       `
         INSERT INTO account_invitations (
           id, token_hash, role, email, invited_name, team_id, competition_id,
-          created_by, created_at, expires_at, revoked_at, used_at, used_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)
+          created_by, issued_by_operator, created_at, expires_at,
+          revoked_at, used_at, used_by
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)
       `,
       [
         id,
@@ -317,6 +351,7 @@ async function insertInvitation(
         params.role === "student" ? params.teamId : null,
         competitionId,
         params.createdBy,
+        params.createdBy === null ? 1 : 0,
         nowIso,
         expiresAt,
       ],
@@ -386,7 +421,6 @@ export async function createInvitation(
 ): Promise<CreatedInvitation> {
   const actor = await requireInvitationManager(input.actorUserId);
   assertActorMayIssueRole(actor.role, input.role);
-  await assertInvitationCreationAllowed(actor.id);
 
   return insertInvitation({
     role: input.role,
@@ -470,11 +504,12 @@ export async function revokeInvitation(
   actorUserId: string,
   invitationId: string,
 ): Promise<InvitationSummary> {
-  const actor = await requireInvitationManager(actorUserId);
   const db = await getDb();
   const nowIso = new Date().toISOString();
 
   await db.transaction(async (tx) => {
+    await acquireAdvisoryLock(tx, ADVISORY_LOCK_ACCOUNTS);
+    const actor = await requireInvitationManager(actorUserId);
     const row = await tx.get<InvitationRow>(
       `${INVITATION_SELECT} WHERE i.id = ?`,
       [invitationId],
@@ -635,6 +670,7 @@ export async function consumeInvitation(
   const nowIso = new Date().toISOString();
 
   const userId = await db.transaction(async (tx) => {
+    await acquireAdvisoryLock(tx, ADVISORY_LOCK_ACCOUNTS);
     const row = await tx.get<InvitationRow>(
       `${INVITATION_SELECT} WHERE i.token_hash = ?`,
       [hashInvitationToken(token)],
@@ -672,6 +708,40 @@ export async function consumeInvitation(
         "This invitation expired. Ask your host for a new one.",
         410,
       );
+    }
+
+    // An invitation carries its creator's authority only while that
+    // authority lasts. Account management revokes invitations when a
+    // creator is suspended, demoted, or deleted; this re-check is the
+    // backstop in case that revocation was ever skipped. Only the operator
+    // bootstrap path (createSystemAdminInvitation) is marked
+    // issued_by_operator; a NULL creator on any other row means its creator
+    // was deleted (ON DELETE SET NULL), so it fails closed.
+    if (!row.created_by && Number(row.issued_by_operator) !== 1) {
+      throw new AppError(
+        "INVITATION_REVOKED",
+        "This invitation was revoked. Ask your host for a new one.",
+        410,
+      );
+    }
+
+    if (row.created_by) {
+      const creator = await tx.get<{ role: UserRole; status: string }>(
+        "SELECT role, status FROM users WHERE id = ?",
+        [row.created_by],
+      );
+
+      if (
+        !creator ||
+        creator.status !== "active" ||
+        !roleMayIssueInvitation(creator.role, row.role)
+      ) {
+        throw new AppError(
+          "INVITATION_REVOKED",
+          "This invitation was revoked. Ask your host for a new one.",
+          410,
+        );
+      }
     }
 
     if (row.email && row.email !== email) {

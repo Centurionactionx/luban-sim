@@ -3,6 +3,7 @@ import { z } from "zod";
 import { assertRequestAllowed, consumeInvitation, isManagedAuthMode } from "@/lib";
 
 import {
+  requireTrustedOrigin,
   errorResponse,
   handleRouteError,
   json,
@@ -19,6 +20,7 @@ const acceptSchema = z
 
 export async function POST(request: Request): Promise<Response> {
   try {
+    requireTrustedOrigin(request);
     if (!isManagedAuthMode()) {
       return errorResponse(
         404,

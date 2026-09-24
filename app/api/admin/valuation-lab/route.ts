@@ -9,6 +9,7 @@ import {
 } from "@/lib/server/admin-valuation";
 
 import {
+  requireTrustedOrigin,
   handleRouteError,
   json,
   parseJson,
@@ -54,6 +55,7 @@ export async function GET(): Promise<Response> {
 
 export async function POST(request: Request): Promise<Response> {
   try {
+    requireTrustedOrigin(request);
     const user = await requirePlatformAdmin();
     const idempotencyKey = requireIdempotencyKey(request);
     const input = createPositionSchema.parse(await parseJson(request));
@@ -70,6 +72,7 @@ export async function POST(request: Request): Promise<Response> {
 
 export async function PATCH(request: Request): Promise<Response> {
   try {
+    requireTrustedOrigin(request);
     const user = await requirePlatformAdmin();
     const { cashCents } = setCashSchema.parse(await parseJson(request));
     return json(
@@ -80,8 +83,9 @@ export async function PATCH(request: Request): Promise<Response> {
   }
 }
 
-export async function DELETE(): Promise<Response> {
+export async function DELETE(request: Request): Promise<Response> {
   try {
+    requireTrustedOrigin(request);
     const user = await requirePlatformAdmin();
     return json(await clearAdminValuationPortfolio(user.id));
   } catch (error) {

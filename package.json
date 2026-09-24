@@ -19,7 +19,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "test:e2e": "pnpm build && playwright test",
+    "test:e2e": "node scripts/run-e2e.mjs",
     "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm test:e2e",
     "bootstrap:admin": "tsx scripts/create-admin-invitation.ts"
   },

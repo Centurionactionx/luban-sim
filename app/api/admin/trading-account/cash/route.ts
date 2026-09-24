@@ -6,6 +6,7 @@ import {
 } from "@/lib";
 
 import {
+  requireTrustedOrigin,
   handleRouteError,
   json,
   parseJson,
@@ -22,6 +23,7 @@ const cashSchema = z
 
 export async function PATCH(request: Request): Promise<Response> {
   try {
+    requireTrustedOrigin(request);
     const user = await requirePlatformAdmin();
     const { cashCents } = cashSchema.parse(await parseJson(request));
     const account = await setAdminTradingCash({

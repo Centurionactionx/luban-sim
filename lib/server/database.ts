@@ -38,8 +38,6 @@ export interface AppDatabase extends DbExecutor {
   readTransaction<T>(fn: (tx: DbExecutor) => Promise<T>): Promise<T>;
 }
 
-const ambientTransaction = new AsyncLocalStorage<DbExecutor>();
-
 /* ────────────────────────────── SQLite ─────────────────────────────── */
 
 /**
@@ -50,6 +48,7 @@ const ambientTransaction = new AsyncLocalStorage<DbExecutor>();
  */
 class SqliteAppDatabase implements AppDatabase {
   readonly engine = "sqlite" as const;
+  private readonly ambientTransaction = new AsyncLocalStorage<DbExecutor>();
   private chain: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly database: DatabaseSync) {}
@@ -83,7 +82,7 @@ class SqliteAppDatabase implements AppDatabase {
   }
 
   private dispatch<T>(op: (executor: DbExecutor) => Promise<T>): Promise<T> {
-    const ambient = ambientTransaction.getStore();
+    const ambient = this.ambientTransaction.getStore();
 
     if (ambient && ambient.engine === "sqlite") {
       return op(ambient);
@@ -112,7 +111,7 @@ class SqliteAppDatabase implements AppDatabase {
     begin: string,
     fn: (tx: DbExecutor) => Promise<T>,
   ): Promise<T> {
-    const ambient = ambientTransaction.getStore();
+    const ambient = this.ambientTransaction.getStore();
 
     if (ambient && ambient.engine === "sqlite") {
       return fn(ambient);
@@ -122,7 +121,7 @@ class SqliteAppDatabase implements AppDatabase {
       const executor = this.makeExecutor();
       this.database.exec(begin);
       try {
-        const result = await ambientTransaction.run(executor, () => fn(executor));
+        const result = await this.ambientTransaction.run(executor, () => fn(executor));
         this.database.exec("COMMIT;");
         return result;
       } catch (error) {
@@ -214,6 +213,7 @@ function pgExecutor(query: PgQueryFn): DbExecutor {
 
 class PostgresAppDatabase implements AppDatabase {
   readonly engine = "postgres" as const;
+  private readonly ambientTransaction = new AsyncLocalStorage<DbExecutor>();
   private readonly base: DbExecutor;
 
   constructor(private readonly driver: PgDriver) {
@@ -221,7 +221,7 @@ class PostgresAppDatabase implements AppDatabase {
   }
 
   private current(): DbExecutor {
-    const ambient = ambientTransaction.getStore();
+    const ambient = this.ambientTransaction.getStore();
     return ambient && ambient.engine === "postgres" ? ambient : this.base;
   }
 
@@ -238,7 +238,7 @@ class PostgresAppDatabase implements AppDatabase {
   }
 
   exec(sql: string): Promise<void> {
-    const ambient = ambientTransaction.getStore();
+    const ambient = this.ambientTransaction.getStore();
     if (ambient && ambient.engine === "postgres") {
       return ambient.exec(sql);
     }
@@ -246,7 +246,7 @@ class PostgresAppDatabase implements AppDatabase {
   }
 
   transaction<T>(fn: (tx: DbExecutor) => Promise<T>): Promise<T> {
-    const ambient = ambientTransaction.getStore();
+    const ambient = this.ambientTransaction.getStore();
 
     if (ambient && ambient.engine === "postgres") {
       return fn(ambient);
@@ -254,12 +254,12 @@ class PostgresAppDatabase implements AppDatabase {
 
     return this.driver.withTransaction((query) => {
       const executor = pgExecutor(query);
-      return ambientTransaction.run(executor, () => fn(executor));
+      return this.ambientTransaction.run(executor, () => fn(executor));
     });
   }
 
   readTransaction<T>(fn: (tx: DbExecutor) => Promise<T>): Promise<T> {
-    const ambient = ambientTransaction.getStore();
+    const ambient = this.ambientTransaction.getStore();
 
     if (ambient && ambient.engine === "postgres") {
       return fn(ambient);
@@ -271,7 +271,7 @@ class PostgresAppDatabase implements AppDatabase {
     return this.driver.withTransaction(async (query) => {
       await query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
       const executor = pgExecutor(query);
-      return ambientTransaction.run(executor, () => fn(executor));
+      return this.ambientTransaction.run(executor, () => fn(executor));
     });
   }
 }
@@ -291,6 +291,13 @@ export function createPostgresAppDatabase(driver: PgDriver): AppDatabase {
 export const ADVISORY_LOCK_ACCOUNTS = 823_651;
 export const ADVISORY_LOCK_SCHEMA = 823_652;
 
+/** Orders may run together, while account and competition administration waits. */
+export async function acquireAccountReadLock(tx: DbExecutor): Promise<void> {
+  if (tx.engine === "postgres") {
+    await tx.all("SELECT pg_advisory_xact_lock_shared(?)", [ADVISORY_LOCK_ACCOUNTS]);
+  }
+}
+
 export async function acquireAdvisoryLock(
   tx: DbExecutor,
   key: number,
@@ -299,10 +306,5 @@ export async function acquireAdvisoryLock(
     return;
   }
 
-  try {
-    await tx.all("SELECT pg_advisory_xact_lock(?)", [key]);
-  } catch {
-    // Embedded single-connection engines may not support advisory locks;
-    // they are single-writer by construction, so proceeding is safe.
-  }
+  await tx.all("SELECT pg_advisory_xact_lock(?)", [key]);
 }

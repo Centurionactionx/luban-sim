@@ -6,6 +6,7 @@ import {
   SESSION_TTL_SECONDS,
   canHostCompetitions,
   getSessionFromToken,
+  isDemoLoginAllowed,
   isManagedAuthMode,
   SESSION_COOKIE_NAME,
 } from "@/lib";
@@ -90,15 +91,36 @@ export function requireTrustedOrigin(request: Request): void {
 }
 
 export async function parseJson(request: Request): Promise<unknown> {
+  requireTrustedOrigin(request);
+  const contentType = request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase();
+  if (contentType !== "application/json") {
+    throw new ApiError(415, "UNSUPPORTED_MEDIA_TYPE", "Send an application/json request body.");
+  }
   const contentLength = request.headers.get("content-length");
   if (contentLength && Number(contentLength) > 16_384) {
     throw new ApiError(413, "BODY_TOO_LARGE", "The JSON body is too large.");
   }
 
-  const rawBody = await request.text();
-
-  if (rawBody.length > 16_384) {
-    throw new ApiError(413, "BODY_TOO_LARGE", "The JSON body is too large.");
+  const reader = request.body?.getReader();
+  const decoder = new TextDecoder();
+  let rawBody = "";
+  let bytesRead = 0;
+  if (reader) {
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytesRead += value.byteLength;
+        if (bytesRead > 16_384) {
+          await reader.cancel().catch(() => {});
+          throw new ApiError(413, "BODY_TOO_LARGE", "The JSON body is too large.");
+        }
+        rawBody += decoder.decode(value, { stream: true });
+      }
+      rawBody += decoder.decode();
+    } finally {
+      reader.releaseLock();
+    }
   }
 
   if (!rawBody.trim()) {
@@ -121,6 +143,9 @@ export async function getAuthenticatedUser(): Promise<SessionUser | null> {
     );
     return getManagedSessionUser();
   }
+
+  // Turning demo access off must reject previously issued cookies too.
+  if (!isDemoLoginAllowed()) return null;
 
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE_NAME)?.value;
@@ -295,6 +320,25 @@ export function handleRouteError(error: unknown): Response {
       Number.isFinite(error.details.retryAfterSeconds)
         ? Math.max(1, Math.round(error.details.retryAfterSeconds))
         : null;
+    const status = safeStatus(error.status);
+    // 5xx details are server diagnostics (for example which teams fail
+    // ledger reconciliation) and must never reach the requesting client.
+    // Keep them in the server log; only a sanitized retry hint goes out.
+    // 4xx details stay: clients rely on field, retryAfterSeconds, etc.
+    const serverFault = status >= 500;
+    if (serverFault) {
+      console.error("API route AppError", {
+        code: error.code,
+        status,
+        message: error.message,
+        details: error.details,
+      });
+    }
+    const details = serverFault
+      ? retryAfterSeconds !== null
+        ? { retryAfterSeconds }
+        : undefined
+      : error.details;
     if (retryAfterSeconds !== null) {
       return json(
         {
@@ -302,21 +346,21 @@ export function handleRouteError(error: unknown): Response {
             code: error.code,
             message: error.message,
             ...(field ? { field } : {}),
-            ...(error.details ? { details: error.details } : {}),
+            ...(details ? { details } : {}),
           },
         },
         {
-          status: safeStatus(error.status),
+          status,
           headers: { "Retry-After": String(retryAfterSeconds) },
         },
       );
     }
     return errorResponse(
-      safeStatus(error.status),
+      status,
       error.code,
       error.message,
       field,
-      error.details,
+      details,
     );
   }
 

@@ -1,12 +1,9 @@
 import { z } from "zod";
 
-import {
-  refreshAllQuotes,
-  setCompetitionStatus,
-  updateCompetitionSchedule,
-} from "@/lib";
+import { refreshAllQuotes, updateCompetition } from "@/lib";
 
 import {
+  requireTrustedOrigin,
   handleRouteError,
   json,
   parseJson,
@@ -53,30 +50,21 @@ const updateSchema = z
 
 export async function PATCH(request: Request): Promise<Response> {
   try {
+    requireTrustedOrigin(request);
     const user = await requireHostUser();
     const update = updateSchema.parse(await parseJson(request));
     // Best-effort valuation freshness only: a market-data outage must never
     // block the host from pausing, scheduling, resetting, or fixing balances.
     await refreshAllQuotes().catch(() => {});
 
-    let overview =
-      update.startsAt !== undefined ||
-      update.endsAt !== undefined ||
-      update.startingCashCents !== undefined
-        ? await updateCompetitionSchedule({
-            actorUserId: user.id,
-            startsAt: update.startsAt,
-            endsAt: update.endsAt,
-            startingCashCents: update.startingCashCents,
-          })
-        : null;
-
-    if (update.status !== undefined) {
-      overview = await setCompetitionStatus({
-        actorUserId: user.id,
-        status: update.status,
-      });
-    }
+    // One transaction: a failed status change rolls back the schedule too.
+    const overview = await updateCompetition({
+      actorUserId: user.id,
+      status: update.status,
+      startsAt: update.startsAt,
+      endsAt: update.endsAt,
+      startingCashCents: update.startingCashCents,
+    });
 
     return json({ ok: true, ...overview });
   } catch (error) {

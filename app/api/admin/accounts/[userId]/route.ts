@@ -1,3 +1,4 @@
+import { getDb } from "@/lib/server/db";
 import { z } from "zod";
 
 import {
@@ -8,6 +9,7 @@ import {
 } from "@/lib";
 
 import {
+  requireTrustedOrigin,
   handleRouteError,
   json,
   parseJson,
@@ -36,21 +38,27 @@ export async function PATCH(
   context: { params: Promise<{ userId: string }> },
 ): Promise<Response> {
   try {
+    requireTrustedOrigin(request);
     const user = await requireHostUser();
     const { userId } = await context.params;
     const update = updateSchema.parse(await parseJson(request));
 
-    let account;
+    const db = await getDb();
+    const account = await db.transaction(async () => {
+      let updatedAccount;
 
-    if (update.role !== undefined) {
-      account = await setAccountRole(user.id, userId, update.role);
-    }
-    if (update.teamId !== undefined) {
-      account = await setAccountTeam(user.id, userId, update.teamId);
-    }
-    if (update.status !== undefined) {
-      account = await setAccountStatus(user.id, userId, update.status);
-    }
+      if (update.role !== undefined) {
+        updatedAccount = await setAccountRole(user.id, userId, update.role);
+      }
+      if (update.teamId !== undefined) {
+        updatedAccount = await setAccountTeam(user.id, userId, update.teamId);
+      }
+      if (update.status !== undefined) {
+        updatedAccount = await setAccountStatus(user.id, userId, update.status);
+      }
+
+      return updatedAccount;
+    });
 
     return json({ account });
   } catch (error) {
@@ -59,10 +67,11 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ userId: string }> },
 ): Promise<Response> {
   try {
+    requireTrustedOrigin(request);
     const user = await requireHostUser();
     const { userId } = await context.params;
 

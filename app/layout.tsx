@@ -25,26 +25,9 @@ export const metadata: Metadata = {
     "A local paper-trading prototype for shared student team portfolios.",
 };
 
-const DIRECTION_CONTRACT = `
-THESIS: Shared team state is the interface's spine; the room refuses isolated brokerage cards and decorative market spectacle.
-OWN-WORLD: Luban purple canvas, white paper regions, ink rules, flat four-pixel controls, mono data labels, lime confirmation, and pink simulation warnings.
-STORY: A student identifies their session and team, reads the shared portfolio, records a simulated order, and sees who changed the account and where the team stands.
-FIRST VIEWPORT: A compact header and simulation strip sit above a three-column trading room: portfolio left, quote and order workbench center, team activity and standings right.
-FORM: Team Trading Room, fifth-ranked grounded structure, seed bb9a5bdf.
-FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance.
-`.trim();
-
 export default async function RootLayout({ children }: { children: ReactNode }) {
   const body = (
-    <body suppressHydrationWarning>
-      <script
-        data-direction-seed="bb9a5bdf"
-        dangerouslySetInnerHTML={{
-          __html: `document.currentScript?.before(document.createComment(${JSON.stringify(
-            DIRECTION_CONTRACT,
-          )}));`,
-        }}
-      />
+    <body>
       {children}
     </body>
   );

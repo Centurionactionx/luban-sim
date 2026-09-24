@@ -5,7 +5,9 @@ import { canHostCompetitions } from "../contracts";
 import { AppError } from "../errors";
 import { recordAuthAuditEvent } from "./audit";
 import { getSessionUser } from "./auth";
+import { ADVISORY_LOCK_ACCOUNTS, acquireAdvisoryLock } from "./database";
 import { getDb } from "./db";
+import { invitationRolesIssuableBy } from "./invitations";
 
 /**
  * Admin user management. Rules that hold everywhere:
@@ -16,6 +18,9 @@ import { getDb } from "./db";
  * - Deleting a user with trading history anonymizes instead: the team's
  *   ledger and order attribution stay intact while every personal
  *   identifier (name, email, sign-in link) is removed.
+ * - An invitation never outlives its creator's authority: suspending,
+ *   deleting, or demoting an account revokes the unused invitations it can
+ *   no longer issue, in the same transaction.
  */
 
 interface AccountRow {
@@ -142,6 +147,50 @@ async function assertNotLastAdmin(
   }
 }
 
+type AccountTx = {
+  run: (sql: string, params?: unknown[]) => Promise<{ changes: number }>;
+};
+
+/**
+ * Revokes `target`'s unused invitations for every role outside
+ * `stillIssuable` and records one audit event when any were revoked. Must run
+ * before the users row is deleted: ON DELETE SET NULL would otherwise make
+ * the invitations indistinguishable from operator-issued ones.
+ */
+async function revokeInvitationsBeyondAuthority(
+  tx: AccountTx,
+  actor: SessionUser,
+  target: AccountRow,
+  stillIssuable: readonly UserRole[],
+  reason: string,
+): Promise<number> {
+  const nowIso = new Date().toISOString();
+  const keep = stillIssuable.length
+    ? `AND role NOT IN (${stillIssuable.map(() => "?").join(", ")})`
+    : "";
+  const result = await tx.run(
+    `UPDATE account_invitations
+     SET revoked_at = ?
+     WHERE created_by = ? AND used_at IS NULL AND revoked_at IS NULL ${keep}`,
+    [nowIso, target.id, ...stillIssuable],
+  );
+  const count = Number(result.changes);
+
+  if (count > 0) {
+    await recordAuthAuditEvent({
+      type: "INVITATION_REVOKED",
+      actorUserId: actor.id,
+      subjectUserId: target.id,
+      detail: `${actor.name}'s change revoked ${count} unused invitation${
+        count === 1 ? "" : "s"
+      } issued by ${target.name} (${reason}).`,
+      metadata: { count, reason, createdBy: target.id },
+    });
+  }
+
+  return count;
+}
+
 export async function listAccounts(actorUserId: string): Promise<AccountView[]> {
   const actor = await requireAccountManager(actorUserId);
   const db = await getDb();
@@ -164,15 +213,16 @@ export async function setAccountStatus(
   userId: string,
   status: "active" | "suspended",
 ): Promise<AccountView> {
-  const actor = await requireAccountManager(actorUserId);
   const db = await getDb();
 
-  await db.transaction(async (tx) => {
+  return db.transaction(async (tx) => {
+    await acquireAdvisoryLock(tx, ADVISORY_LOCK_ACCOUNTS);
+    const actor = await requireAccountManager(actorUserId);
     const target = await loadTarget(tx, userId);
     assertActorMayTouch(actor, target);
 
     if (target.status === status) {
-      return;
+      return rowToAccountView(target);
     }
 
     if (status === "suspended") {
@@ -180,6 +230,10 @@ export async function setAccountStatus(
     }
 
     await tx.run("UPDATE users SET status = ? WHERE id = ?", [status, userId]);
+    if (status === "suspended") {
+      await tx.run("DELETE FROM sessions WHERE user_id = ?", [userId]);
+      await revokeInvitationsBeyondAuthority(tx, actor, target, [], "account suspended");
+    }
 
     await recordAuthAuditEvent({
       type: status === "suspended" ? "ACCOUNT_SUSPENDED" : "ACCOUNT_RESTORED",
@@ -187,13 +241,8 @@ export async function setAccountStatus(
       subjectUserId: userId,
       detail: `${actor.name} ${status === "suspended" ? "suspended" : "restored"} ${target.name}'s account.`,
     });
+    return rowToAccountView(await loadTarget(tx, userId));
   });
-
-  
-  const row = await db.get<AccountRow>(`${ACCOUNT_SELECT} WHERE u.id = ?`, [
-    userId,
-  ]);
-  return rowToAccountView(row as AccountRow);
 }
 
 export async function setAccountRole(
@@ -201,28 +250,23 @@ export async function setAccountRole(
   userId: string,
   role: UserRole,
 ): Promise<AccountView> {
-  const actor = await requireAccountManager(actorUserId);
-
-  if (actor.role !== "platform_admin") {
-    throw new AppError(
-      "ADMIN_REQUIRED",
-      "Only a platform administrator can change roles.",
-      403,
-    );
-  }
-
   if (!["student", "host", "platform_admin"].includes(role)) {
     throw new AppError("INVALID_ROLE", "Unknown role.", 400, { field: "role" });
   }
 
   const db = await getDb();
 
-  await db.transaction(async (tx) => {
+  return db.transaction(async (tx) => {
+    await acquireAdvisoryLock(tx, ADVISORY_LOCK_ACCOUNTS);
+    const actor = await requireAccountManager(actorUserId);
+    if (actor.role !== "platform_admin") {
+      throw new AppError("ADMIN_REQUIRED", "Only a platform administrator can change roles.", 403);
+    }
     const target = await loadTarget(tx, userId);
     assertActorMayTouch(actor, target);
 
     if (target.role === role) {
-      return;
+      return rowToAccountView(target);
     }
 
     if (target.role === "platform_admin") {
@@ -230,6 +274,13 @@ export async function setAccountRole(
     }
 
     await tx.run("UPDATE users SET role = ? WHERE id = ?", [role, userId]);
+    await revokeInvitationsBeyondAuthority(
+      tx,
+      actor,
+      target,
+      invitationRolesIssuableBy(role),
+      `role changed from ${target.role} to ${role}`,
+    );
 
     // Hosts and administrators do not sit on trading teams.
     if (role !== "student" && target.team_id) {
@@ -243,13 +294,8 @@ export async function setAccountRole(
       detail: `${actor.name} changed ${target.name}'s role from ${target.role} to ${role}.`,
       metadata: { from: target.role, to: role },
     });
+    return rowToAccountView(await loadTarget(tx, userId));
   });
-
-  
-  const row = await db.get<AccountRow>(`${ACCOUNT_SELECT} WHERE u.id = ?`, [
-    userId,
-  ]);
-  return rowToAccountView(row as AccountRow);
 }
 
 export async function setAccountTeam(
@@ -257,10 +303,11 @@ export async function setAccountTeam(
   userId: string,
   teamId: string | null,
 ): Promise<AccountView> {
-  const actor = await requireAccountManager(actorUserId);
   const db = await getDb();
 
-  await db.transaction(async (tx) => {
+  return db.transaction(async (tx) => {
+    await acquireAdvisoryLock(tx, ADVISORY_LOCK_ACCOUNTS);
+    const actor = await requireAccountManager(actorUserId);
     const target = await loadTarget(tx, userId);
     assertActorMayTouch(actor, target);
 
@@ -273,7 +320,7 @@ export async function setAccountTeam(
     }
 
     if (target.team_id === teamId) {
-      return;
+      return rowToAccountView(target);
     }
 
     let teamName: string | null = null;
@@ -340,13 +387,8 @@ export async function setAccountTeam(
         : `${actor.name} removed ${target.name} from their team.`,
       metadata: { from: target.team_id, to: teamId },
     });
+    return rowToAccountView(await loadTarget(tx, userId));
   });
-
-  
-  const row = await db.get<AccountRow>(`${ACCOUNT_SELECT} WHERE u.id = ?`, [
-    userId,
-  ]);
-  return rowToAccountView(row as AccountRow);
 }
 
 export interface DeleteAccountResult {
@@ -358,22 +400,21 @@ export async function deleteAccount(
   actorUserId: string,
   userId: string,
 ): Promise<DeleteAccountResult> {
-  const actor = await requireAccountManager(actorUserId);
-
-  if (actor.role !== "platform_admin") {
-    throw new AppError(
-      "ADMIN_REQUIRED",
-      "Only a platform administrator can delete accounts.",
-      403,
-    );
-  }
-
   const db = await getDb();
 
   return db.transaction(async (tx) => {
+    await acquireAdvisoryLock(tx, ADVISORY_LOCK_ACCOUNTS);
+    const actor = await requireAccountManager(actorUserId);
+    if (actor.role !== "platform_admin") {
+      throw new AppError("ADMIN_REQUIRED", "Only a platform administrator can delete accounts.", 403);
+    }
     const target = await loadTarget(tx, userId);
     assertActorMayTouch(actor, target);
     await assertNotLastAdmin(tx, target);
+
+    // Before any delete: once the users row is gone, created_by is NULL and
+    // the invitations would look operator-issued.
+    await revokeInvitationsBeyondAuthority(tx, actor, target, [], "account deleted");
 
     if (Number(target.order_count) === 0) {
       // No trading history: the row can go entirely. The audit entry is

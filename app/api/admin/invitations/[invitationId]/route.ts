@@ -1,14 +1,15 @@
 import { revokeInvitation } from "@/lib";
 
-import { handleRouteError, json, requireHostUser } from "../../../_lib/http";
+import { requireTrustedOrigin, handleRouteError, json, requireHostUser } from "../../../_lib/http";
 
 export const dynamic = "force-dynamic";
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ invitationId: string }> },
 ): Promise<Response> {
   try {
+    requireTrustedOrigin(request);
     const user = await requireHostUser();
     const { invitationId } = await context.params;
 

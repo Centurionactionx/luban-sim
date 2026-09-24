@@ -10,7 +10,7 @@ import {
   acquireAdvisoryLock,
   type DbExecutor,
 } from "./database";
-import { assertLedgerReconciles, getDb } from "./db";
+import { assertTeamLedgerReconciles, getDb } from "./db";
 
 /** Same monetary ceiling as a competition team, expressed in integer cents. */
 export const MAX_ADMIN_TRADING_CASH_CENTS = 100_000_000_000_000;
@@ -114,10 +114,10 @@ export async function setAdminTradingCash(
   const db = await getDb();
 
   return db.transaction(async (tx) => {
-    const actor = await requirePlatformAdminActor(tx, input.actorUserId);
     // SQLite already serializes writers. PostgreSQL uses the same rare-account
     // lock as provisioning so two first-funding requests cannot create twins.
     await acquireAdvisoryLock(tx, ADVISORY_LOCK_ACCOUNTS);
+    const actor = await requirePlatformAdminActor(tx, input.actorUserId);
 
     let sandbox = await tx.get<AdminSandboxRow>(
       `SELECT id, competition_id, cash_cents, version
@@ -237,7 +237,7 @@ export async function setAdminTradingCash(
       );
     }
 
-    await assertLedgerReconciles(tx);
+    await assertTeamLedgerReconciles([sandbox.id], tx);
     return {
       teamId: sandbox.id,
       cashCents: Number(sandbox.cash_cents),

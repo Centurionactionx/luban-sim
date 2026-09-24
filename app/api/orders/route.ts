@@ -10,6 +10,7 @@ import {
 } from "@/lib";
 
 import {
+  requireTrustedOrigin,
   ApiError,
   handleRouteError,
   json,
@@ -49,6 +50,7 @@ export async function GET(request: Request): Promise<Response> {
 
 export async function POST(request: Request): Promise<Response> {
   try {
+    requireTrustedOrigin(request);
     const user = await requireAuthenticatedUser();
     const idempotencyKey = requireIdempotencyKey(request);
     const order = orderSchema.parse(await parseJson(request));

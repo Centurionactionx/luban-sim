@@ -8,6 +8,7 @@ import {
 } from "@/lib";
 
 import {
+  requireTrustedOrigin,
   handleRouteError,
   json,
   parseJson,
@@ -43,6 +44,7 @@ export async function GET(): Promise<Response> {
 
 export async function POST(request: Request): Promise<Response> {
   try {
+    requireTrustedOrigin(request);
     const user = await requireHostUser();
     const input = createSchema.parse(await parseJson(request));
 

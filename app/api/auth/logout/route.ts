@@ -2,12 +2,13 @@ import { cookies } from "next/headers";
 
 import { invalidateSessionToken, SESSION_COOKIE_NAME } from "@/lib";
 
-import { handleRouteError, json, sessionCookieOptions } from "../../_lib/http";
+import { requireTrustedOrigin, handleRouteError, json, sessionCookieOptions } from "../../_lib/http";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request): Promise<Response> {
   try {
+    requireTrustedOrigin(request);
     const cookieStore = await cookies();
     const token = cookieStore.get(SESSION_COOKIE_NAME)?.value;
 
