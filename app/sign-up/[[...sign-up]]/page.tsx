@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { LegalNote } from "@/components/legal-note";
 import { isManagedAuthMode } from "@/lib/server/auth-mode";
 
 export const dynamic = "force-dynamic";
@@ -36,6 +37,7 @@ export default async function SignUpPage() {
           return to your invitation link — it places you on your team. Signing
           up without an invitation does not grant access to any competition.
         </p>
+        <LegalNote />
       </section>
       <div className="auth-page__card">
         <SignUp path="/sign-up" signInUrl="/sign-in" />

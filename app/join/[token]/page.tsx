@@ -4,6 +4,7 @@ import type { InvitationPreview } from "@/lib/contracts";
 import { previewInvitation } from "@/lib/server/invitations";
 import { isManagedAuthMode } from "@/lib/server/auth-mode";
 import { JoinAcceptPanel } from "@/components/join-accept";
+import { LegalNote } from "@/components/legal-note";
 
 export const dynamic = "force-dynamic";
 
@@ -66,6 +67,7 @@ function StateSheet({
         <p className="route-state__brand">Luban Market Lab</p>
         <h1 id={titleId}>{title}</h1>
         {children}
+        <LegalNote />
       </section>
     </main>
   );

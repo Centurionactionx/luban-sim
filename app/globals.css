@@ -3372,3 +3372,18 @@ a {
     gap: 0;
   }
 }
+
+.legal-note {
+  margin-top: 20px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(0, 23, 31, 0.18);
+  color: var(--muted);
+  font-size: var(--type-description);
+  line-height: 1.5;
+}
+
+.legal-note a {
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}

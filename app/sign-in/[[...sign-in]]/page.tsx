@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { LegalNote } from "@/components/legal-note";
 import { isManagedAuthMode } from "@/lib/server/auth-mode";
 
 export const dynamic = "force-dynamic";
@@ -36,6 +37,7 @@ export default async function SignInPage() {
           Registration works only through an invitation link from your
           competition host.
         </p>
+        <LegalNote />
       </section>
       <div className="auth-page__card">
         <SignIn path="/sign-in" signUpUrl="/sign-up" />
