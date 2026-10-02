@@ -25,6 +25,10 @@ Leave `LUBAN_DEMO_MODE` unset on public deployments. Managed mode refuses demo a
 
 Production is served at `https://sim.lubancanada.com`, a subdomain of the public site. The simulator stays a separate Vercel project; the public site links to it and shares no code. DNS: `CNAME sim -> cname.vercel-dns.com`. Clerk runs a production instance for `lubancanada.com`, and its DNS records live on the same zone. `luban-sim.vercel.app` redirects to the subdomain.
 
+## Keeping the database active
+
+Supabase's free plan pauses a project after about a week of low activity. `vercel.json` schedules one daily call to `/api/health` (15:00 UTC), which runs a real query against the database. Vercel's Hobby plan allows one scheduled run per day, so do not make the schedule more frequent or the deployment will be rejected. This is a safety net and not a guarantee; Supabase Pro never auto-pauses.
+
 ## Database TLS
 
 Remote PostgreSQL connections verify both certificate trust and hostname. URL flags such as `sslmode=require`, `sslmode=disable`, or `sslmode=no-verify` cannot disable verification. Plaintext is permitted only for loopback development databases unless TLS is explicitly requested.
