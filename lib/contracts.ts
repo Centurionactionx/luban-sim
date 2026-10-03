@@ -26,6 +26,14 @@ export type OrderStatus = "FILLED" | "REJECTED";
 export type MarketDataSource = "YAHOO_FINANCE" | "LUBAN_SIMULATED";
 export type QuoteRange = "1D" | "5D" | "1M" | "3M";
 
+/**
+ * What kind of instrument a symbol is. Crypto trades in fixed lots: one
+ * simulator "unit" of a crypto instrument is `lotSize` tokens, and every
+ * price, quantity, and ledger amount for it is per lot. That keeps the
+ * whole-number money math identical for every asset class.
+ */
+export type AssetClass = "STOCK" | "ETF" | "CRYPTO";
+
 export interface DemoUser {
   id: string;
   name: string;
@@ -167,6 +175,16 @@ export interface Quote {
   marketClosesAt: string | null;
   /** Next or current regular-session open when known; otherwise null. */
   marketOpensAt: string | null;
+  /** Missing means STOCK (quotes produced before asset classes existed). */
+  assetClass?: AssetClass;
+  /** Tokens per unit for crypto (e.g. 0.0001 BTC); 1 for stocks and ETFs. */
+  lotSize?: number;
+  /**
+   * Set when this instrument may not trade right now even though a price is
+   * known, e.g. a crypto pair that failed the data-quality checks. Holdings
+   * are still valued at this quote's price.
+   */
+  tradingHaltReason?: string | null;
 }
 
 export interface InstrumentSearchResult {
@@ -175,6 +193,8 @@ export interface InstrumentSearchResult {
   exchange: string;
   sector: string;
   listingCurrency: "CAD" | "USD";
+  /** Missing means STOCK. */
+  assetClass?: AssetClass;
 }
 
 export interface QuoteHistoryPoint {
@@ -215,6 +235,8 @@ export interface HoldingView {
   gainLossPercent: number;
   portfolioWeightPercent: number;
   quoteAsOf: string;
+  assetClass?: AssetClass;
+  lotSize?: number;
 }
 
 export interface PortfolioPoint {

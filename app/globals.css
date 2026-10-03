@@ -1330,6 +1330,74 @@ a {
   font-size: var(--type-meta);
 }
 
+.quote-identity > .quote-lot-note {
+  color: var(--ink);
+  font-family: var(--font-data);
+  font-size: var(--type-description);
+}
+
+/* Asset class marker (ETF / Crypto). Text carries the meaning; stocks get none. */
+.asset-tag {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  padding: 2px 5px;
+  border: 1px solid var(--purple-deep);
+  border-radius: 3px;
+  background: var(--quiet-purple-2);
+  color: var(--purple-deep);
+  font-family: var(--font-data);
+  font-size: 8.5px;
+  font-style: normal;
+  font-weight: 600;
+  letter-spacing: 0.035em;
+  line-height: 1.1;
+  text-decoration: none;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
+.symbol-button .asset-tag,
+.search-results .asset-tag {
+  margin-left: 6px;
+}
+
+.search-results button > span:last-child .asset-tag:only-child {
+  margin-left: 0;
+}
+
+.quote-halt {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1.5px solid var(--red);
+  border-radius: 4px;
+  background: #fff0f3;
+  color: var(--red);
+  font-size: var(--type-description);
+  line-height: 1.4;
+}
+
+.quote-halt svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.data-table .cell-note {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: var(--type-meta);
+}
+
+.ticket-fields .quantity-tokens {
+  color: var(--ink);
+  font-family: var(--font-data);
+}
+
 .quote-facts {
   display: grid;
   grid-template-columns: repeat(5, 1fr);

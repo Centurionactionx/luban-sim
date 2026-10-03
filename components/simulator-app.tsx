@@ -34,6 +34,7 @@ import type {
   TeamStatus,
   TradeSide,
 } from "@/lib/contracts";
+import { cryptoTokenSymbol, formatTokenQuantity, unitWord } from "@/lib/lots";
 import {
   MARKET_REFRESH_INTERVAL_MS,
   TEAM_SYNC_INTERVAL_MS,
@@ -484,6 +485,41 @@ function formatNativeMoney(cents: number, currency: "CAD" | "USD"): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(cents / 100);
+}
+
+/**
+ * Price of one whole token from a per-lot crypto price. Tiny coins are worth a
+ * fraction of a cent, so values under $1 keep up to four significant figures
+ * instead of rounding to "$0.00".
+ */
+function formatPerTokenMoney(
+  lotCents: number,
+  lotSize: number,
+  currency: "CAD" | "USD",
+): string {
+  const perToken = lotCents / 100 / lotSize;
+  return new Intl.NumberFormat(
+    "en-CA",
+    perToken >= 1
+      ? { style: "currency", currency, minimumFractionDigits: 2, maximumFractionDigits: 2 }
+      : {
+          style: "currency",
+          currency,
+          minimumSignificantDigits: 2,
+          maximumSignificantDigits: 4,
+        },
+  ).format(perToken);
+}
+
+/** Exact token amount for a whole number of crypto lots, e.g. "0.0003 BTC". */
+function tokenAmountLabel(quantity: number, lotSize: number, symbol: string): string {
+  return `${formatTokenQuantity(quantity, lotSize)} ${cryptoTokenSymbol(symbol)}`;
+}
+
+function assetTagLabel(assetClass: Quote["assetClass"]): string | null {
+  if (assetClass === "ETF") return "ETF";
+  if (assetClass === "CRYPTO") return "Crypto";
+  return null;
 }
 
 function marketSourceLabel(source: Quote["source"]): string {
@@ -1357,6 +1393,18 @@ export function SimulatorApp({
   const holdingForQuote = dashboard.holdings.find(
     (holding) => holding.symbol === selectedQuote.symbol,
   );
+  // Crypto trades in lots of `lotSize` tokens; every crypto price and quantity
+  // in the API is already per lot, so the UI only relabels units.
+  const selectedAssetClass = selectedQuote.assetClass ?? "STOCK";
+  const selectedIsCrypto = selectedAssetClass === "CRYPTO";
+  const selectedLotSize = selectedQuote.lotSize ?? 1;
+  const selectedToken = cryptoTokenSymbol(selectedQuote.symbol);
+  const selectedAssetTag = assetTagLabel(selectedQuote.assetClass);
+  const tradingHaltReason = selectedQuote.tradingHaltReason ?? null;
+  const heldQuantity = holdingForQuote?.quantity ?? 0;
+  const holdingsHaveLots = dashboard.holdings.some(
+    (holding) => holding.assetClass === "CRYPTO",
+  );
   const isPlatformAdmin = dashboard.currentUser.role === "platform_admin";
   const isCompetitionHost = dashboard.currentUser.role === "host";
   const canManageCompetition = isCompetitionHost || isPlatformAdmin;
@@ -1370,11 +1418,12 @@ export function SimulatorApp({
   const canTrade =
     connection === "connected" &&
     !selectedQuote.isStale &&
+    !tradingHaltReason &&
     tradingAccountIsOpen &&
     quantityIsValid &&
     (side === "BUY"
       ? estimatedValue <= portfolio.buyingPowerCents
-      : wholeQuantity <= (holdingForQuote?.quantity ?? 0));
+      : wholeQuantity <= heldQuantity);
   const adminCashInputValue =
     adminCashDraft ?? (portfolio.cashCents / 100).toFixed(2);
   const parsedAdminCash = parseCashDraft(adminCashInputValue);
@@ -1452,12 +1501,12 @@ export function SimulatorApp({
       } else if (results.length === 0) {
         setTicketStatus({
           kind: "error",
-          message: `No NYSE, Nasdaq, or TSX stock matched “${query}”.`,
+          message: `No supported listing matched “${query}”.`,
         });
       } else {
         setTicketStatus({
           kind: "idle",
-          message: `Found ${results.length} supported ${results.length === 1 ? "stock" : "stocks"}. Choose a listing to load its market price.`,
+          message: `Found ${results.length} supported ${results.length === 1 ? "listing" : "listings"}. Choose one to load its market price.`,
         });
       }
     } catch (error) {
@@ -1471,7 +1520,7 @@ export function SimulatorApp({
   };
 
   const loadSearchResult = async (
-    result: InstrumentSearchResult,
+    result: Pick<InstrumentSearchResult, "symbol">,
     manageSearching = true,
   ) => {
     if (manageSearching) setSearching(true);
@@ -1524,8 +1573,10 @@ export function SimulatorApp({
         ? "Wait for the simulator to reconnect before trading."
         : selectedQuote.isStale
           ? "Trading waits for a fresh market quote."
+          : tradingHaltReason
+            ? tradingHaltReason
           : !quantityIsValid
-            ? "Enter a positive whole number of shares."
+            ? `Enter a positive whole number of ${unitWord(selectedAssetClass, 2)}.`
             : isPlatformAdmin && !hasAdminTradingAccount
               ? "Set your admin test cash before placing an order."
               : isCompetitionHost
@@ -1533,8 +1584,12 @@ export function SimulatorApp({
                 : side === "BUY" && estimatedValue > portfolio.buyingPowerCents
                   ? `This order is larger than the ${isPlatformAdmin ? "admin test account’s" : "team’s"} available cash.`
                   : side === "SELL" &&
-                      wholeQuantity > (holdingForQuote?.quantity ?? 0)
-                    ? `The ${isPlatformAdmin ? "admin test account" : "team"} holds only ${holdingForQuote?.quantity ?? 0} shares of ${selectedQuote.symbol}.`
+                      wholeQuantity > heldQuantity
+                    ? `The ${isPlatformAdmin ? "admin test account" : "team"} holds only ${number.format(heldQuantity)} ${unitWord(selectedAssetClass, heldQuantity)} of ${selectedQuote.symbol}${
+                        selectedIsCrypto
+                          ? ` (${tokenAmountLabel(heldQuantity, selectedLotSize, selectedQuote.symbol)})`
+                          : ""
+                      }.`
                     : dashboard.competition.phase === "scheduled"
                       ? `Trading opens ${formatScheduleInstant(dashboard.competition.startsAt)}.`
                       : dashboard.competition.phase === "ended"
@@ -1598,11 +1653,17 @@ export function SimulatorApp({
       pendingOrder.current = null;
       setTicketStatus({
         kind: "success",
-        message: `${result.order.side} ${result.order.quantity} ${
-          result.order.symbol
-        } filled once at ${formatMoney(
-          result.order.fillPriceCadCents,
-        )}. Portfolio v${result.portfolioVersion}.`,
+        // Stock wording stays "BUY 1 SHOP.TO"; crypto names its lots and the
+        // exact token amount so a per-lot fill price is never misread.
+        message: `${result.order.side} ${
+          selectedIsCrypto
+            ? `${number.format(result.order.quantity)} ${unitWord("CRYPTO", result.order.quantity)} of ${
+                result.order.symbol
+              } (${tokenAmountLabel(result.order.quantity, selectedLotSize, result.order.symbol)})`
+            : `${result.order.quantity} ${result.order.symbol}`
+        } filled once at ${formatMoney(result.order.fillPriceCadCents)}${
+          selectedIsCrypto ? " per lot" : ""
+        }. Portfolio v${result.portfolioVersion}.`,
       });
       await fetchDashboard(true);
     } catch (error) {
@@ -2315,7 +2376,7 @@ export function SimulatorApp({
                     <thead>
                       <tr>
                         <th scope="col">Symbol</th>
-                        <th scope="col">Shares</th>
+                        <th scope="col">{holdingsHaveLots ? "Quantity" : "Shares"}</th>
                         <th scope="col">Price</th>
                         <th scope="col">Market value</th>
                         <th scope="col">Gain/loss</th>
@@ -2324,7 +2385,10 @@ export function SimulatorApp({
                     <tbody>
                       {[...dashboard.holdings]
                         .sort((a, b) => b.marketValueCents - a.marketValueCents)
-                        .map((holding) => (
+                        .map((holding) => {
+                          const holdingIsCrypto = holding.assetClass === "CRYPTO";
+                          const holdingTag = assetTagLabel(holding.assetClass);
+                          return (
                           <tr key={holding.symbol}>
                             <th scope="row" data-label="Symbol">
                               <button
@@ -2335,14 +2399,38 @@ export function SimulatorApp({
                                     (candidate) => candidate.symbol === holding.symbol,
                                   );
                                   if (quote) selectQuote(quote);
+                                  else void loadSearchResult(holding);
                                 }}
                               >
-                                <strong>{holding.symbol}</strong>
+                                <strong>
+                                  {holding.symbol}
+                                  {holdingTag ? (
+                                    <em className="asset-tag">{holdingTag}</em>
+                                  ) : null}
+                                </strong>
                                 <span>{holding.name}</span>
                               </button>
                             </th>
-                            <td data-label="Shares">{number.format(holding.quantity)}</td>
-                            <td data-label="Price">{formatMoney(holding.currentPriceCadCents)}</td>
+                            <td data-label={holdingsHaveLots ? "Quantity" : "Shares"}>
+                              {holdingsHaveLots
+                                ? `${number.format(holding.quantity)} ${unitWord(holding.assetClass, holding.quantity)}`
+                                : number.format(holding.quantity)}
+                              {holdingIsCrypto ? (
+                                <small className="cell-note">
+                                  {tokenAmountLabel(
+                                    holding.quantity,
+                                    holding.lotSize ?? 1,
+                                    holding.symbol,
+                                  )}
+                                </small>
+                              ) : null}
+                            </td>
+                            <td data-label="Price">
+                              {formatMoney(holding.currentPriceCadCents)}
+                              {holdingIsCrypto ? (
+                                <small className="cell-note">per lot</small>
+                              ) : null}
+                            </td>
                             <td data-label="Market value">{formatMoney(holding.marketValueCents)}</td>
                             <td data-label="Gain/loss">
                               <ChangeValue
@@ -2351,7 +2439,8 @@ export function SimulatorApp({
                               />
                             </td>
                           </tr>
-                        ))}
+                          );
+                        })}
                     </tbody>
                   </table>
                 </div>
@@ -2422,7 +2511,7 @@ export function SimulatorApp({
                     id="symbol-search"
                     value={searchQuery}
                     onChange={(event) => setSearchQuery(event.target.value)}
-                    placeholder="NYSE / NASDAQ / TSX"
+                    placeholder="Symbol or name"
                     autoComplete="off"
                   />
                   <button type="submit" aria-label="Search symbols" disabled={searching}>
@@ -2439,18 +2528,24 @@ export function SimulatorApp({
                 aria-label="Symbol results"
                 aria-busy={searching}
               >
-                {searchResults.slice(0, 10).map((result) => (
-                  <button
-                    key={result.symbol}
-                    type="button"
-                    disabled={searching}
-                    onClick={() => void loadSearchResult(result)}
-                  >
-                    <strong>{result.symbol}</strong>
-                    <span>{result.name}</span>
-                    <span>{result.exchange}</span>
-                  </button>
-                ))}
+                {searchResults.slice(0, 10).map((result) => {
+                  const tag = assetTagLabel(result.assetClass);
+                  return (
+                    <button
+                      key={result.symbol}
+                      type="button"
+                      disabled={searching}
+                      onClick={() => void loadSearchResult(result)}
+                    >
+                      <strong>{result.symbol}</strong>
+                      <span>{result.name}</span>
+                      <span>
+                        {tag ? <em className="asset-tag">{tag}</em> : null}
+                        {result.assetClass === "CRYPTO" ? null : result.exchange}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             ) : null}
 
@@ -2461,6 +2556,9 @@ export function SimulatorApp({
               <div className="quote-identity">
                 <div>
                   <h2 id="quote-heading">{selectedQuote.symbol}</h2>
+                  {selectedAssetTag ? (
+                    <em className="asset-tag">{selectedAssetTag}</em>
+                  ) : null}
                   <span>{selectedQuote.name}</span>
                 </div>
                 {!quoteLoaded ? (
@@ -2482,14 +2580,35 @@ export function SimulatorApp({
                 )}
                 <div className="quote-price">
                   <strong>{quoteLoaded ? formatMoney(selectedQuote.priceCadCents) : "—"}</strong>
-                  <span>CAD</span>
+                  <span>{selectedIsCrypto ? "CAD per lot" : "CAD"}</span>
                   {quoteLoaded ? <ChangeValue percent={selectedQuote.changePercent} /> : null}
                 </div>
+                {selectedIsCrypto ? (
+                  <small className="quote-lot-note">
+                    1 lot = {tokenAmountLabel(1, selectedLotSize, selectedQuote.symbol)}
+                    {quoteLoaded
+                      ? ` · 1 ${selectedToken} ≈ ${formatPerTokenMoney(
+                          selectedQuote.priceCadCents,
+                          selectedLotSize,
+                          "CAD",
+                        )} CAD`
+                      : ""}
+                  </small>
+                ) : null}
                 {quoteLoaded && selectedQuote.listingCurrency === "USD" ? (
                   <small>
-                    Native quote {formatNativeMoney(selectedQuote.priceCents, "USD")} ·
+                    Native quote {formatNativeMoney(selectedQuote.priceCents, "USD")}
+                    {selectedIsCrypto ? " per lot" : ""} ·
                     FX {(selectedQuote.fxRateBasisPoints / 10000).toFixed(4)}
                   </small>
+                ) : null}
+                {tradingHaltReason ? (
+                  <p className="quote-halt" id="quote-halt">
+                    <PauseIcon />
+                    <span>
+                      <strong>Trading paused.</strong> {tradingHaltReason}
+                    </span>
+                  </p>
                 ) : null}
               </div>
             </section>
@@ -2517,8 +2636,8 @@ export function SimulatorApp({
                 </dd>
               </div>
               <div>
-                <dt>Exchange</dt>
-                <dd>{selectedQuote.exchange}</dd>
+                <dt>{selectedIsCrypto ? "Trading hours" : "Exchange"}</dt>
+                <dd>{selectedIsCrypto ? "Crypto · 24/7" : selectedQuote.exchange}</dd>
               </div>
               <div>
                 <dt>Sector</dt>
@@ -2545,7 +2664,8 @@ export function SimulatorApp({
                   ))}
                 </div>
                 <span className="chart-kind">
-                  Raw close · trading gaps compressed · {selectedQuote.listingCurrency}
+                  Raw close{selectedIsCrypto ? " per lot" : ""} · trading gaps compressed ·{" "}
+                  {selectedQuote.listingCurrency}
                 </span>
               </div>
               <LineChart
@@ -2613,7 +2733,7 @@ export function SimulatorApp({
 
               <div className="ticket-fields">
                 <label>
-                  <span>Quantity</span>
+                  <span>Quantity · {selectedIsCrypto ? "Lots" : "Shares"}</span>
                   <input
                     inputMode="numeric"
                     min="1"
@@ -2622,12 +2742,27 @@ export function SimulatorApp({
                     type="number"
                     value={quantity}
                     onChange={(event) => setQuantity(event.target.value)}
-                    aria-describedby="quantity-help"
+                    aria-describedby={
+                      selectedIsCrypto
+                        ? `quantity-help quantity-tokens${tradingHaltReason ? " quote-halt" : ""}`
+                        : `quantity-help${tradingHaltReason ? " quote-halt" : ""}`
+                    }
                   />
-                  <small id="quantity-help">Whole shares only</small>
+                  <small id="quantity-help">
+                    {selectedIsCrypto
+                      ? `Whole lots only · 1 lot = ${tokenAmountLabel(1, selectedLotSize, selectedQuote.symbol)}`
+                      : "Whole shares only"}
+                  </small>
+                  {selectedIsCrypto ? (
+                    <small id="quantity-tokens" className="quantity-tokens">
+                      {quantityIsValid
+                        ? `= ${tokenAmountLabel(wholeQuantity, selectedLotSize, selectedQuote.symbol)}`
+                        : `Enter lots to see the ${selectedToken} amount`}
+                    </small>
+                  ) : null}
                 </label>
                 <div>
-                  <span>Estimated fill</span>
+                  <span>{selectedIsCrypto ? "Estimated fill per lot" : "Estimated fill"}</span>
                   <strong>
                     {quoteLoaded ? formatMoney(selectedQuote.priceCadCents) : "—"}
                   </strong>
@@ -2638,18 +2773,26 @@ export function SimulatorApp({
                   </small>
                 </div>
                 <div>
-                  <span>{side === "BUY" ? "Available cash" : "Shares held"}</span>
+                  <span>
+                    {side === "BUY"
+                      ? "Available cash"
+                      : selectedIsCrypto
+                        ? "Lots held"
+                        : "Shares held"}
+                  </span>
                   <strong>
                     {side === "BUY"
                       ? formatMoney(portfolio.buyingPowerCents)
-                      : number.format(holdingForQuote?.quantity ?? 0)}
+                      : number.format(heldQuantity)}
                   </strong>
                   <small>
                     {side === "BUY"
                       ? isPlatformAdmin
                         ? "Admin test account"
                         : "Team account"
-                      : selectedQuote.symbol}
+                      : selectedIsCrypto
+                        ? `${selectedQuote.symbol} · ${tokenAmountLabel(heldQuantity, selectedLotSize, selectedQuote.symbol)}`
+                        : selectedQuote.symbol}
                   </small>
                 </div>
                 <div>
@@ -2664,6 +2807,7 @@ export function SimulatorApp({
                   className={`button button--primary ${side === "SELL" ? "button--sell" : ""}`}
                   type="submit"
                   disabled={!canTrade || ticketStatus.kind === "working"}
+                  aria-describedby={tradingHaltReason ? "quote-halt" : undefined}
                 >
                   {ticketStatus.kind === "working"
                     ? "Recording order…"

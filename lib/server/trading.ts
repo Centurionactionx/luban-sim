@@ -11,13 +11,23 @@ import type {
 } from "../contracts";
 import { AppError } from "../errors";
 import { acquireAccountReadLock } from "./database";
+import { cryptoTokenSymbol, formatTokenQuantity, unitWord } from "../lots";
 import { assertTeamLedgerReconciles, getDb } from "./db";
-import { marketDataNow, normalizeMarketSymbol, requireQuote } from "./quotes";
+import {
+  isAssetClassEnabled,
+  isSymbolBlocked,
+  MARKET_SYMBOL_PATTERN,
+  marketDataNow,
+  normalizeMarketSymbol,
+  requireQuote,
+} from "./quotes";
 
 const MAX_ORDER_QUANTITY = 100_000;
 const DEFAULT_MAX_ORDERS_PER_MINUTE = 20;
 const ORDER_RATE_WINDOW_MS = 60_000;
 const DEFAULT_MAX_QUOTE_AGE_MINUTES = 20;
+/** New crypto buys need a lot worth at least $1, or rounding gets too coarse. */
+const MIN_CRYPTO_LOT_CAD_CENTS = 100;
 
 /**
  * Oldest quote an order may fill against. Free TSX data runs about fifteen
@@ -99,7 +109,7 @@ function normalizeOrderInput(input: PlaceOrderInput): NormalizedOrderInput {
   if (!actorUserId) {
     throw new AppError("UNAUTHORIZED", "Sign in before placing an order.", 401);
   }
-  if (!symbol || !/^[A-Z0-9.-]{1,16}$/.test(symbol)) {
+  if (!symbol || !MARKET_SYMBOL_PATTERN.test(symbol)) {
     throw new AppError("INVALID_SYMBOL", "Enter a valid market symbol.", 400);
   }
   if (side !== "BUY" && side !== "SELL") {
@@ -245,6 +255,14 @@ export async function placeOrder(input: PlaceOrderInput): Promise<TradeReceipt> 
   // the quotes they produce) drives the quote lookup and both freshness checks.
   const marketNow = marketDataNow();
   const quote = await requireQuote(normalized.symbol, marketNow);
+  // A known price that may not trade, e.g. a crypto pair failing its data
+  // checks or one valued at its last known price. Checked first so the
+  // trader sees the specific reason. Nothing fills until the pair recovers.
+  if (quote.tradingHaltReason) {
+    throw new AppError("TRADING_HALTED", quote.tradingHaltReason, 409, {
+      symbol: quote.symbol,
+    });
+  }
   if (quote.isStale) {
     throw new AppError(
       "MARKET_DATA_STALE",
@@ -284,6 +302,37 @@ export async function placeOrder(input: PlaceOrderInput): Promise<TradeReceipt> 
         `The market for ${quote.symbol} is closed. Orders can be placed during regular trading hours.`,
         409,
         { symbol: quote.symbol, opensAt: quote.marketOpensAt },
+      );
+    }
+  }
+  // Switching an asset class off or blocking a symbol stops new buys only,
+  // so nobody is ever trapped in a position they cannot sell.
+  if (normalized.side === "BUY") {
+    if (!isAssetClassEnabled(quote.assetClass)) {
+      throw new AppError(
+        "ASSET_CLASS_DISABLED",
+        `${quote.assetClass === "CRYPTO" ? "Crypto" : "ETF"} trading is not open in this competition.`,
+        409,
+        { symbol: quote.symbol, assetClass: quote.assetClass },
+      );
+    }
+    if (isSymbolBlocked(quote.symbol)) {
+      throw new AppError(
+        "SYMBOL_BLOCKED",
+        `${quote.symbol} has been removed from the simulator. Existing holdings can still be sold.`,
+        409,
+        { symbol: quote.symbol },
+      );
+    }
+    if (
+      quote.assetClass === "CRYPTO" &&
+      quote.priceCadCents < MIN_CRYPTO_LOT_CAD_CENTS
+    ) {
+      throw new AppError(
+        "LOT_TOO_SMALL",
+        `One lot of ${quote.symbol} is now worth less than $1, so new buys are paused. You can still sell.`,
+        409,
+        { symbol: quote.symbol },
       );
     }
   }
@@ -484,7 +533,12 @@ export async function placeOrder(input: PlaceOrderInput): Promise<TradeReceipt> 
       );
       const currentQuantity = Number(holding?.quantity ?? 0);
       const currentAverageCostCents = Number(holding?.average_cost_cents ?? 0);
-      const shareWord = normalized.quantity === 1 ? "share" : "shares";
+      const shareWord = unitWord(quote.assetClass, normalized.quantity);
+      // Crypto notes also give the token amount, e.g. "3 lots (0.0003 BTC)".
+      const amountText =
+        quote.assetClass === "CRYPTO"
+          ? `${normalized.quantity} ${shareWord} (${formatTokenQuantity(normalized.quantity, quote.lotSize)} ${cryptoTokenSymbol(normalized.symbol)})`
+          : `${normalized.quantity} ${shareWord}`;
       let cashAfterCents: number;
       let holdingQuantityAfter: number;
       let averageCostAfterCents: number;
@@ -513,7 +567,7 @@ export async function placeOrder(input: PlaceOrderInput): Promise<TradeReceipt> 
         if (normalized.quantity > currentQuantity) {
           throw new AppError(
             "INSUFFICIENT_SHARES",
-            `${isAdminSandbox ? "The test account" : "The team"} only owns ${currentQuantity} ${currentQuantity === 1 ? "share" : "shares"} of ${normalized.symbol}.`,
+            `${isAdminSandbox ? "The test account" : "The team"} only owns ${currentQuantity} ${unitWord(quote.assetClass, currentQuantity)} of ${normalized.symbol}.`,
             409,
             {
               availableShares: currentQuantity,
@@ -615,7 +669,7 @@ export async function placeOrder(input: PlaceOrderInput): Promise<TradeReceipt> 
           normalized.side === "BUY" ? -grossCents : grossCents,
           normalized.symbol,
           normalized.quantity,
-          `${verb} ${normalized.quantity} ${shareWord} of ${normalized.symbol}`,
+          `${verb} ${amountText} of ${normalized.symbol}`,
           createdAt,
         ],
       );
@@ -630,7 +684,7 @@ export async function placeOrder(input: PlaceOrderInput): Promise<TradeReceipt> 
           account.team_id,
           normalized.actorUserId,
           `${normalized.side} ${normalized.symbol}`,
-          `${account.actor_name} ${verb.toLowerCase()} ${normalized.quantity} ${shareWord} of ${normalized.symbol}.`,
+          `${account.actor_name} ${verb.toLowerCase()} ${amountText} of ${normalized.symbol}.`,
           createdAt,
         ],
       );

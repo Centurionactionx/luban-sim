@@ -21,7 +21,7 @@ import {
 import { postgresConnectionOptions } from "./postgres-config";
 
 const DEFAULT_DATABASE_PATH = join(process.cwd(), "data", "luban.sqlite");
-const SCHEMA_VERSION = 10;
+const SCHEMA_VERSION = 11;
 
 const globalDatabase = globalThis as typeof globalThis & {
   __lubanSqliteHandle?: DatabaseSync;
@@ -132,6 +132,7 @@ function createSqliteSchema(database: DatabaseSync): void {
   database.exec(SQLITE_SCHEMA_SQL);
   ensureOrderReceiptColumns(database);
   ensureInstrumentRefreshColumn(database);
+  ensureInstrumentAssetColumns(database);
   ensureAccountColumns(database);
   ensureDeletedStatus(database);
   ensureAdminSandboxOwnerColumn(database);
@@ -246,7 +247,8 @@ const SHARED_TABLE_BODIES = {
       previous_close_cents ${big} NOT NULL CHECK (previous_close_cents > 0),
       fx_rate_basis_points ${big} NOT NULL CHECK (fx_rate_basis_points > 0),
       is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
-      auto_refresh INTEGER NOT NULL DEFAULT 1 CHECK (auto_refresh IN (0, 1))`,
+      auto_refresh INTEGER NOT NULL DEFAULT 1 CHECK (auto_refresh IN (0, 1)),
+      ${instrumentAssetColumns(big)}`,
   holdings: (big: string) => `
       team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
       symbol TEXT NOT NULL REFERENCES instruments(symbol),
@@ -559,10 +561,35 @@ export async function initializeAppDatabaseSchema(app: AppDatabase): Promise<voi
 }
 
 /**
+ * Asset-class columns on instruments. A crypto instrument's prices and
+ * quantities are per lot of 10^lot_exponent tokens, fixed when it is first
+ * listed. last_price_* is the last good per-lot price, used to keep valuing
+ * holdings when a live quote cannot be produced.
+ */
+function instrumentAssetColumnList(big: string): string[] {
+  return [
+    "asset_class TEXT NOT NULL DEFAULT 'STOCK' CHECK (asset_class IN ('STOCK', 'ETF', 'CRYPTO'))",
+    "lot_exponent INTEGER NOT NULL DEFAULT 0 CHECK (lot_exponent BETWEEN -12 AND 15)",
+    `last_price_cents ${big} CHECK (last_price_cents IS NULL OR last_price_cents > 0)`,
+    "last_priced_at TEXT",
+  ];
+}
+
+function instrumentAssetColumns(big: string): string {
+  return instrumentAssetColumnList(big).join(",\n      ");
+}
+
+/**
  * Idempotent, cheap migrations applied to an already-provisioned PostgreSQL
  * schema on cold start (fresh databases get the current DDL directly).
  */
 export async function runPostgresMigrations(tx: DbExecutor): Promise<void> {
+  // v11: ETFs and lot-based crypto. Every existing instrument is a stock
+  // priced per share, which is exactly what the defaults describe.
+  for (const column of instrumentAssetColumnList("BIGINT")) {
+    await tx.run(`ALTER TABLE instruments ADD COLUMN IF NOT EXISTS ${column}`);
+  }
+
   // v10: only invitations minted by the out-of-band bootstrap script may lack
   // a creator. Existing rows default to 0, so a creatorless invitation left
   // over from a deleted account fails closed.
@@ -1151,6 +1178,19 @@ function ensureAccountColumns(database: DatabaseSync): void {
       500,
       { violations: violations.length },
     );
+  }
+}
+
+function ensureInstrumentAssetColumns(database: DatabaseSync): void {
+  const columns = database.prepare("PRAGMA table_info(instruments)").all() as unknown as Array<{
+    name: string;
+  }>;
+
+  for (const column of instrumentAssetColumnList("INTEGER")) {
+    const name = column.split(" ", 1)[0];
+    if (!columns.some((existing) => existing.name === name)) {
+      database.exec(`ALTER TABLE instruments ADD COLUMN ${column};`);
+    }
   }
 }
 

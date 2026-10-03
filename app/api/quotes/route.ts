@@ -1,6 +1,7 @@
 import {
   assertRequestAllowed,
   listQuotes,
+  MARKET_SYMBOL_PATTERN,
   normalizeMarketSymbol,
   refreshAllQuotes,
   refreshQuote,
@@ -38,7 +39,7 @@ export async function GET(request: Request): Promise<Response> {
     }
 
     if (symbol) {
-      if (!/^[A-Z0-9.-]{1,16}$/.test(symbol)) {
+      if (!MARKET_SYMBOL_PATTERN.test(symbol)) {
         throw new ApiError(
           400,
           "INVALID_SYMBOL",

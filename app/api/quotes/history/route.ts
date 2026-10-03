@@ -2,6 +2,7 @@ import {
   QUOTE_RANGES,
   assertRequestAllowed,
   getQuoteHistory,
+  MARKET_SYMBOL_PATTERN,
   normalizeMarketSymbol,
   refreshQuote,
   type QuoteRange,
@@ -29,7 +30,7 @@ export async function GET(request: Request): Promise<Response> {
     const symbol = rawSymbol ? normalizeMarketSymbol(rawSymbol) : undefined;
     const rangeValue = searchParams.get("range")?.trim().toUpperCase() ?? "1D";
 
-    if (!symbol || !/^[A-Z0-9.-]{1,16}$/.test(symbol)) {
+    if (!symbol || !MARKET_SYMBOL_PATTERN.test(symbol)) {
       throw new ApiError(
         400,
         "INVALID_SYMBOL",

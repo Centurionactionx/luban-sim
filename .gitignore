@@ -27,6 +27,9 @@
 /data/*.sqlite-shm
 /data/*.sqlite-wal
 
+# database backups (contain personal data)
+/backups/
+
 # misc
 .DS_Store
 *.pem

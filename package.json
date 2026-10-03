@@ -21,7 +21,8 @@
     "test:coverage": "vitest run --coverage",
     "test:e2e": "node scripts/run-e2e.mjs",
     "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm test:e2e",
-    "bootstrap:admin": "tsx scripts/create-admin-invitation.ts"
+    "bootstrap:admin": "tsx scripts/create-admin-invitation.ts",
+    "backup:db": "tsx scripts/export-database.ts"
   },
   "dependencies": {
     "@clerk/nextjs": "^7.8.2",

@@ -334,6 +334,8 @@ export async function calculatePortfolio(
         totalValueCents,
       ),
       quoteAsOf: holding.quote.asOf,
+      assetClass: holding.quote.assetClass ?? "STOCK",
+      lotSize: holding.quote.lotSize ?? 1,
     }))
     .sort((left, right) => right.marketValueCents - left.marketValueCents);
 

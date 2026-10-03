@@ -122,6 +122,7 @@ export {
   getQuote,
   getQuoteHistory,
   listQuotes,
+  MARKET_SYMBOL_PATTERN,
   normalizeMarketSymbol,
   refreshAllQuotes,
   refreshQuote,

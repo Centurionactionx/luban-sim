@@ -48,9 +48,47 @@ Clerk's session `fva` claim distinguishes an enrolled account from a session tha
 
 Account deletion preserves trading attribution. Audit text and the upstream identity provider have separate retention behavior; this is not a complete personal-data erasure workflow.
 
+## Database backups
+
+`pnpm backup:db` writes a read-only JSON export of every application table to `backups/luban-db-<timestamp>.json` and prints row counts per table. It loads `.env*` files like the app, uses the same TLS rules, reads all tables in one `READ ONLY` snapshot, and never writes to the database. It refuses to run unless `LUBAN_DATABASE_PROVIDER=postgres` is set, so point `LUBAN_DATABASE_URL` at the database you mean to back up, for example only for that command. The `backups/` folder is gitignored. The file contains names and email addresses, so store it somewhere private. There is no restore command yet; the export is a record to rebuild from by hand.
+
+## ETFs and crypto
+
+ETFs and crypto are off by default and controlled by environment variables (see `.env.example`):
+
+- `LUBAN_ENABLE_ETFS=true` lets students search for and buy ETFs listed on NYSE, NYSE Arca, NYSE American, NASDAQ, Cboe BZX and TSX. They trade like stocks: exchange hours and whole shares. Leveraged and inverse ETFs are filtered out by fund name, since the competition has no leverage or short selling.
+- `LUBAN_ENABLE_CRYPTO=true` lets students add any crypto pair Yahoo Finance quotes in CAD or USD, as long as it passes the data checks: a price updated in the last 10 minutes, 24-hour volume of at least `LUBAN_CRYPTO_MIN_VOLUME` (default 250,000), and at least four hours of recent price history. USD pairs are converted with the live USD to CAD rate. Crypto trades 24/7 in whole lots. A coin's lot is the smallest power of ten of tokens worth at least $10 CAD when the coin is first added, and it never changes after that.
+
+Both switches are read at request time, but Vercel only applies environment variable changes on a new deployment.
+
+### Turning them on during a live competition
+
+Adding asset classes changes the published contest rules, which promise participants an email before a change takes effect. Follow this order:
+
+1. Back up the production database with `pnpm backup:db` and check the row counts.
+2. Deploy the code with both switches still off in Production. Nothing changes for students yet.
+3. On a preview deployment with its own database, set `LUBAN_ENABLE_ETFS=true` and `LUBAN_ENABLE_CRYPTO=true` and test: search and buy an ETF during market hours, confirm a leveraged ETF such as TQQQ doesn't appear, add a large coin and a small one, buy and sell whole lots, and check the dashboard and leaderboard values.
+4. Publish the updated contest rules on the public site and email participants with the start time.
+5. At that time, set both variables in Vercel Production and redeploy. Confirm in the production app that ETFs and crypto show up in search.
+
+### Blocking a symbol
+
+Add it to `LUBAN_BLOCKED_SYMBOLS` as a comma-separated list (for example `DOGE-USD,PEPE24478-USD`) and redeploy. Use the exact symbol the simulator shows. Blocking one pair of a coin (for example `DOGE-USD`) also blocks its other pair (`DOGE-CAD`). A blocked symbol disappears from search and can't be bought.
+
+### What students can do when something is switched off
+
+Turning off `LUBAN_ENABLE_ETFS` or `LUBAN_ENABLE_CRYPTO`, or blocking a symbol, stops new buys only. Students keep their holdings, the holdings keep counting toward portfolio value, and they can still sell them. Nobody is trapped in a position.
+
+Crypto has two further pauses that need no action from a host:
+
+- If a coin fails the data checks or stops being quoted, trading in it pauses in both directions and it's valued at its last known price until it recovers.
+- If one lot of a coin becomes worth less than $1, new buys pause but selling still works.
+
+All prices, including crypto and the USD to CAD rate, come from Yahoo Finance's unofficial API, which has no uptime guarantee. When it's unavailable, trading pauses for the affected symbols.
+
 ## Schema and transactions
 
-The application creates and seeds its schema on first use, with an advisory lock coordinating PostgreSQL initialization. Incremental schema changes are implemented in `lib/server/db.ts`. Row-level security is enabled without anonymous policies; browser clients do not access the database directly. Formal versioned migration tooling, backups, and operational monitoring remain deployment work.
+The application creates and seeds its schema on first use, with an advisory lock coordinating PostgreSQL initialization. Incremental schema changes are implemented in `lib/server/db.ts`. Row-level security is enabled without anonymous policies; browser clients do not access the database directly. Formal versioned migration tooling, scheduled backups, and operational monitoring remain deployment work; `pnpm backup:db` covers manual exports.
 
 PostgreSQL orders hold a shared account-administration lock, a per-trader advisory lock, and the affected team's row lock. Account, invitation, and competition administration uses the exclusive account lock. This protects permission changes, invitation limits, idempotency, order limits, and portfolio updates across application instances. SQLite serializes writers with `BEGIN IMMEDIATE`.
 

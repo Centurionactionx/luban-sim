@@ -1,4 +1,5 @@
 import type {
+  AssetClass,
   InstrumentSearchResult,
   Quote,
   QuoteHistory,
@@ -7,6 +8,7 @@ import type {
 } from "../contracts";
 import type { HistoricalMarketPrice } from "../backtest-contracts";
 import { AppError } from "../errors";
+import { lotExponentFromSize, lotSizeFromExponent } from "../lots";
 import { MARKET_REFRESH_INTERVAL_MS } from "../market-config";
 import { getDb } from "./db";
 
@@ -19,7 +21,65 @@ const DAILY_HISTORY_TTL_MS = 15 * 60_000;
 const INTRADAY_HISTORY_TTL_MS = MARKET_REFRESH_INTERVAL_MS;
 const SEARCH_TTL_MS = 10 * 60_000;
 const MARKET_DATA_TIMEOUT_MS = 8_000;
-const MARKET_SYMBOL_PATTERN = /^[A-Z0-9.-]{1,16}$/;
+// Crypto pairs can carry a Yahoo disambiguation id, e.g. PEPE24478-USD.
+export const MARKET_SYMBOL_PATTERN = /^[A-Z0-9.-]{1,24}$/;
+
+const CRYPTO_EXCHANGE = "Crypto";
+const CRYPTO_SECTOR = "Cryptocurrency";
+/** A new crypto listing's lot is the smallest power of ten worth at least this. */
+const MIN_LOT_VALUE_CAD = 10;
+const MIN_LOT_EXPONENT = -12;
+const MAX_LOT_EXPONENT = 15;
+const DEFAULT_CRYPTO_MIN_VOLUME = 250_000;
+const CRYPTO_MAX_QUOTE_AGE_MS = 10 * 60_000;
+/** Five-minute bars in the last day; 48 is four hours of real trading. */
+const CRYPTO_MIN_HISTORY_POINTS = 48;
+/** Last-known crypto prices are written to the database at most this often. */
+const LAST_PRICE_PERSIST_INTERVAL_MS = 10 * 60_000;
+
+/** ETFs are searchable and buyable only when LUBAN_ENABLE_ETFS=true. */
+export function isEtfTradingEnabled(): boolean {
+  return process.env.LUBAN_ENABLE_ETFS?.trim().toLowerCase() === "true";
+}
+
+/** Crypto is searchable and buyable only when LUBAN_ENABLE_CRYPTO=true. */
+export function isCryptoTradingEnabled(): boolean {
+  return process.env.LUBAN_ENABLE_CRYPTO?.trim().toLowerCase() === "true";
+}
+
+export function isAssetClassEnabled(assetClass: AssetClass | undefined): boolean {
+  if (assetClass === "ETF") return isEtfTradingEnabled();
+  if (assetClass === "CRYPTO") return isCryptoTradingEnabled();
+  return true;
+}
+
+/**
+ * Comma-separated symbols a host has pulled from the simulator
+ * (LUBAN_BLOCKED_SYMBOLS). Blocked symbols cannot be found or bought;
+ * existing holdings can still be sold.
+ */
+export function isSymbolBlocked(symbol: string): boolean {
+  const raw = process.env.LUBAN_BLOCKED_SYMBOLS;
+  if (!raw) return false;
+  const normalized = normalizeMarketSymbol(symbol);
+  // Blocking either pair of a coin blocks the coin: BTC-CAD also blocks BTC-USD.
+  const coin = cryptoPairBase(normalized);
+  return raw.split(",").some((entry) => {
+    if (!entry.trim()) return false;
+    const blocked = normalizeMarketSymbol(entry);
+    return blocked === normalized || (coin !== null && cryptoPairBase(blocked) === coin);
+  });
+}
+
+function cryptoPairBase(symbol: string): string | null {
+  const match = symbol.match(/^(.+)-(?:CAD|USD)$/);
+  return match ? match[1] : null;
+}
+
+function cryptoMinVolume(): number {
+  const raw = Number(process.env.LUBAN_CRYPTO_MIN_VOLUME);
+  return Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_CRYPTO_MIN_VOLUME;
+}
 
 const YAHOO_EXCHANGES: Record<
   string,
@@ -36,6 +96,7 @@ const YAHOO_EXCHANGES: Record<
   PCX: { exchange: "NYSE Arca", listingCurrency: "USD" },
   TOR: { exchange: "TSX", listingCurrency: "CAD" },
   TSX: { exchange: "TSX", listingCurrency: "CAD" },
+  BTS: { exchange: "Cboe BZX", listingCurrency: "USD" },
 };
 
 export const QUOTE_RANGES = ["1D", "5D", "1M", "3M"] as const;
@@ -83,6 +144,16 @@ export interface MarketInstrument {
   basePriceCents: number;
   previousCloseCents: number;
   fxRateBasisPoints: number;
+  /** Missing means STOCK. */
+  assetClass?: AssetClass;
+  /**
+   * Crypto lot size as a power of ten. Null only while a new crypto listing
+   * is being discovered, before its first price fixes the lot.
+   */
+  lotExponent?: number | null;
+  /** Last good per-lot price (listing currency), when one was recorded. */
+  lastPriceCents?: number | null;
+  lastPricedAt?: string | null;
 }
 
 /**
@@ -127,7 +198,16 @@ interface InstrumentRow {
   base_price_cents: number;
   previous_close_cents: number;
   fx_rate_basis_points: number;
+  asset_class: AssetClass | null;
+  lot_exponent: number | null;
+  last_price_cents: number | null;
+  last_priced_at: string | null;
 }
+
+const INSTRUMENT_COLUMNS = `
+  symbol, name, exchange, sector, listing_currency,
+  base_price_cents, previous_close_cents, fx_rate_basis_points,
+  asset_class, lot_exponent, last_price_cents, last_priced_at`;
 
 interface YahooChartMeta {
   currency?: unknown;
@@ -136,6 +216,7 @@ interface YahooChartMeta {
   instrumentType?: unknown;
   regularMarketTime?: unknown;
   regularMarketPrice?: unknown;
+  regularMarketVolume?: unknown;
   chartPreviousClose?: unknown;
   previousClose?: unknown;
   exchangeTimezoneName?: unknown;
@@ -272,8 +353,79 @@ function rowToInstrument(row: InstrumentRow): MarketInstrument {
     basePriceCents: Number(row.base_price_cents),
     previousCloseCents: Number(row.previous_close_cents),
     fxRateBasisPoints: Number(row.fx_rate_basis_points),
+    assetClass: row.asset_class ?? "STOCK",
+    lotExponent: Number(row.lot_exponent ?? 0),
+    lastPriceCents:
+      row.last_price_cents === null || row.last_price_cents === undefined
+        ? null
+        : Number(row.last_price_cents),
+    lastPricedAt: row.last_priced_at ?? null,
   };
 }
+
+function instrumentAssetClass(instrument: MarketInstrument): AssetClass {
+  return instrument.assetClass ?? "STOCK";
+}
+
+/** Multiply by 10^exponent without float drift on negative exponents. */
+function scaleByPowerOfTen(value: number, exponent: number): number {
+  return exponent >= 0 ? value * 10 ** exponent : value / 10 ** -exponent;
+}
+
+/**
+ * Lot exponent for a newly listed crypto pair: the smallest power of ten
+ * whose lot is worth at least MIN_LOT_VALUE_CAD. Fixed forever after listing,
+ * because holdings are counted in lots.
+ */
+export function cryptoLotExponent(tokenPriceCad: number): number {
+  if (!Number.isFinite(tokenPriceCad) || tokenPriceCad <= 0) {
+    throw new AppError(
+      "ASSET_NOT_TRADABLE",
+      "This crypto pair has no usable price.",
+      422,
+    );
+  }
+  // "+ 0" turns Math.ceil's -0 (for a token worth exactly $10) into 0.
+  const exponent = Math.ceil(Math.log10(MIN_LOT_VALUE_CAD / tokenPriceCad) - 1e-9) + 0;
+  if (exponent < MIN_LOT_EXPONENT || exponent > MAX_LOT_EXPONENT) {
+    throw new AppError(
+      "ASSET_NOT_TRADABLE",
+      "This crypto pair's price is outside the range the simulator supports.",
+      422,
+    );
+  }
+  return exponent;
+}
+
+/**
+ * Data-quality checks every crypto quote must pass before it can trade:
+ * a fresh price, real trading volume, and a full-enough recent history.
+ * Returns a plain-language problem, or null when the pair looks healthy.
+ */
+export function cryptoQualityProblem(
+  meta: { regularMarketTime?: unknown; regularMarketVolume?: unknown },
+  closes: Array<number | null>,
+  nowMs: number,
+): string | null {
+  const marketTime = finiteNumber(meta.regularMarketTime);
+  if (marketTime === null || nowMs - marketTime * 1_000 > CRYPTO_MAX_QUOTE_AGE_MS) {
+    return "its price has not updated in the last 10 minutes";
+  }
+  const volume = finiteNumber(meta.regularMarketVolume);
+  if (volume === null || volume < cryptoMinVolume()) {
+    return "it does not have enough trading volume";
+  }
+  if (closes.filter((value) => value !== null).length < CRYPTO_MIN_HISTORY_POINTS) {
+    return "it does not have enough recent price history";
+  }
+  return null;
+}
+
+const ALWAYS_OPEN_SESSION = {
+  marketOpen: true,
+  marketClosesAt: null,
+  marketOpensAt: null,
+} as const;
 
 function hashString(value: string): number {
   let hash = 2_166_136_261;
@@ -497,6 +649,30 @@ function isExplicitDerivativeSecurity(symbol: string, name: string): boolean {
   );
 }
 
+/**
+ * Leveraged and inverse ETFs are excluded: the simulator deliberately has no
+ * leverage or short selling, and these funds are those strategies in a wrapper.
+ */
+function isLeveragedOrInverseFund(name: string): boolean {
+  return (
+    /\b[1-9](?:\.\d+)?x\b/i.test(name) ||
+    /\b(?:ultra|ultrapro|ultrashort|leveraged|inverse|bear)\b/i.test(name) ||
+    /\bshort\b(?![- ](?:term|duration|maturity))/i.test(name)
+  );
+}
+
+function cryptoPairCurrency(symbol: string): "CAD" | "USD" | null {
+  if (symbol.endsWith("-CAD")) return "CAD";
+  if (symbol.endsWith("-USD")) return "USD";
+  return null;
+}
+
+/** "Bitcoin USD" becomes "Bitcoin". */
+function cryptoDisplayName(name: string, currency: "CAD" | "USD"): string {
+  const suffix = ` ${currency}`;
+  return name.endsWith(suffix) ? name.slice(0, -suffix.length).trim() || name : name;
+}
+
 function parseYahooSearch(payload: unknown): InstrumentSearchResult[] {
   const rawQuotes = (payload as YahooSearchPayload | null)?.quotes;
   if (!Array.isArray(rawQuotes)) {
@@ -508,25 +684,50 @@ function parseYahooSearch(payload: unknown): InstrumentSearchResult[] {
   }
 
   const results = new Map<string, InstrumentSearchResult>();
+  const cryptoPairs = new Map<string, InstrumentSearchResult>();
   for (const rawQuote of rawQuotes) {
     if (!rawQuote || typeof rawQuote !== "object") continue;
     const quote = rawQuote as YahooSearchQuote;
-    if (quote.quoteType !== "EQUITY" || typeof quote.exchange !== "string") {
-      continue;
-    }
-
-    const market = YAHOO_EXCHANGES[quote.exchange];
     const symbol =
       typeof quote.symbol === "string"
         ? normalizeMarketSymbol(quote.symbol)
         : "";
-    if (!market || !MARKET_SYMBOL_PATTERN.test(symbol)) continue;
-
+    if (!MARKET_SYMBOL_PATTERN.test(symbol) || isSymbolBlocked(symbol)) continue;
     const longName = typeof quote.longname === "string" ? quote.longname.trim() : "";
     const shortName =
       typeof quote.shortname === "string" ? quote.shortname.trim() : "";
     const name = longName || shortName || symbol;
+
+    if (quote.quoteType === "CRYPTOCURRENCY") {
+      const currency = cryptoPairCurrency(symbol);
+      if (!isCryptoTradingEnabled() || !currency) continue;
+      // One row per coin: prefer the CAD pair, which needs no conversion.
+      const base = symbol.slice(0, -4);
+      const existing = cryptoPairs.get(base);
+      if (existing && existing.listingCurrency === "CAD") continue;
+      cryptoPairs.set(base, {
+        symbol,
+        name: cryptoDisplayName(name, currency),
+        exchange: CRYPTO_EXCHANGE,
+        sector: CRYPTO_SECTOR,
+        listingCurrency: currency,
+        assetClass: "CRYPTO",
+      });
+      continue;
+    }
+
+    const assetClass: AssetClass | null =
+      quote.quoteType === "EQUITY"
+        ? "STOCK"
+        : quote.quoteType === "ETF" && isEtfTradingEnabled()
+          ? "ETF"
+          : null;
+    if (!assetClass || typeof quote.exchange !== "string") continue;
+
+    const market = YAHOO_EXCHANGES[quote.exchange];
+    if (!market) continue;
     if (isExplicitDerivativeSecurity(symbol, name)) continue;
+    if (assetClass === "ETF" && isLeveragedOrInverseFund(name)) continue;
 
     const sector =
       typeof quote.sector === "string" && quote.sector.trim()
@@ -537,10 +738,14 @@ function parseYahooSearch(payload: unknown): InstrumentSearchResult[] {
         symbol,
         name,
         exchange: market.exchange,
-        sector,
+        sector: assetClass === "ETF" && sector === "Unclassified" ? "ETF" : sector,
         listingCurrency: market.listingCurrency,
+        assetClass,
       });
     }
+  }
+  for (const pair of cryptoPairs.values()) {
+    if (!results.has(pair.symbol)) results.set(pair.symbol, pair);
   }
   return [...results.values()];
 }
@@ -567,9 +772,24 @@ function validateYahooInstrument(
       ? chart.meta.instrumentType
       : null;
 
+  if (instrumentAssetClass(instrument) === "CRYPTO") {
+    if (
+      (chartSymbol && chartSymbol !== instrument.symbol) ||
+      instrumentType !== "CRYPTOCURRENCY" ||
+      (currency && currency !== instrument.listingCurrency)
+    ) {
+      throw new AppError(
+        "MARKET_DATA_INVALID",
+        `${instrument.symbol} is not a supported crypto pair.`,
+        503,
+      );
+    }
+    return;
+  }
+
   if (
     (chartSymbol && chartSymbol !== instrument.symbol) ||
-    (instrumentType && instrumentType !== "EQUITY") ||
+    (instrumentType && instrumentType !== "EQUITY" && instrumentType !== "ETF") ||
     (exchangeCode && !market) ||
     (market && market.exchange !== instrument.exchange) ||
     (market && market.listingCurrency !== instrument.listingCurrency) ||
@@ -577,7 +797,7 @@ function validateYahooInstrument(
   ) {
     throw new AppError(
       "MARKET_DATA_INVALID",
-      `${instrument.symbol} is not a supported NYSE, Nasdaq, or TSX stock.`,
+      `${instrument.symbol} is not a stock or ETF on an exchange the simulator supports.`,
       503,
     );
   }
@@ -689,6 +909,7 @@ function quoteFromYahooChart(
   chart: ParsedYahooChart,
   fxRateBasisPoints: number,
   nowMs: number,
+  lotExponent = 0,
 ): Quote {
   const closes = numberArray(chart.quote.close);
   const lastClose = [...closes].reverse().find((value) => value !== null) ?? null;
@@ -709,13 +930,32 @@ function quoteFromYahooChart(
     );
   }
 
-  const priceCents = Math.round(marketPrice * 100);
-  const previousCloseCents = Math.round(previousClose * 100);
+  const isCrypto = instrumentAssetClass(instrument) === "CRYPTO";
+  // Yahoo's search sometimes labels a fund as an equity; the chart's own
+  // type decides, so an ETF can never trade as a stock while ETFs are off.
+  const assetClass: AssetClass = isCrypto
+    ? "CRYPTO"
+    : chart.meta.instrumentType === "ETF"
+      ? "ETF"
+      : "STOCK";
+  // Crypto prices are per lot. A lot that rounds below one cent is held at
+  // one cent so the ledger never sees a zero price; buys are refused then.
+  const priceCents = Math.max(
+    isCrypto ? 1 : 0,
+    Math.round(scaleByPowerOfTen(marketPrice, lotExponent) * 100),
+  );
+  const previousCloseCents = Math.max(
+    isCrypto ? 1 : 0,
+    Math.round(scaleByPowerOfTen(previousClose, lotExponent) * 100),
+  );
   const priceCadCents = Math.round((priceCents * fxRateBasisPoints) / 10_000);
   const previousCloseCadCents = Math.round(
     (previousCloseCents * fxRateBasisPoints) / 10_000,
   );
   const changeCents = priceCents - previousCloseCents;
+  const qualityProblem = isCrypto
+    ? cryptoQualityProblem(chart.meta, numberArray(chart.quote.close), nowMs)
+    : null;
 
   return {
     symbol: instrument.symbol,
@@ -734,7 +974,12 @@ function quoteFromYahooChart(
     source: "YAHOO_FINANCE",
     sourceUrl: sourceUrl(instrument.symbol),
     isStale: false,
-    ...marketSessionFromYahooMeta(chart.meta, nowMs),
+    ...(isCrypto ? ALWAYS_OPEN_SESSION : marketSessionFromYahooMeta(chart.meta, nowMs)),
+    assetClass,
+    lotSize: lotSizeFromExponent(lotExponent),
+    tradingHaltReason: qualityProblem
+      ? `Trading in ${instrument.symbol} is paused because ${qualityProblem}.`
+      : null,
   };
 }
 
@@ -744,6 +989,10 @@ function historyFromYahooChart(
   chart: ParsedYahooChart,
   fetchedAt: Date,
 ): QuoteHistory {
+  // Charts use the same per-lot prices as quotes and orders.
+  const lotExponent = instrument.lotExponent ?? 0;
+  const toCents = (value: number) =>
+    Math.round(scaleByPowerOfTen(value, lotExponent) * 100);
   const opens = numberArray(chart.quote.open);
   const highs = numberArray(chart.quote.high);
   const lows = numberArray(chart.quote.low);
@@ -762,10 +1011,10 @@ function historyFromYahooChart(
     const volume = volumes[index] ?? null;
     unique.set(at, {
       at,
-      openCents: open === null ? null : Math.round(open * 100),
-      highCents: high === null ? null : Math.round(high * 100),
-      lowCents: low === null ? null : Math.round(low * 100),
-      closeCents: Math.round(close * 100),
+      openCents: open === null ? null : toCents(open),
+      highCents: high === null ? null : toCents(high),
+      lowCents: low === null ? null : toCents(low),
+      closeCents: toCents(close),
       volume: volume === null ? null : Math.round(volume),
     });
   }
@@ -790,9 +1039,11 @@ function historyFromYahooChart(
         : QUOTE_RANGE_CONFIG[range].interval,
     listingCurrency: instrument.listingCurrency,
     exchangeTimeZone:
-      typeof chart.meta.exchangeTimezoneName === "string"
-        ? chart.meta.exchangeTimezoneName
-        : "America/Toronto",
+      instrumentAssetClass(instrument) === "CRYPTO"
+        ? "America/Toronto"
+        : typeof chart.meta.exchangeTimezoneName === "string"
+          ? chart.meta.exchangeTimezoneName
+          : "America/Toronto",
     points,
     asOf: points.at(-1)!.at,
     fetchedAt: fetchedAt.toISOString(),
@@ -847,6 +1098,9 @@ export class DeterministicMarketDataProvider implements MarketDataProvider {
       marketOpen: true,
       marketClosesAt: null,
       marketOpensAt: null,
+      assetClass: instrumentAssetClass(instrument),
+      lotSize: lotSizeFromExponent(instrument.lotExponent ?? 0),
+      tradingHaltReason: null,
     };
   }
 
@@ -949,6 +1203,32 @@ export class DeterministicMarketDataProvider implements MarketDataProvider {
   }
 }
 
+/**
+ * Stocks and ETFs trade per share. A listed crypto pair keeps the lot it was
+ * given at listing; a pair being discovered gets one from its current price.
+ */
+function resolveLotExponent(
+  instrument: MarketInstrument,
+  chart: ParsedYahooChart,
+  fxRateBasisPoints: number,
+): number {
+  if (instrumentAssetClass(instrument) !== "CRYPTO") return 0;
+  if (typeof instrument.lotExponent === "number") return instrument.lotExponent;
+  const closes = numberArray(chart.quote.close);
+  const price =
+    finiteNumber(chart.meta.regularMarketPrice) ??
+    [...closes].reverse().find((value) => value !== null) ??
+    null;
+  if (price === null) {
+    throw new AppError(
+      "MARKET_DATA_INVALID",
+      `The market quote for ${instrument.symbol} was incomplete.`,
+      503,
+    );
+  }
+  return cryptoLotExponent((price * fxRateBasisPoints) / 10_000);
+}
+
 export class YahooFinanceMarketDataProvider implements MarketDataProvider {
   readonly id = "YAHOO_FINANCE";
   private readonly state = yahooState();
@@ -1010,6 +1290,7 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
           chart,
           fxRateBasisPoints,
           this.now(),
+          resolveLotExponent(instrument, chart, fxRateBasisPoints),
         );
         quoteGeneration += 1;
         boundedSet(this.state.quotes, instrument.symbol, {
@@ -1509,9 +1790,7 @@ function normalizeAt(at?: Date | string): Date {
 async function readInstruments(): Promise<MarketInstrument[]> {
   const db = await getDb();
   const rows = await db.all<InstrumentRow>(`
-      SELECT
-        symbol, name, exchange, sector, listing_currency,
-        base_price_cents, previous_close_cents, fx_rate_basis_points
+      SELECT ${INSTRUMENT_COLUMNS}
       FROM instruments
       WHERE is_active = 1
       ORDER BY symbol ASC
@@ -1524,7 +1803,8 @@ async function readRefreshInstruments(): Promise<MarketInstrument[]> {
   const rows = await db.all<InstrumentRow>(`
       SELECT
         i.symbol, i.name, i.exchange, i.sector, i.listing_currency,
-        i.base_price_cents, i.previous_close_cents, i.fx_rate_basis_points
+        i.base_price_cents, i.previous_close_cents, i.fx_rate_basis_points,
+        i.asset_class, i.lot_exponent, i.last_price_cents, i.last_priced_at
       FROM instruments AS i
       WHERE i.is_active = 1
         AND (
@@ -1547,9 +1827,7 @@ async function readInstrumentSearchResults(
   const db = await getDb();
   const rows = await db.all<InstrumentRow>(
     `
-      SELECT
-        symbol, name, exchange, sector, listing_currency,
-        base_price_cents, previous_close_cents, fx_rate_basis_points
+      SELECT ${INSTRUMENT_COLUMNS}
       FROM instruments
       WHERE is_active = 1
         AND (
@@ -1569,18 +1847,20 @@ async function readInstrumentSearchResults(
     exchange: row.exchange,
     sector: row.sector,
     listingCurrency: row.listing_currency,
+    assetClass: row.asset_class ?? "STOCK",
   }));
 }
 
-async function readInstrument(symbol: string): Promise<MarketInstrument | null> {
+async function readInstrument(
+  symbol: string,
+  options: { includeInactive?: boolean } = {},
+): Promise<MarketInstrument | null> {
   const db = await getDb();
   const row = await db.get<InstrumentRow>(
     `
-      SELECT
-        symbol, name, exchange, sector, listing_currency,
-        base_price_cents, previous_close_cents, fx_rate_basis_points
+      SELECT ${INSTRUMENT_COLUMNS}
       FROM instruments
-      WHERE symbol = ? AND is_active = 1
+      WHERE symbol = ? ${options.includeInactive ? "" : "AND is_active = 1"}
     `,
     [normalizeMarketSymbol(symbol)],
   );
@@ -1590,11 +1870,15 @@ async function readInstrument(symbol: string): Promise<MarketInstrument | null> 
 function instrumentFromSearchResult(
   result: InstrumentSearchResult,
 ): MarketInstrument {
+  const assetClass = result.assetClass ?? "STOCK";
   return {
     ...result,
+    assetClass,
     basePriceCents: 1,
     previousCloseCents: 1,
     fxRateBasisPoints: result.listingCurrency === "CAD" ? 10_000 : 13_600,
+    // A crypto pair's lot is fixed from its first real price.
+    lotExponent: assetClass === "CRYPTO" ? null : 0,
   };
 }
 
@@ -1603,13 +1887,16 @@ async function persistDiscoveredInstrument(
   quote: Quote,
 ): Promise<void> {
   const db = await getDb();
+  // asset_class and lot_exponent are deliberately left alone on conflict:
+  // holdings are counted in lots, so a listed pair's lot can never change.
   await db.run(
     `
       INSERT INTO instruments (
         symbol, name, exchange, sector, listing_currency,
         base_price_cents, previous_close_cents, fx_rate_basis_points,
-        is_active, auto_refresh
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 0)
+        is_active, auto_refresh,
+        asset_class, lot_exponent, last_price_cents, last_priced_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?)
       ON CONFLICT(symbol) DO UPDATE SET
         name = excluded.name,
         exchange = excluded.exchange,
@@ -1618,6 +1905,8 @@ async function persistDiscoveredInstrument(
         base_price_cents = excluded.base_price_cents,
         previous_close_cents = excluded.previous_close_cents,
         fx_rate_basis_points = excluded.fx_rate_basis_points,
+        last_price_cents = excluded.last_price_cents,
+        last_priced_at = excluded.last_priced_at,
         is_active = 1
     `,
     [
@@ -1629,8 +1918,70 @@ async function persistDiscoveredInstrument(
       quote.priceCents,
       quote.previousCloseCents,
       quote.fxRateBasisPoints,
+      quote.assetClass ?? "STOCK",
+      lotExponentFromSize(quote.lotSize ?? 1),
+      quote.priceCents,
+      new Date().toISOString(),
     ],
   );
+}
+
+const lastPricePersistedAt = new Map<string, number>();
+
+/**
+ * Remember the last good crypto price in the database, at most every ten
+ * minutes per pair. It values holdings when no live quote can be produced,
+ * for example after a cold start while a coin is no longer quoted.
+ */
+async function rememberLastPrice(quote: Quote | null): Promise<void> {
+  if (!quote || quote.assetClass !== "CRYPTO" || quote.isStale) return;
+  const nowMs = Date.now();
+  const previous = lastPricePersistedAt.get(quote.symbol);
+  if (previous !== undefined && nowMs - previous < LAST_PRICE_PERSIST_INTERVAL_MS) {
+    return;
+  }
+  boundedSet(lastPricePersistedAt, quote.symbol, nowMs);
+  const db = await getDb();
+  await db.run(
+    `UPDATE instruments
+     SET last_price_cents = ?, last_priced_at = ?
+     WHERE symbol = ?`,
+    [quote.priceCents, quote.asOf, quote.symbol],
+  );
+}
+
+/**
+ * A stand-in quote for a crypto holding whose live price is unavailable. It
+ * keeps the portfolio and leaderboard working at the last known price while
+ * trading in that pair stays paused.
+ */
+function lastKnownCryptoQuote(instrument: MarketInstrument): Quote {
+  const priceCents = instrument.lastPriceCents ?? instrument.basePriceCents;
+  const priceCadCents = Math.round(
+    (priceCents * instrument.fxRateBasisPoints) / 10_000,
+  );
+  return {
+    symbol: instrument.symbol,
+    name: instrument.name,
+    exchange: instrument.exchange,
+    sector: instrument.sector,
+    listingCurrency: instrument.listingCurrency,
+    priceCents,
+    priceCadCents,
+    previousCloseCents: priceCents,
+    previousCloseCadCents: priceCadCents,
+    changeCents: 0,
+    changePercent: 0,
+    fxRateBasisPoints: instrument.fxRateBasisPoints,
+    asOf: instrument.lastPricedAt ?? new Date(0).toISOString(),
+    source: activeProvider.id === "YAHOO_FINANCE" ? "YAHOO_FINANCE" : "LUBAN_SIMULATED",
+    sourceUrl: sourceUrl(instrument.symbol),
+    isStale: true,
+    ...ALWAYS_OPEN_SESSION,
+    assetClass: "CRYPTO",
+    lotSize: lotSizeFromExponent(instrument.lotExponent ?? 0),
+    tradingHaltReason: `Trading in ${instrument.symbol} is paused because no current price is available. It is valued at its last known price.`,
+  };
 }
 
 async function resolveInstrument(
@@ -1652,19 +2003,39 @@ export async function refreshQuote(
   let instrument = await readInstrument(normalizedSymbol);
   const quoteAt = normalizeAt(at);
   if (!instrument) {
-    if (!MARKET_SYMBOL_PATTERN.test(normalizedSymbol)) return null;
+    if (
+      !MARKET_SYMBOL_PATTERN.test(normalizedSymbol) ||
+      isSymbolBlocked(normalizedSymbol)
+    ) {
+      return null;
+    }
     const discovered = await resolveInstrument(normalizedSymbol);
     if (!discovered || discovered.symbol !== normalizedSymbol) return null;
-    instrument = instrumentFromSearchResult(discovered);
+    if (!isAssetClassEnabled(discovered.assetClass)) return null;
+    // A previously listed but deactivated row keeps its asset class and lot.
+    const previous = await readInstrument(normalizedSymbol, { includeInactive: true });
+    instrument = previous
+      ? { ...instrumentFromSearchResult(discovered), ...previous }
+      : instrumentFromSearchResult(discovered);
     const quote = activeProvider.refreshQuote
       ? await activeProvider.refreshQuote(instrument, quoteAt)
       : activeProvider.quote(instrument, quoteAt);
+    if (quote.assetClass === "CRYPTO" && quote.tradingHaltReason) {
+      throw new AppError(
+        "ASSET_NOT_TRADABLE",
+        `${normalizedSymbol} can't be added to the simulator: ${quote.tradingHaltReason.replace(/^Trading in \S+ is paused because /, "")}`,
+        422,
+        { symbol: normalizedSymbol },
+      );
+    }
     await persistDiscoveredInstrument(discovered, quote);
     return quote;
   }
-  return activeProvider.refreshQuote
-    ? activeProvider.refreshQuote(instrument, quoteAt)
+  const quote = activeProvider.refreshQuote
+    ? await activeProvider.refreshQuote(instrument, quoteAt)
     : activeProvider.quote(instrument, quoteAt);
+  await rememberLastPrice(quote);
+  return quote;
 }
 
 export async function refreshAllQuotes(at?: Date | string): Promise<void> {
@@ -1674,6 +2045,11 @@ export async function refreshAllQuotes(at?: Date | string): Promise<void> {
       activeProvider.refreshQuote
         ? activeProvider.refreshQuote(instrument, quoteAt)
         : Promise.resolve(activeProvider.quote(instrument, quoteAt)),
+    ),
+  );
+  await Promise.allSettled(
+    results.map((result) =>
+      result.status === "fulfilled" ? rememberLastPrice(result.value) : null,
     ),
   );
   if (results.every((result) => result.status === "rejected")) {
@@ -1701,7 +2077,11 @@ export async function getQuote(
       error instanceof AppError &&
       ["MARKET_DATA_UNAVAILABLE", "MARKET_DATA_TIMEOUT"].includes(error.code)
     ) {
-      return null;
+      // Coins can stop being quoted; their holdings must stay valued so one
+      // dead pair never breaks a portfolio or the leaderboard.
+      return instrumentAssetClass(instrument) === "CRYPTO"
+        ? lastKnownCryptoQuote(instrument)
+        : null;
     }
     throw error;
   }
@@ -1772,6 +2152,13 @@ export async function getHistoricalMarketPrice(
       { symbol: normalizedSymbol },
     );
   }
+  if (instrumentAssetClass(instrument) === "CRYPTO") {
+    throw new AppError(
+      "HISTORICAL_PRICE_UNAVAILABLE",
+      `Historical purchase pricing is not available for crypto (${instrument.symbol}).`,
+      400,
+    );
+  }
   if (!activeProvider.historicalPrice) {
     throw new AppError(
       "HISTORICAL_PRICE_UNAVAILABLE",
@@ -1809,6 +2196,13 @@ export async function getHistoricalSplitMultipliers(
     );
   }
 
+  if (instrumentAssetClass(instrument) === "CRYPTO") {
+    throw new AppError(
+      "HISTORICAL_PRICE_UNAVAILABLE",
+      `Historical purchase pricing is not available for crypto (${instrument.symbol}).`,
+      400,
+    );
+  }
   if (activeProvider.splitMultipliers) {
     return activeProvider.splitMultipliers(instrument, dates, quoteAt);
   }
@@ -1868,7 +2262,11 @@ export async function searchMarketInstruments(
   query: string,
 ): Promise<InstrumentSearchResult[]> {
   const normalizedQuery = query.trim();
-  const local = await readInstrumentSearchResults(normalizedQuery);
+  // Listed ETFs and crypto stay hidden while their switch is off.
+  const local = (await readInstrumentSearchResults(normalizedQuery)).filter(
+    (result) =>
+      isAssetClassEnabled(result.assetClass) && !isSymbolBlocked(result.symbol),
+  );
   const exactSymbol = normalizeMarketSymbol(normalizedQuery);
   const tsxAlias = tsxAliasForBareTickerQuery(normalizedQuery);
   const exactLocal = local.find((result) => result.symbol === exactSymbol);
