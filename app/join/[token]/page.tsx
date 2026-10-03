@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import type { InvitationPreview } from "@/lib/contracts";
+import { DISPLAY_TIME_ZONE } from "@/lib/time";
 import { previewInvitation } from "@/lib/server/invitations";
 import { isManagedAuthMode } from "@/lib/server/auth-mode";
 import { JoinAcceptPanel } from "@/components/join-accept";
@@ -45,7 +46,9 @@ function InvitationFacts({ preview }: { preview: InvitationPreview }) {
           {new Date(preview.expiresAt).toLocaleString("en-CA", {
             dateStyle: "medium",
             timeStyle: "short",
-          })}
+            timeZone: DISPLAY_TIME_ZONE,
+          })}{" "}
+          ET
         </dd>
       </div>
     </dl>

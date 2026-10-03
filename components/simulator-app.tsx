@@ -36,6 +36,11 @@ import type {
 } from "@/lib/contracts";
 import { cryptoTokenSymbol, formatTokenQuantity, unitWord } from "@/lib/lots";
 import {
+  DISPLAY_TIME_ZONE,
+  isoToZonedInputValue,
+  zonedInputValueToIso,
+} from "@/lib/time";
+import {
   MARKET_REFRESH_INTERVAL_MS,
   TEAM_SYNC_INTERVAL_MS,
 } from "@/lib/market-config";
@@ -399,18 +404,8 @@ function formatScheduleInstant(iso: string): string {
   return date.toLocaleString("en-CA", {
     dateStyle: "medium",
     timeStyle: "short",
-  });
-}
-
-function isoToLocalInputValue(iso: string): string {
-  const date = new Date(iso);
-
-  if (Number.isNaN(date.getTime())) {
-    return "";
-  }
-
-  const pad = (part: number) => String(part).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    timeZone: DISPLAY_TIME_ZONE,
+  }) + " ET";
 }
 
 function parseCashDraft(value: string): number | null {
@@ -443,6 +438,7 @@ function formatTime(iso: string): string {
     hour: "numeric",
     minute: "2-digit",
     timeZoneName: "short",
+    timeZone: DISPLAY_TIME_ZONE,
   }).format(parsed);
 }
 
@@ -454,6 +450,7 @@ function formatActivityTime(iso: string): string {
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    timeZone: DISPLAY_TIME_ZONE,
   }).format(parsed);
 }
 
@@ -1955,11 +1952,18 @@ export function SimulatorApp({
 
     const body: Record<string, unknown> = {};
 
-    if (scheduleStartDraft !== null && scheduleStartDraft !== "") {
-      body.startsAt = new Date(scheduleStartDraft).toISOString();
-    }
-    if (scheduleEndDraft !== null && scheduleEndDraft !== "") {
-      body.endsAt = new Date(scheduleEndDraft).toISOString();
+    // The inputs are Eastern wall time, whatever zone the host's computer is in.
+    for (const [field, draft] of [
+      ["startsAt", scheduleStartDraft],
+      ["endsAt", scheduleEndDraft],
+    ] as const) {
+      if (draft === null || draft === "") continue;
+      const iso = zonedInputValueToIso(draft);
+      if (!iso) {
+        setHostFeedback("Enter complete start and end dates and times.");
+        return;
+      }
+      body[field] = iso;
     }
     if (scheduleCashDraft !== null && scheduleCashDraft !== "") {
       const cashCents = parseCashDraft(scheduleCashDraft);
@@ -3275,13 +3279,13 @@ export function SimulatorApp({
                       </span>
                     </div>
                     <label htmlFor="schedule-start">
-                      <span>Start date &amp; time</span>
+                      <span>Start date &amp; time (ET)</span>
                       <input
                         id="schedule-start"
                         type="datetime-local"
                         value={
                           scheduleStartDraft ??
-                          isoToLocalInputValue(dashboard.competition.startsAt)
+                          isoToZonedInputValue(dashboard.competition.startsAt)
                         }
                         onChange={(event) =>
                           setScheduleStartDraft(event.target.value)
@@ -3290,13 +3294,13 @@ export function SimulatorApp({
                       />
                     </label>
                     <label htmlFor="schedule-end">
-                      <span>End date &amp; time</span>
+                      <span>End date &amp; time (ET)</span>
                       <input
                         id="schedule-end"
                         type="datetime-local"
                         value={
                           scheduleEndDraft ??
-                          isoToLocalInputValue(dashboard.competition.endsAt)
+                          isoToZonedInputValue(dashboard.competition.endsAt)
                         }
                         onChange={(event) =>
                           setScheduleEndDraft(event.target.value)

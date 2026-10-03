@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 
+import { DISPLAY_TIME_ZONE } from "@/lib/time";
+
 import type {
   AccountView,
   AdminOverview,
@@ -395,7 +397,8 @@ export function AccountsPanel({
                             ? new Date(account.lastLoginAt).toLocaleString("en-CA", {
                                 dateStyle: "medium",
                                 timeStyle: "short",
-                              })
+                                timeZone: DISPLAY_TIME_ZONE,
+                              }) + " ET"
                             : "Never"}
                         </td>
                         <td>
@@ -601,7 +604,9 @@ export function AccountsPanel({
                         {new Date(invitation.expiresAt).toLocaleString("en-CA", {
                           dateStyle: "medium",
                           timeStyle: "short",
-                        })}
+                          timeZone: DISPLAY_TIME_ZONE,
+                        })}{" "}
+                        ET
                       </td>
                       <td>{invitation.createdByName ?? "System"}</td>
                       <td>
