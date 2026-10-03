@@ -1657,9 +1657,18 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
         const payload = (await response.json()) as {
           finance?: { result?: Array<{ quotes?: unknown }> };
         };
-        // Same parsing and filtering as search: supported exchanges only.
+        const quotes = payload.finance?.result?.[0]?.quotes;
+        // Same parsing and filtering as search (supported exchanges only).
+        // The screener spells its name fields shortName/longName.
         const value = parseYahooSearch({
-          quotes: payload.finance?.result?.[0]?.quotes ?? [],
+          quotes: (Array.isArray(quotes) ? quotes : []).map((quote) => {
+            const raw = (quote ?? {}) as Record<string, unknown>;
+            return {
+              ...raw,
+              shortname: raw.shortname ?? raw.shortName,
+              longname: raw.longname ?? raw.longName,
+            };
+          }),
         });
         this.state.mostActive = { value, fetchedAtMs: this.now() };
         for (const instrument of value) {

@@ -1256,6 +1256,13 @@ a {
   white-space: nowrap;
 }
 
+.symbol-suggestions li.symbol-suggestions__group {
+  display: block;
+  min-height: 0;
+  padding: 0;
+  cursor: default;
+}
+
 .symbol-suggestions__group > ul {
   margin: 0;
   padding: 0;
