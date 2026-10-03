@@ -377,6 +377,9 @@ const currency = new Intl.NumberFormat("en-CA", {
 const number = new Intl.NumberFormat("en-CA");
 const TEAM_NAME_MAX_LENGTH = 80;
 const MAX_SUGGESTIONS = 8;
+// Release number = the minor version in package.json (1.28.0 → release 28).
+const APP_RELEASE = (process.env.NEXT_PUBLIC_APP_VERSION ?? "").split(".")[1] ?? "";
+const APP_COMMIT = process.env.NEXT_PUBLIC_APP_COMMIT ?? "";
 /** Hover box width (176px) plus its 10px gap from the line and an edge margin. */
 const CHART_TOOLTIP_SPACE_PX = 192;
 const SUGGESTION_DELAY_MS = 120;
@@ -3806,6 +3809,15 @@ export function SimulatorApp({
           <div>
             <span>Last team sync</span>
             <strong>{formatTime(dashboard.serverTime)}</strong>
+          </div>
+          <div className="status-footer__credits">
+            <span>
+              Release <strong>{APP_RELEASE}</strong>
+              {APP_COMMIT ? <span className="status-footer__commit"> · {APP_COMMIT}</span> : null}
+            </span>
+            <span>
+              Made by <strong>Joseph Wang</strong>
+            </span>
           </div>
         </footer>
 

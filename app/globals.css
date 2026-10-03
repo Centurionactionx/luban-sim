@@ -2306,7 +2306,24 @@ a {
   justify-content: center;
 }
 
-.status-footer > div:last-child {
+.status-footer > div.status-footer__credits {
+  grid-column: 1 / -1;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  padding-top: 7px;
+  border-top: 1px solid var(--hairline);
+}
+
+.status-footer__credits strong {
+  color: var(--ink);
+}
+
+.status-footer__commit {
+  text-transform: none;
+}
+
+.status-footer > div:nth-child(3) {
   justify-content: flex-end;
 }
 
@@ -2755,7 +2772,7 @@ a {
   }
 
   .status-footer > div:nth-child(2),
-  .status-footer > div:last-child {
+  .status-footer > div:nth-child(3) {
     justify-content: flex-start;
   }
 }

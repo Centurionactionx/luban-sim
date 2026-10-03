@@ -25,6 +25,10 @@ Leave `LUBAN_DEMO_MODE` unset on public deployments. Managed mode refuses demo a
 
 Production is served at `https://sim.lubancanada.com`, a subdomain of the public site. The simulator stays a separate Vercel project; the public site links to it and shares no code. DNS: `CNAME sim -> cname.vercel-dns.com`. Clerk runs a production instance for `lubancanada.com`, and its DNS records live on the same zone. `luban-sim.vercel.app` redirects to the subdomain.
 
+## Release numbers
+
+The footer shows "Release N", where N is the minor version in `package.json` (`1.28.0` is release 28), followed by the short commit ID Vercel built. Bump the minor version in the same commit as each production release; the commit ID keeps the footer exact even if a bump is missed.
+
 ## Keeping the database active
 
 Supabase's free plan pauses a project after about a week of low activity. `vercel.json` schedules one daily call to `/api/health` (15:00 UTC), which runs a real query against the database. Vercel's Hobby plan allows one scheduled run per day, so do not make the schedule more frequent or the deployment will be rejected. This is a safety net and not a guarantee; Supabase Pro never auto-pauses.
