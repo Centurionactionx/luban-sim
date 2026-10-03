@@ -22,6 +22,7 @@ import type {
   DemoUser,
   HoldingView,
   InstrumentSearchResult,
+  PopularSection,
   Leaderboard,
   LeaderboardRow,
   PortfolioPoint,
@@ -378,7 +379,48 @@ const TEAM_NAME_MAX_LENGTH = 80;
 const MAX_SUGGESTIONS = 8;
 /** Hover box width (176px) plus its 10px gap from the line and an edge margin. */
 const CHART_TOOLTIP_SPACE_PX = 192;
-const SUGGESTION_DELAY_MS = 250;
+const SUGGESTION_DELAY_MS = 120;
+
+/**
+ * Instant suggestions from listings the page already knows, ranked like a
+ * search box: exact ticker, ticker prefix, name prefix, word prefix, then a
+ * ticker that merely contains the text. Shown on the keystroke itself, before
+ * the network answers.
+ */
+function rankLocalSuggestions(
+  query: string,
+  known: Iterable<InstrumentSearchResult>,
+): InstrumentSearchResult[] {
+  const needle = query.trim().toUpperCase();
+  if (!needle) return [];
+  const scored: Array<{ result: InstrumentSearchResult; score: number }> = [];
+  for (const result of known) {
+    const symbol = result.symbol.toUpperCase();
+    const name = result.name.toUpperCase();
+    const score =
+      symbol === needle || symbol === `${needle}-CAD` || symbol === `${needle}.TO`
+        ? 0
+        : symbol.startsWith(needle)
+          ? 1
+          : name.startsWith(needle)
+            ? 2
+            : name.split(/[\s.,&()-]+/).some((word) => word.startsWith(needle))
+              ? 3
+              : needle.length >= 3 && symbol.includes(needle)
+                ? 4
+                : -1;
+    if (score >= 0) scored.push({ result, score });
+  }
+  return scored
+    .sort(
+      (left, right) =>
+        left.score - right.score ||
+        left.result.symbol.length - right.result.symbol.length ||
+        left.result.symbol.localeCompare(right.result.symbol),
+    )
+    .slice(0, MAX_SUGGESTIONS)
+    .map(({ result }) => result);
+}
 
 function formatMoney(cents: number): string {
   return currency.format(cents / 100);
@@ -1097,6 +1139,12 @@ export function SimulatorApp({
   const [suggesting, setSuggesting] = useState(false);
   const [activeSuggestion, setActiveSuggestion] = useState(-1);
   const suggestionCache = useRef(new Map<string, InstrumentSearchResult[]>());
+  // Every listing the page has seen (popular picks, prices, holdings, past
+  // results), so suggestions can appear before the network answers.
+  const knownInstruments = useRef(new Map<string, InstrumentSearchResult>());
+  const [popularSections, setPopularSections] = useState<PopularSection[] | null>(
+    null,
+  );
   const [side, setSide] = useState<TradeSide>("BUY");
   const [quantity, setQuantity] = useState("10");
   const [ticketStatus, setTicketStatus] = useState<TicketStatus>({
@@ -1565,34 +1613,49 @@ export function SimulatorApp({
     }
   };
 
-  const rememberSuggestions = (query: string, results: InstrumentSearchResult[]) => {
-    const cache = suggestionCache.current;
-    cache.set(query.trim().toLowerCase(), results);
-    if (cache.size > 100) {
-      const oldest = cache.keys().next().value;
-      if (oldest !== undefined) cache.delete(oldest);
-    }
-  };
+  // Only touches refs, so it is stable across renders.
+  const rememberSuggestions = useCallback(
+    (query: string, results: InstrumentSearchResult[]) => {
+      const known = knownInstruments.current;
+      for (const result of results) known.set(result.symbol, result);
+      const cache = suggestionCache.current;
+      cache.set(query.trim().toLowerCase(), results);
+      if (cache.size > 100) {
+        const oldest = cache.keys().next().value;
+        if (oldest !== undefined) cache.delete(oldest);
+      }
+    },
+    [],
+  );
 
   const changeSearchQuery = (value: string) => {
     setSearchQuery(value);
     setActiveSuggestion(-1);
     const query = value.trim();
     if (!query) {
+      // An emptied box goes back to the popular picks.
       setSearchResults([]);
-      setSuggestionsOpen(false);
+      setSuggesting(false);
+      setSuggestionsOpen(true);
       return;
     }
     // Typing back to an earlier query reuses its results instantly.
     const cached = suggestionCache.current.get(query.toLowerCase());
     if (cached) {
       setSearchResults(cached);
+      setSuggesting(false);
       setSuggestionsOpen(true);
+      return;
     }
+    // Otherwise show what the page already knows right away; the full search
+    // replaces it a moment later.
+    setSearchResults(rankLocalSuggestions(query, knownInstruments.current.values()));
+    setSuggesting(true);
+    setSuggestionsOpen(true);
   };
 
   const handleSearchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
-    const visible = Math.min(searchResults.length, MAX_SUGGESTIONS);
+    const visible = visibleSuggestions.length;
     if (event.key === "ArrowDown" && visible > 0) {
       event.preventDefault();
       setSuggestionsOpen(true);
@@ -1609,11 +1672,11 @@ export function SimulatorApp({
       event.key === "Enter" &&
       suggestionsOpen &&
       activeSuggestion >= 0 &&
-      searchResults[activeSuggestion]
+      visibleSuggestions[activeSuggestion]
     ) {
       // A highlighted suggestion wins; otherwise Enter runs a normal search.
       event.preventDefault();
-      void loadSearchResult(searchResults[activeSuggestion]);
+      void loadSearchResult(visibleSuggestions[activeSuggestion]);
     }
   };
 
@@ -1640,6 +1703,46 @@ export function SimulatorApp({
     return () => window.removeEventListener("keydown", focusSearch);
   }, []);
 
+  // Load the popular picks in the background as soon as the page opens, so
+  // they are already there when someone clicks the search box.
+  useEffect(() => {
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const response = await fetch("/api/quotes?popular=1", {
+          signal: controller.signal,
+        });
+        if (!response.ok) return;
+        const payload = (await readJson(response)) as { sections?: PopularSection[] };
+        const sections = payload.sections ?? [];
+        for (const section of sections) {
+          for (const result of section.results) {
+            knownInstruments.current.set(result.symbol, result);
+          }
+        }
+        setPopularSections(sections);
+      } catch {
+        // Without popular picks the box simply opens empty.
+      }
+    })();
+    return () => controller.abort();
+  }, []);
+
+  // Listings already on the page feed the instant suggestions too.
+  useEffect(() => {
+    const known = knownInstruments.current;
+    for (const quote of dashboard.availableSymbols) {
+      known.set(quote.symbol, {
+        symbol: quote.symbol,
+        name: quote.name,
+        exchange: quote.exchange,
+        sector: quote.sector,
+        listingCurrency: quote.listingCurrency,
+        assetClass: quote.assetClass,
+      });
+    }
+  }, [dashboard.availableSymbols]);
+
   // Debounced live search. Each keystroke cancels the previous request, and
   // the server caches every query, so typing costs few upstream calls.
   useEffect(() => {
@@ -1647,10 +1750,10 @@ export function SimulatorApp({
     if (!query || suggestionCache.current.has(query.toLowerCase())) return;
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
-      setSuggesting(true);
       try {
+        // The browser may reuse a recent identical search (the server marks
+        // results cacheable for five minutes).
         const response = await fetch(`/api/quotes?q=${encodeURIComponent(query)}`, {
-          cache: "no-store",
           signal: controller.signal,
         });
         if (!response.ok) return;
@@ -1671,9 +1774,51 @@ export function SimulatorApp({
     return () => {
       window.clearTimeout(timer);
       controller.abort();
-      setSuggesting(false);
     };
-  }, [searchQuery]);
+  }, [searchQuery, rememberSuggestions]);
+
+  // With an empty box the list is the popular picks, grouped; once typing
+  // starts it is the ranked results. Keyboard navigation walks either one.
+  const showingPopular =
+    !searchQuery.trim() && (popularSections?.some((s) => s.results.length > 0) ?? false);
+  const popularGroups = (() => {
+    let index = 0;
+    return (popularSections ?? [])
+      .filter((section) => section.results.length > 0)
+      .map((section, sectionIndex) => ({
+        title: section.title,
+        headingId: `symbol-suggestions-group-${sectionIndex}`,
+        results: section.results.map((result) => ({ result, index: index++ })),
+      }));
+  })();
+  const visibleSuggestions = showingPopular
+    ? popularGroups.flatMap((group) => group.results.map(({ result }) => result))
+    : searchResults.slice(0, MAX_SUGGESTIONS);
+
+  const renderSuggestion = (result: InstrumentSearchResult, index: number) => {
+    const tag = assetTagLabel(result.assetClass);
+    return (
+      <li
+        key={result.symbol}
+        id={`symbol-suggestion-${index}`}
+        role="option"
+        aria-selected={index === activeSuggestion}
+        className={index === activeSuggestion ? "is-active" : undefined}
+        // Keep focus in the box so blur doesn't close the list before the
+        // click lands.
+        onMouseDown={(event) => event.preventDefault()}
+        onMouseEnter={() => setActiveSuggestion(index)}
+        onClick={() => void loadSearchResult(result)}
+      >
+        <strong>{result.symbol}</strong>
+        <span>{result.name}</span>
+        <span>
+          {tag ? <em className="asset-tag">{tag}</em> : null}
+          {result.assetClass === "CRYPTO" ? null : <span>{result.exchange}</span>}
+        </span>
+      </li>
+    );
+  };
 
   const searchQuotes = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -2704,11 +2849,8 @@ export function SimulatorApp({
                     value={searchQuery}
                     onChange={(event) => changeSearchQuery(event.target.value)}
                     onKeyDown={handleSearchKeyDown}
-                    onFocus={() => {
-                      if (searchQuery.trim() && searchResults.length > 0) {
-                        setSuggestionsOpen(true);
-                      }
-                    }}
+                    onFocus={() => setSuggestionsOpen(true)}
+                    onClick={() => setSuggestionsOpen(true)}
                     onBlur={() => {
                       setSuggestionsOpen(false);
                       setActiveSuggestion(-1);
@@ -2719,7 +2861,7 @@ export function SimulatorApp({
                     autoComplete="off"
                     role="combobox"
                     aria-autocomplete="list"
-                    aria-expanded={suggestionsOpen && searchResults.length > 0}
+                    aria-expanded={suggestionsOpen && visibleSuggestions.length > 0}
                     aria-controls="symbol-suggestions"
                     aria-activedescendant={
                       suggestionsOpen && activeSuggestion >= 0
@@ -2730,43 +2872,39 @@ export function SimulatorApp({
                   <button type="submit" aria-label="Search symbols" disabled={searching}>
                     <SearchIcon />
                   </button>
-                  {suggestionsOpen && searchQuery.trim() ? (
+                  {suggestionsOpen && (searchQuery.trim() || showingPopular) ? (
                     <div className="symbol-suggestions" aria-busy={searching || suggesting}>
                       <ul
                         id="symbol-suggestions"
                         role="listbox"
                         aria-label="Symbol suggestions"
                       >
-                        {searchResults.slice(0, MAX_SUGGESTIONS).map((result, index) => {
-                          const tag = assetTagLabel(result.assetClass);
-                          return (
-                            <li
-                              key={result.symbol}
-                              id={`symbol-suggestion-${index}`}
-                              role="option"
-                              aria-selected={index === activeSuggestion}
-                              className={
-                                index === activeSuggestion ? "is-active" : undefined
-                              }
-                              // Keep focus in the box so blur doesn't close the
-                              // list before the click lands.
-                              onMouseDown={(event) => event.preventDefault()}
-                              onMouseEnter={() => setActiveSuggestion(index)}
-                              onClick={() => void loadSearchResult(result)}
-                            >
-                              <strong>{result.symbol}</strong>
-                              <span>{result.name}</span>
-                              <span>
-                                {tag ? <em className="asset-tag">{tag}</em> : null}
-                                {result.assetClass === "CRYPTO" ? null : (
-                                  <span>{result.exchange}</span>
-                                )}
-                              </span>
-                            </li>
-                          );
-                        })}
+                        {showingPopular
+                          ? popularGroups.map((group) => (
+                              <li
+                                key={group.title}
+                                role="group"
+                                aria-labelledby={group.headingId}
+                                className="symbol-suggestions__group"
+                              >
+                                <span
+                                  id={group.headingId}
+                                  className="symbol-suggestions__heading"
+                                >
+                                  {group.title}
+                                </span>
+                                <ul role="none">
+                                  {group.results.map(({ result, index }) =>
+                                    renderSuggestion(result, index),
+                                  )}
+                                </ul>
+                              </li>
+                            ))
+                          : visibleSuggestions.map((result, index) =>
+                              renderSuggestion(result, index),
+                            )}
                       </ul>
-                      {searchResults.length === 0 ? (
+                      {!showingPopular && visibleSuggestions.length === 0 ? (
                         <p className="symbol-suggestions__note">
                           {suggesting ? "Searching…" : "No supported listing matches."}
                         </p>

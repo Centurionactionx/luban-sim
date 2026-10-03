@@ -1,6 +1,7 @@
 import type {
   AssetClass,
   InstrumentSearchResult,
+  PopularSection,
   Quote,
   QuoteHistory,
   QuoteHistoryPoint,
@@ -16,6 +17,10 @@ export const QUOTE_DELAY_MINUTES = 15;
 
 const YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart";
 const YAHOO_SEARCH_URL = "https://query1.finance.yahoo.com/v1/finance/search";
+const YAHOO_MOST_ACTIVE_URL =
+  "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved";
+const POPULAR_TTL_MS = 10 * 60_000;
+const POPULAR_SECTION_SIZE = 6;
 const QUOTE_TTL_MS = MARKET_REFRESH_INTERVAL_MS;
 const DAILY_HISTORY_TTL_MS = 15 * 60_000;
 const INTRADAY_HISTORY_TTL_MS = MARKET_REFRESH_INTERVAL_MS;
@@ -171,6 +176,8 @@ export interface MarketDataProvider {
   quote(instrument: MarketInstrument, at: Date): Quote;
   refreshQuote?(instrument: MarketInstrument, at: Date): Promise<Quote>;
   search?(query: string): Promise<InstrumentSearchResult[]>;
+  /** Today's most actively traded supported stocks, most active first. */
+  mostActive?(): Promise<InstrumentSearchResult[]>;
   resolveInstrument?(symbol: string): Promise<InstrumentSearchResult | null>;
   history?(
     instrument: MarketInstrument,
@@ -287,6 +294,7 @@ interface YahooMarketState {
   splitMultipliers: Map<string, CacheEntry<Map<string, number>>>;
   searches: Map<string, CacheEntry<InstrumentSearchResult[]>>;
   discoveredInstruments: Map<string, InstrumentSearchResult>;
+  mostActive: CacheEntry<InstrumentSearchResult[]> | null;
   quoteFailures: Map<string, FailedQuoteRefresh>;
   searchFailures: Map<string, FailedQuoteRefresh>;
   inFlight: Map<string, Promise<unknown>>;
@@ -331,6 +339,7 @@ function yahooState(): YahooMarketState {
       discoveredInstruments: new Map(),
       quoteFailures: new Map(),
       searchFailures: new Map(),
+      mostActive: null,
       inFlight: new Map(),
     };
   }
@@ -340,6 +349,7 @@ function yahooState(): YahooMarketState {
   yahooGlobal.__lubanYahooMarketState.discoveredInstruments ??= new Map();
   yahooGlobal.__lubanYahooMarketState.quoteFailures ??= new Map();
   yahooGlobal.__lubanYahooMarketState.searchFailures ??= new Map();
+  yahooGlobal.__lubanYahooMarketState.mostActive ??= null;
   return yahooGlobal.__lubanYahooMarketState;
 }
 
@@ -1615,6 +1625,54 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
     });
   }
 
+  async mostActive(): Promise<InstrumentSearchResult[]> {
+    const cached = this.state.mostActive;
+    if (cached && this.now() - cached.fetchedAtMs < POPULAR_TTL_MS) {
+      return cached.value;
+    }
+    try {
+      return await this.coalesce("most-active", async () => {
+        const params = new URLSearchParams({
+          scrIds: "most_actives",
+          count: "25",
+        });
+        const response = await this.fetcher(
+          `${YAHOO_MOST_ACTIVE_URL}?${params.toString()}`,
+          {
+            cache: "no-store",
+            headers: {
+              Accept: "application/json",
+              "User-Agent": "Mozilla/5.0 LubanMarketLab/0.1",
+            },
+            signal: AbortSignal.timeout(MARKET_DATA_TIMEOUT_MS),
+          },
+        );
+        if (!response.ok) {
+          throw new AppError(
+            "MARKET_DATA_UNAVAILABLE",
+            `The most-active list returned HTTP ${response.status}.`,
+            503,
+          );
+        }
+        const payload = (await response.json()) as {
+          finance?: { result?: Array<{ quotes?: unknown }> };
+        };
+        // Same parsing and filtering as search: supported exchanges only.
+        const value = parseYahooSearch({
+          quotes: payload.finance?.result?.[0]?.quotes ?? [],
+        });
+        this.state.mostActive = { value, fetchedAtMs: this.now() };
+        for (const instrument of value) {
+          boundedSet(this.state.discoveredInstruments, instrument.symbol, instrument);
+        }
+        return value;
+      });
+    } catch {
+      // Popular picks are a nicety: an old list, or none, beats an error.
+      return cached?.value ?? [];
+    }
+  }
+
   private async fetchSearch(query: string): Promise<InstrumentSearchResult[]> {
     const params = new URLSearchParams({
       q: query,
@@ -2287,6 +2345,115 @@ export async function searchInstruments(
       value.toLowerCase().includes(normalized),
     ),
   );
+}
+
+/**
+ * The most traded listings in the competition over the past week, by filled
+ * orders. Admin sandbox trades don't count.
+ */
+async function readCompetitionFavourites(
+  limit: number,
+): Promise<InstrumentSearchResult[]> {
+  const db = await getDb();
+  const since = new Date(Date.now() - 7 * 86_400_000).toISOString();
+  const rows = await db.all<InstrumentRow & { trades: number }>(
+    `
+      SELECT
+        i.symbol, i.name, i.exchange, i.sector, i.listing_currency,
+        i.base_price_cents, i.previous_close_cents, i.fx_rate_basis_points,
+        i.asset_class, i.lot_exponent, i.last_price_cents, i.last_priced_at,
+        COUNT(*) AS trades
+      FROM orders AS o
+      JOIN teams AS t ON t.id = o.team_id
+      JOIN instruments AS i ON i.symbol = o.symbol
+      WHERE t.sandbox_owner_user_id IS NULL
+        AND o.status = 'FILLED'
+        AND o.created_at > ?
+        AND i.is_active = 1
+      GROUP BY
+        i.symbol, i.name, i.exchange, i.sector, i.listing_currency,
+        i.base_price_cents, i.previous_close_cents, i.fx_rate_basis_points,
+        i.asset_class, i.lot_exponent, i.last_price_cents, i.last_priced_at
+      ORDER BY trades DESC, i.symbol ASC
+      LIMIT ?
+    `,
+    [since, limit * 2],
+  );
+  return rows
+    .map((row) => ({
+      symbol: row.symbol,
+      name: row.name,
+      exchange: row.exchange,
+      sector: row.sector,
+      listingCurrency: row.listing_currency,
+      assetClass: row.asset_class ?? "STOCK",
+    }))
+    .filter(
+      (result) =>
+        isAssetClassEnabled(result.assetClass) && !isSymbolBlocked(result.symbol),
+    )
+    .slice(0, limit);
+}
+
+/**
+ * What the search box suggests before anyone types: what the competition is
+ * trading, what the market is trading today, and the major coins.
+ */
+export async function getPopularInstruments(): Promise<PopularSection[]> {
+  const sections: PopularSection[] = [];
+  const shown = new Set<string>();
+  const keep = (results: InstrumentSearchResult[]) =>
+    results
+      .filter((result) => !shown.has(result.symbol) && !isSymbolBlocked(result.symbol))
+      .slice(0, POPULAR_SECTION_SIZE)
+      .map((result) => {
+        shown.add(result.symbol);
+        return result;
+      });
+
+  const favourites = keep(await readCompetitionFavourites(POPULAR_SECTION_SIZE));
+  if (favourites.length > 0) {
+    sections.push({ title: "Popular in this competition", results: favourites });
+  }
+
+  if (activeProvider.mostActive) {
+    const active = keep(await activeProvider.mostActive());
+    if (active.length > 0) sections.push({ title: "Most active today", results: active });
+  } else {
+    // Test and demo data have no market-wide activity; suggest listed stocks.
+    const listed = keep(
+      (await readInstruments())
+        .filter((instrument) => instrumentAssetClass(instrument) === "STOCK")
+        .map((instrument) => ({
+          symbol: instrument.symbol,
+          name: instrument.name,
+          exchange: instrument.exchange,
+          sector: instrument.sector,
+          listingCurrency: instrument.listingCurrency,
+          assetClass: "STOCK" as const,
+        })),
+    );
+    if (listed.length > 0) sections.push({ title: "Listed stocks", results: listed });
+  }
+
+  if (isCryptoTradingEnabled()) {
+    const coins = keep(
+      [
+        ["BTC-CAD", "Bitcoin"],
+        ["ETH-CAD", "Ethereum"],
+      ].map(([symbol, name]) => ({
+        symbol,
+        name,
+        exchange: CRYPTO_EXCHANGE,
+        sector: CRYPTO_SECTOR,
+        listingCurrency: "CAD" as const,
+        assetClass: "CRYPTO" as const,
+      })),
+    );
+    if (coins.length > 0) sections.push({ title: "Crypto", results: coins });
+  }
+
+  return sections;
 }
 
 export async function searchMarketInstruments(

@@ -1256,6 +1256,25 @@ a {
   white-space: nowrap;
 }
 
+.symbol-suggestions__group > ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.symbol-suggestions__heading {
+  display: block;
+  padding: 9px 12px 5px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--quiet-purple-2);
+  color: var(--muted);
+  font-family: var(--font-data);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .symbol-suggestions__note {
   margin: 0;
   padding: 12px;

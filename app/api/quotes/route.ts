@@ -1,5 +1,6 @@
 import {
   assertRequestAllowed,
+  getPopularInstruments,
   listQuotes,
   MARKET_SYMBOL_PATTERN,
   normalizeMarketSymbol,
@@ -21,11 +22,27 @@ export async function GET(request: Request): Promise<Response> {
   try {
     const user = await requireAuthenticatedUser();
 
-    // Cache misses on search and symbol resolution reach the upstream
-    // provider, so cap how fast one person can generate them.
-    assertRequestAllowed(`quotes:${user.id}`, 60);
-
     const searchParams = new URL(request.url).searchParams;
+
+    // Typing suggests as you go, so search gets its own, larger allowance;
+    // every query is cached upstream for ten minutes. Price lookups keep the
+    // tighter one, since each cache miss reaches the market data provider.
+    const isSearch = searchParams.has("q") || searchParams.has("popular");
+    assertRequestAllowed(
+      isSearch ? `quote-search:${user.id}` : `quotes:${user.id}`,
+      isSearch ? 180 : 60,
+    );
+
+    // Search results aren't personal, so the browser may reuse them for a
+    // few minutes: repeating a search, even after a reload, is instant.
+    const searchCache = { "Cache-Control": "private, max-age=300" };
+
+    if (searchParams.has("popular")) {
+      return json(
+        { sections: await getPopularInstruments() },
+        { headers: searchCache },
+      );
+    }
     const rawSymbol = searchParams.get("symbol")?.trim();
     const symbol = rawSymbol ? normalizeMarketSymbol(rawSymbol) : undefined;
     const query = (searchParams.get("q") ?? searchParams.get("query"))?.trim();
@@ -62,7 +79,10 @@ export async function GET(request: Request): Promise<Response> {
         );
       }
 
-      return json({ results: await searchMarketInstruments(query) });
+      return json(
+        { results: await searchMarketInstruments(query) },
+        { headers: searchCache },
+      );
     }
 
     await refreshAllQuotes();

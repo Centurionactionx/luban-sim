@@ -197,6 +197,12 @@ export interface InstrumentSearchResult {
   assetClass?: AssetClass;
 }
 
+/** A titled group of suggestions shown before the person types anything. */
+export interface PopularSection {
+  title: string;
+  results: InstrumentSearchResult[];
+}
+
 export interface QuoteHistoryPoint {
   at: string;
   openCents: number | null;
