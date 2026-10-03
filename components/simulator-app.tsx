@@ -2672,7 +2672,9 @@ export function SimulatorApp({
                               <span>{result.name}</span>
                               <span>
                                 {tag ? <em className="asset-tag">{tag}</em> : null}
-                                {result.assetClass === "CRYPTO" ? null : result.exchange}
+                                {result.assetClass === "CRYPTO" ? null : (
+                                  <span>{result.exchange}</span>
+                                )}
                               </span>
                             </li>
                           );
