@@ -1495,7 +1495,16 @@ export function SimulatorApp({
         .toUpperCase()
         .replace(/^([A-Z0-9]+)\.([A-Z])\.TO$/, "$1-$2.TO")
         .replace(/^([A-Z0-9]+)\.([A-Z])$/, "$1-$2");
-      const exact = results.find((result) => result.symbol === normalizedQuery);
+      // The server ranks results, so only the top one is opened directly: for
+      // "btc" that is Bitcoin (BTC-CAD), not the BTC fund further down.
+      const top = results[0];
+      const exact =
+        top &&
+        [normalizedQuery, `${normalizedQuery}-CAD`, `${normalizedQuery}-USD`].includes(
+          top.symbol,
+        )
+          ? top
+          : undefined;
       if (exact) {
         await loadSearchResult(exact, false);
       } else if (results.length === 0) {
