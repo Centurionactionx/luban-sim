@@ -370,6 +370,8 @@ const currency = new Intl.NumberFormat("en-CA", {
 const number = new Intl.NumberFormat("en-CA");
 const TEAM_NAME_MAX_LENGTH = 80;
 const MAX_SUGGESTIONS = 8;
+/** Hover box width (176px) plus its 10px gap from the line and an edge margin. */
+const CHART_TOOLTIP_SPACE_PX = 192;
 const SUGGESTION_DELAY_MS = 250;
 
 function formatMoney(cents: number): string {
@@ -637,6 +639,9 @@ function LineChart({
   const height = compact ? 156 : 250;
   const svgRef = useRef<SVGSVGElement>(null);
   const [activeAt, setActiveAt] = useState<string | null>(null);
+  // Rendered chart width in CSS pixels, captured on interaction, so the
+  // hover box can pick a side that has room for it.
+  const [renderedWidth, setRenderedWidth] = useState(0);
   const [interactionMethod, setInteractionMethod] = useState<
     "keyboard" | "mouse" | "touch" | null
   >(null);
@@ -675,7 +680,24 @@ function LineChart({
     const boundedIndex = Math.max(0, Math.min(points.length - 1, index));
     setActiveAt(points[boundedIndex].at);
     setInteractionMethod(method);
+    setRenderedWidth(svgRef.current?.getBoundingClientRect().width ?? 0);
   };
+
+  // The box sits beside the hovered line, never on it: to the right on the
+  // left half of the chart, to the left on the right half. A side without
+  // room for the box loses to the other; with room on neither (very narrow
+  // screens) it pins to the edge farther from the line.
+  const tooltipPlacement = (() => {
+    if (!activeCoordinate) return "after";
+    const chartWidth = renderedWidth > 0 ? renderedWidth : width;
+    const lineX = (activeCoordinate.x / width) * chartWidth;
+    const fitsAfter = chartWidth - lineX >= CHART_TOOLTIP_SPACE_PX;
+    const fitsBefore = lineX >= CHART_TOOLTIP_SPACE_PX;
+    const preferAfter = lineX < chartWidth / 2;
+    if (preferAfter ? fitsAfter : fitsBefore) return preferAfter ? "after" : "before";
+    if (preferAfter ? fitsBefore : fitsAfter) return preferAfter ? "before" : "after";
+    return preferAfter ? "pin-end" : "pin-start";
+  })();
 
   const selectNearestPointerPoint = (event: ReactPointerEvent<SVGSVGElement>) => {
     const bounds = svgRef.current?.getBoundingClientRect();
@@ -832,14 +854,13 @@ function LineChart({
       </svg>
       {activePoint && activeCoordinate ? (
         <div
-          className={`chart__tooltip ${
-            activeCoordinate.x < width * 0.32
-              ? "chart__tooltip--after"
-              : activeCoordinate.x > width * 0.68
-                ? "chart__tooltip--before"
-                : "chart__tooltip--center"
-          }`}
-          style={{ left: `${(activeCoordinate.x / width) * 100}%` }}
+          className={`chart__tooltip chart__tooltip--${tooltipPlacement}`}
+          style={
+            tooltipPlacement.startsWith("pin")
+              ? undefined
+              : { left: `${(activeCoordinate.x / width) * 100}%` }
+          }
+          data-placement={tooltipPlacement}
           data-chart-tooltip
           role="status"
           aria-live={interactionMethod === "mouse" ? "off" : "polite"}

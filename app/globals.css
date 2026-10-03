@@ -921,8 +921,12 @@ a {
   transform: translateX(calc(-100% - 10px));
 }
 
-.chart__tooltip--center {
-  transform: translateX(-50%);
+.chart__tooltip--pin-start {
+  left: 6px;
+}
+
+.chart__tooltip--pin-end {
+  right: 6px;
 }
 
 .chart__tooltip time {
