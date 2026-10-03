@@ -683,8 +683,9 @@ function parseYahooSearch(payload: unknown): InstrumentSearchResult[] {
     );
   }
 
+  // Keyed by symbol, or by "coin:<base>" for crypto so a coin keeps the
+  // position of its first pair in Yahoo's relevance order.
   const results = new Map<string, InstrumentSearchResult>();
-  const cryptoPairs = new Map<string, InstrumentSearchResult>();
   for (const rawQuote of rawQuotes) {
     if (!rawQuote || typeof rawQuote !== "object") continue;
     const quote = rawQuote as YahooSearchQuote;
@@ -702,10 +703,10 @@ function parseYahooSearch(payload: unknown): InstrumentSearchResult[] {
       const currency = cryptoPairCurrency(symbol);
       if (!isCryptoTradingEnabled() || !currency) continue;
       // One row per coin: prefer the CAD pair, which needs no conversion.
-      const base = symbol.slice(0, -4);
-      const existing = cryptoPairs.get(base);
+      const coinKey = `coin:${symbol.slice(0, -4)}`;
+      const existing = results.get(coinKey);
       if (existing && existing.listingCurrency === "CAD") continue;
-      cryptoPairs.set(base, {
+      results.set(coinKey, {
         symbol,
         name: cryptoDisplayName(name, currency),
         exchange: CRYPTO_EXCHANGE,
@@ -743,9 +744,6 @@ function parseYahooSearch(payload: unknown): InstrumentSearchResult[] {
         assetClass,
       });
     }
-  }
-  for (const pair of cryptoPairs.values()) {
-    if (!results.has(pair.symbol)) results.set(pair.symbol, pair);
   }
   return [...results.values()];
 }
@@ -2316,15 +2314,52 @@ export async function searchMarketInstruments(
         if (!primarySearchError) primarySearchError = error;
       }
     }
+
+    // Yahoo's search for a bare coin ticker usually returns only the USD
+    // pair. When it does, look up the CAD pair too, which needs no
+    // conversion. Cached per query, so repeat searches cost nothing.
+    const [cadPair, usdPair] = coinPairs;
+    if (
+      cadPair &&
+      remote.some((result) => result.symbol === usdPair) &&
+      !remote.some((result) => result.symbol === cadPair)
+    ) {
+      try {
+        const cad = (await activeProvider.search(cadPair)).filter(
+          (result) => result.symbol === cadPair,
+        );
+        remote = [...remote, ...cad];
+      } catch {
+        // The USD pair is still a valid result on its own.
+      }
+    }
   }
 
   const merged = new Map<string, InstrumentSearchResult>();
   for (const result of [...remote, ...local]) {
     if (!merged.has(result.symbol)) merged.set(result.symbol, result);
   }
-  // Exact ticker first, then that coin's pairs (CAD before USD), then the
-  // TSX alias; everything else keeps the provider's relevance order.
-  const priority = [exactSymbol, ...coinPairs, ...(tsxAlias ? [tsxAlias] : [])];
+  // One row per coin: drop a USD pair whose CAD pair is also listed.
+  for (const symbol of [...merged.keys()]) {
+    const base = cryptoPairBase(symbol);
+    if (symbol.endsWith("-USD") && base && merged.has(`${base}-CAD`)) {
+      merged.delete(symbol);
+    }
+  }
+  // When a ticker is both a listing and a coin (BTC, ETH, LINK), follow
+  // Yahoo's relevance: it ranks Bitcoin above the BTC fund but Chainlink
+  // below the LINK stock. Then the TSX alias; the rest keep provider order.
+  const remoteIndex = (symbol: string) => {
+    const index = remote.findIndex((result) => result.symbol === symbol);
+    return index === -1 ? Number.POSITIVE_INFINITY : index;
+  };
+  const coinFirst =
+    coinPairs.length > 0 &&
+    Math.min(...coinPairs.map(remoteIndex)) < remoteIndex(exactSymbol);
+  const priority = [
+    ...(coinFirst ? [...coinPairs, exactSymbol] : [exactSymbol, ...coinPairs]),
+    ...(tsxAlias ? [tsxAlias] : []),
+  ];
   const rank = (symbol: string) => {
     const index = priority.indexOf(symbol);
     return index === -1 ? priority.length : index;
