@@ -35,7 +35,13 @@ export async function GET(request: Request): Promise<Response> {
 
     // Search results aren't personal, so the browser may reuse them for a
     // few minutes: repeating a search, even after a reload, is instant.
-    const searchCache = { "Cache-Control": "private, max-age=300" };
+    // Expires and Pragma are cleared so the default no-store values don't
+    // contradict max-age.
+    const searchCache = {
+      "Cache-Control": "private, max-age=300",
+      Expires: new Date(Date.now() + 300_000).toUTCString(),
+      Pragma: "",
+    };
 
     if (searchParams.has("popular")) {
       return json(
