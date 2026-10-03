@@ -1927,12 +1927,12 @@ async function persistDiscoveredInstrument(
 const lastPricePersistedAt = new Map<string, number>();
 
 /**
- * Remember the last good crypto price in the database, at most every ten
- * minutes per pair. It values holdings when no live quote can be produced,
- * for example after a cold start while a coin is no longer quoted.
+ * Remember the last good price in the database, at most every ten minutes
+ * per symbol. It values holdings when no live quote can be produced, for
+ * example while Yahoo is down or a coin is no longer quoted.
  */
 async function rememberLastPrice(quote: Quote | null): Promise<void> {
-  if (!quote || quote.assetClass !== "CRYPTO" || quote.isStale) return;
+  if (!quote || quote.isStale) return;
   const nowMs = Date.now();
   const previous = lastPricePersistedAt.get(quote.symbol);
   if (previous !== undefined && nowMs - previous < LAST_PRICE_PERSIST_INTERVAL_MS) {
@@ -1949,11 +1949,12 @@ async function rememberLastPrice(quote: Quote | null): Promise<void> {
 }
 
 /**
- * A stand-in quote for a crypto holding whose live price is unavailable. It
- * keeps the portfolio and leaderboard working at the last known price while
- * trading in that pair stays paused.
+ * A stand-in quote for a holding whose live price is unavailable. It keeps
+ * the portfolio and leaderboard working at the last known price while
+ * trading in that symbol stays paused.
  */
-function lastKnownCryptoQuote(instrument: MarketInstrument): Quote {
+function lastKnownQuote(instrument: MarketInstrument): Quote {
+  const assetClass = instrumentAssetClass(instrument);
   const priceCents = instrument.lastPriceCents ?? instrument.basePriceCents;
   const priceCadCents = Math.round(
     (priceCents * instrument.fxRateBasisPoints) / 10_000,
@@ -1975,8 +1976,10 @@ function lastKnownCryptoQuote(instrument: MarketInstrument): Quote {
     source: activeProvider.id === "YAHOO_FINANCE" ? "YAHOO_FINANCE" : "LUBAN_SIMULATED",
     sourceUrl: sourceUrl(instrument.symbol),
     isStale: true,
-    ...ALWAYS_OPEN_SESSION,
-    assetClass: "CRYPTO",
+    ...(assetClass === "CRYPTO"
+      ? ALWAYS_OPEN_SESSION
+      : { marketOpen: false, marketClosesAt: null, marketOpensAt: null }),
+    assetClass,
     lotSize: lotSizeFromExponent(instrument.lotExponent ?? 0),
     tradingHaltReason: `Trading in ${instrument.symbol} is paused because no current price is available. It is valued at its last known price.`,
   };
@@ -2062,6 +2065,33 @@ export async function refreshAllQuotes(at?: Date | string): Promise<void> {
   }
 }
 
+/**
+ * Price every held or auto-refreshed instrument this server instance has
+ * never quoted. Serverless instances keep separate caches, so a lightweight
+ * dashboard poll can land on one that has not seen a held symbol yet. Cheap
+ * when the cache is warm: no network call happens at all.
+ */
+export async function refreshMissingQuotes(at?: Date | string): Promise<void> {
+  const quoteAt = normalizeAt(at);
+  const missing = (await readRefreshInstruments()).filter((instrument) => {
+    try {
+      activeProvider.quote(instrument, quoteAt);
+      return false;
+    } catch {
+      return true;
+    }
+  });
+  if (missing.length === 0 || !activeProvider.refreshQuote) return;
+  const results = await Promise.allSettled(
+    missing.map((instrument) => activeProvider.refreshQuote!(instrument, quoteAt)),
+  );
+  await Promise.allSettled(
+    results.map((result) =>
+      result.status === "fulfilled" ? rememberLastPrice(result.value) : null,
+    ),
+  );
+}
+
 export async function getQuote(
   symbol: string,
   at?: Date | string,
@@ -2075,10 +2105,13 @@ export async function getQuote(
       error instanceof AppError &&
       ["MARKET_DATA_UNAVAILABLE", "MARKET_DATA_TIMEOUT"].includes(error.code)
     ) {
-      // Coins can stop being quoted; their holdings must stay valued so one
-      // dead pair never breaks a portfolio or the leaderboard.
-      return instrumentAssetClass(instrument) === "CRYPTO"
-        ? lastKnownCryptoQuote(instrument)
+      // A holding with no live quote must stay valued, so one dead coin or
+      // a Yahoo outage never breaks a portfolio or the leaderboard. Crypto
+      // always has its listing price to fall back on; stocks and ETFs need a
+      // remembered price.
+      return instrumentAssetClass(instrument) === "CRYPTO" ||
+        instrument.lastPriceCents !== null
+        ? lastKnownQuote(instrument)
         : null;
     }
     throw error;

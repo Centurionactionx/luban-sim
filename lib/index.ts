@@ -125,6 +125,7 @@ export {
   MARKET_SYMBOL_PATTERN,
   normalizeMarketSymbol,
   refreshAllQuotes,
+  refreshMissingQuotes,
   refreshQuote,
   requireQuote,
   searchInstruments,

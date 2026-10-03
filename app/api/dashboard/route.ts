@@ -4,6 +4,7 @@ import {
   isDemoLoginAllowed,
   listDemoUsers,
   refreshAllQuotes,
+  refreshMissingQuotes,
 } from "@/lib";
 
 import {
@@ -22,7 +23,10 @@ export async function GET(request: Request): Promise<Response> {
     assertRequestAllowed(`poll:${user.id}`, 120);
     const refreshMarket =
       new URL(request.url).searchParams.get("refreshMarket") !== "0";
+    // Light polls skip the market refresh but must still price any holding
+    // this server instance has never quoted, or valuing it would fail.
     if (refreshMarket) await refreshAllQuotes();
+    else await refreshMissingQuotes();
     const dashboard = await getDashboard(user.id);
 
     return json({
