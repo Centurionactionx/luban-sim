@@ -1375,13 +1375,17 @@ a {
   vertical-align: middle;
 }
 
-.symbol-button .asset-tag,
-.symbol-suggestions .asset-tag {
+.symbol-button .asset-tag {
   margin-left: 6px;
 }
 
+/* In suggestions the tag comes before the exchange name. */
+.symbol-suggestions .asset-tag {
+  margin: 0 6px 0 0;
+}
+
 .symbol-suggestions li > span:last-child .asset-tag:only-child {
-  margin-left: 0;
+  margin-right: 0;
 }
 
 .quote-halt {
