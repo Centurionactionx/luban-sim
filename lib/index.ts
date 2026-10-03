@@ -105,6 +105,7 @@ export {
   competitionPhaseFor,
   getCompetitionSummary,
   getDashboard,
+  recordPortfolioSnapshot,
   getLeaderboard,
   getOrderByIdempotencyKey,
   getTeamSummary,

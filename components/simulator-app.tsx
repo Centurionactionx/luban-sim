@@ -113,7 +113,8 @@ type TicketStatus =
   | { kind: "idle"; message: string }
   | { kind: "working"; message: string }
   | { kind: "success"; message: string }
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: string }
+  | { kind: "blocked"; message: string };
 
 const FIXED_NOW = "2026-08-28T14:20:00.000Z";
 const MAX_TEAM_CASH_CENTS = 100_000_000_000_000;
@@ -1412,6 +1413,18 @@ export function SimulatorApp({
       })) ?? [],
     [quoteHistory],
   );
+  // 1W and 1M show only that window, starting from the last value before it
+  // so the line spans the whole range. ALL shows everything.
+  const portfolioRangePoints = useMemo(() => {
+    const history = dashboard.portfolioHistory;
+    const days = portfolioRange === "1W" ? 7 : portfolioRange === "1M" ? 30 : null;
+    if (days === null || history.length === 0) return history;
+    const endMs = Date.parse(dashboard.serverTime);
+    const cutoff = endMs - days * 86_400_000;
+    const firstInside = history.findIndex((point) => Date.parse(point.at) >= cutoff);
+    if (firstInside === -1) return history.slice(-1);
+    return history.slice(Math.max(0, firstInside - 1));
+  }, [dashboard.portfolioHistory, dashboard.serverTime, portfolioRange]);
   const wholeQuantity = Number(quantity);
   const quantityIsValid =
     Number.isInteger(wholeQuantity) && wholeQuantity > 0 && wholeQuantity <= 100_000;
@@ -1443,15 +1456,72 @@ export function SimulatorApp({
     (dashboard.currentUser.role === "student" &&
       dashboard.team?.status === "active" &&
       dashboard.competition.tradingOpen);
-  const canTrade =
+  const quoteLoaded =
     connection === "connected" &&
-    !selectedQuote.isStale &&
-    !tradingHaltReason &&
-    tradingAccountIsOpen &&
-    quantityIsValid &&
-    (side === "BUY"
-      ? estimatedValue <= portfolio.buyingPowerCents
-      : wholeQuantity <= heldQuantity);
+    !(selectedQuote.source === "LUBAN_SIMULATED" && selectedQuote.isStale);
+  // Students can only trade while the listing's exchange is open; the server
+  // enforces this too. The admin sandbox ignores market hours.
+  const marketOpenForTrader = isPlatformAdmin || selectedQuote.marketOpen;
+  const accountName = isPlatformAdmin ? "admin test account" : "team";
+  // Why the order button is disabled, in plain words, or null when it isn't.
+  // Shown live under the ticket so a greyed-out button always explains itself.
+  const tradeBlockedReason: string | null =
+    connection !== "connected"
+      ? "Wait for the simulator to reconnect before trading."
+      : selectedQuote.isStale
+        ? "Trading waits for a fresh market quote."
+        : tradingHaltReason
+          ? tradingHaltReason
+          : isPlatformAdmin && !hasAdminTradingAccount
+            ? "Set your admin test cash before placing an order."
+            : isCompetitionHost
+              ? "Host accounts are view-only and cannot place orders."
+              : !tradingAccountIsOpen
+                ? dashboard.team?.status === "frozen"
+                  ? "Your team is frozen. Ask the host to restore trading."
+                  : dashboard.team?.status === "disqualified"
+                    ? "Your team is disqualified and cannot trade."
+                    : dashboard.competition.phase === "scheduled"
+                      ? `Trading opens ${formatScheduleInstant(dashboard.competition.startsAt)}.`
+                      : dashboard.competition.phase === "ended"
+                        ? `This competition ended ${formatScheduleInstant(dashboard.competition.endsAt)}.`
+                        : dashboard.competition.phase === "paused"
+                          ? "Trading is paused by the host."
+                          : "Trading is not open for your account yet."
+                : !marketOpenForTrader
+                  ? selectedQuote.marketOpensAt
+                    ? `The ${selectedQuote.exchange} market is closed. It reopens ${formatScheduleInstant(selectedQuote.marketOpensAt)}.`
+                    : `The ${selectedQuote.exchange} market is closed. Stocks and ETFs trade 9:30 a.m. to 4:00 p.m. ET on weekdays; crypto trades 24/7.`
+                  : !quantityIsValid
+                    ? `Enter a positive whole number of ${unitWord(selectedAssetClass, 2)}.`
+                    : side === "BUY" && estimatedValue > portfolio.buyingPowerCents
+                      ? `This order is larger than the ${accountName}'s available cash.`
+                      : side === "SELL" && wholeQuantity > heldQuantity
+                        ? heldQuantity === 0
+                          ? `The ${accountName} doesn't hold any ${selectedQuote.symbol}.`
+                          : `The ${accountName} holds only ${number.format(heldQuantity)} ${unitWord(selectedAssetClass, heldQuantity)} of ${selectedQuote.symbol}${
+                              selectedIsCrypto
+                                ? ` (${tokenAmountLabel(heldQuantity, selectedLotSize, selectedQuote.symbol)})`
+                                : ""
+                            }.`
+                        : null;
+  const canTrade = tradeBlockedReason === null;
+  // The most a single order can be: everything affordable when buying,
+  // everything held when selling. Whole units only.
+  const maxOrderQuantity =
+    side === "BUY"
+      ? selectedQuote.priceCadCents > 0
+        ? Math.min(
+            100_000,
+            Math.floor(portfolio.buyingPowerCents / selectedQuote.priceCadCents),
+          )
+        : 0
+      : heldQuantity;
+  // An idle note ("SHOP.TO loaded…") gives way to the reason trading is blocked.
+  const displayedTicketStatus: TicketStatus =
+    ticketStatus.kind === "idle" && tradeBlockedReason && quoteLoaded
+      ? { kind: "blocked", message: tradeBlockedReason }
+      : ticketStatus;
   const adminCashInputValue =
     adminCashDraft ?? (portfolio.cashCents / 100).toFixed(2);
   const parsedAdminCash = parseCashDraft(adminCashInputValue);
@@ -1464,9 +1534,6 @@ export function SimulatorApp({
   const competitionHasTrades = (adminOverview?.teams ?? []).some(
     (team) => team.tradeCount > 0,
   );
-  const quoteLoaded =
-    connection === "connected" &&
-    !(selectedQuote.source === "LUBAN_SIMULATED" && selectedQuote.isStale);
 
   const switchIdentity = async (userId: string) => {
     setIdentityBusy(true);
@@ -1552,6 +1619,29 @@ export function SimulatorApp({
       void loadSearchResult(searchResults[activeSuggestion]);
     }
   };
+
+  // "/" jumps to the symbol search from anywhere on the page, unless the
+  // person is already typing in a field.
+  useEffect(() => {
+    const focusSearch = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "/" || event.ctrlKey || event.metaKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (target.isContentEditable ||
+          ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))
+      ) {
+        return;
+      }
+      const search = document.getElementById("symbol-search");
+      if (!search) return;
+      event.preventDefault();
+      search.focus();
+      search.scrollIntoView({ block: "center", behavior: "smooth" });
+    };
+    window.addEventListener("keydown", focusSearch);
+    return () => window.removeEventListener("keydown", focusSearch);
+  }, []);
 
   // Debounced live search. Each keystroke cancels the previous request, and
   // the server caches every query, so typing costs few upstream calls.
@@ -1697,34 +1787,8 @@ export function SimulatorApp({
 
   const placeOrder = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!canTrade) {
-      const reason = connection !== "connected"
-        ? "Wait for the simulator to reconnect before trading."
-        : selectedQuote.isStale
-          ? "Trading waits for a fresh market quote."
-          : tradingHaltReason
-            ? tradingHaltReason
-          : !quantityIsValid
-            ? `Enter a positive whole number of ${unitWord(selectedAssetClass, 2)}.`
-            : isPlatformAdmin && !hasAdminTradingAccount
-              ? "Set your admin test cash before placing an order."
-              : isCompetitionHost
-                ? "Host accounts are view-only and cannot place orders."
-                : side === "BUY" && estimatedValue > portfolio.buyingPowerCents
-                  ? `This order is larger than the ${isPlatformAdmin ? "admin test account’s" : "team’s"} available cash.`
-                  : side === "SELL" &&
-                      wholeQuantity > heldQuantity
-                    ? `The ${isPlatformAdmin ? "admin test account" : "team"} holds only ${number.format(heldQuantity)} ${unitWord(selectedAssetClass, heldQuantity)} of ${selectedQuote.symbol}${
-                        selectedIsCrypto
-                          ? ` (${tokenAmountLabel(heldQuantity, selectedLotSize, selectedQuote.symbol)})`
-                          : ""
-                      }.`
-                    : dashboard.competition.phase === "scheduled"
-                      ? `Trading opens ${formatScheduleInstant(dashboard.competition.startsAt)}.`
-                      : dashboard.competition.phase === "ended"
-                        ? `This competition ended ${formatScheduleInstant(dashboard.competition.endsAt)}.`
-                        : "Trading is unavailable while the competition or team is paused.";
-      setTicketStatus({ kind: "error", message: reason });
+    if (tradeBlockedReason) {
+      setTicketStatus({ kind: "error", message: tradeBlockedReason });
       return;
     }
 
@@ -2376,13 +2440,8 @@ export function SimulatorApp({
 
             <section className="portfolio-total" aria-label="Portfolio value">
               <span>Total portfolio value (CAD)</span>
-              <strong>
-                {formatMoney(
-                  isPlatformAdmin
-                    ? portfolio.totalValueCents
-                    : portfolio.holdingsValueCents,
-                )}
-              </strong>
+              {/* Cash plus holdings: the same number the leaderboard ranks. */}
+              <strong>{formatMoney(portfolio.totalValueCents)}</strong>
               <small>Price snapshot {formatTime(portfolio.asOf)}</small>
             </section>
 
@@ -2488,7 +2547,7 @@ export function SimulatorApp({
                 </div>
               </div>
               <LineChart
-                points={dashboard.portfolioHistory}
+                points={portfolioRangePoints}
                 label={`${portfolioRange} portfolio value chart`}
                 compact
               />
@@ -2651,6 +2710,8 @@ export function SimulatorApp({
                       setActiveSuggestion(-1);
                     }}
                     placeholder="Symbol or name"
+                    title="Search symbols (press / from anywhere)"
+                    aria-keyshortcuts="/"
                     autoComplete="off"
                     role="combobox"
                     aria-autocomplete="list"
@@ -2895,9 +2956,28 @@ export function SimulatorApp({
               </div>
 
               <div className="ticket-fields">
-                <label>
-                  <span>Quantity · {selectedIsCrypto ? "Lots" : "Shares"}</span>
+                <div className="ticket-quantity">
+                  <label htmlFor="order-quantity">
+                    <span>Quantity · {selectedIsCrypto ? "Lots" : "Shares"}</span>
+                  </label>
+                  <button
+                    type="button"
+                    className="ticket-max"
+                    disabled={!quoteLoaded || maxOrderQuantity < 1}
+                    onClick={() => setQuantity(String(maxOrderQuantity))}
+                    title={
+                      side === "BUY"
+                        ? `Buy as many ${unitWord(selectedAssetClass, 2)} as the cash allows`
+                        : `Sell every ${unitWord(selectedAssetClass, 1)} held`
+                    }
+                  >
+                    {side === "BUY" ? "Max" : "All"}
+                    {quoteLoaded && maxOrderQuantity > 0
+                      ? ` · ${number.format(maxOrderQuantity)}`
+                      : ""}
+                  </button>
                   <input
+                    id="order-quantity"
                     inputMode="numeric"
                     min="1"
                     max="100000"
@@ -2923,7 +3003,7 @@ export function SimulatorApp({
                         : `Enter lots to see the ${selectedToken} amount`}
                     </small>
                   ) : null}
-                </label>
+                </div>
                 <div>
                   <span>{selectedIsCrypto ? "Estimated fill per lot" : "Estimated fill"}</span>
                   <strong>
@@ -2970,7 +3050,7 @@ export function SimulatorApp({
                   className={`button button--primary ${side === "SELL" ? "button--sell" : ""}`}
                   type="submit"
                   disabled={!canTrade || ticketStatus.kind === "working"}
-                  aria-describedby={tradingHaltReason ? "quote-halt" : undefined}
+                  aria-describedby="ticket-status"
                 >
                   {ticketStatus.kind === "working"
                     ? "Recording order…"
@@ -2990,12 +3070,13 @@ export function SimulatorApp({
               </div>
 
               <div
-                className={`ticket-message ticket-message--${ticketStatus.kind}`}
+                id="ticket-status"
+                className={`ticket-message ticket-message--${displayedTicketStatus.kind}`}
                 role="status"
                 aria-live="polite"
               >
                 <InfoIcon />
-                <span>{ticketStatus.message}</span>
+                <span>{displayedTicketStatus.message}</span>
               </div>
 
               <aside className="order-disclosure">

@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import type {
   ActivityItem,
   CompetitionPhase,
@@ -627,10 +629,21 @@ export async function getLeaderboard(userId: string): Promise<Leaderboard> {
   return buildLeaderboard(await requireSessionUser(userId), new Date());
 }
 
+/** Snapshots are recorded at most this often per portfolio. */
+const SNAPSHOT_INTERVAL_MS = 2 * 60 * 60_000;
+/** Two months of two-hourly snapshots; the newest are kept. */
+const SNAPSHOT_HISTORY_LIMIT = 720;
+
+/**
+ * Total portfolio value over time: the competition's start (when every team
+ * held exactly its starting cash), the recorded snapshots, then the current
+ * valuation. Total value is what teams are ranked on, so it is what the
+ * chart shows.
+ */
 async function getPortfolioHistory(
   teamId: string,
   current: PortfolioSummary,
-  includeCash = false,
+  start: PortfolioPoint | null,
 ): Promise<PortfolioPoint[]> {
   const db = await getDb();
   const rows = await db.all<{
@@ -641,23 +654,56 @@ async function getPortfolioHistory(
       SELECT total_value_cents, captured_at
       FROM portfolio_snapshots
       WHERE team_id = ?
-      ORDER BY captured_at ASC
-      LIMIT 30
+      ORDER BY captured_at DESC
+      LIMIT ?
     `,
-    [teamId],
+    [teamId, SNAPSHOT_HISTORY_LIMIT],
   );
 
-  const history = rows.map((row) => ({
+  const history = rows.reverse().map((row) => ({
     at: row.captured_at,
     valueCents: Number(row.total_value_cents),
   }));
-  history.push({
-    at: current.asOf,
-    valueCents: includeCash
-      ? current.totalValueCents
-      : current.holdingsValueCents,
-  });
+  if (
+    start &&
+    start.at < current.asOf &&
+    (history.length === 0 || start.at < history[0].at)
+  ) {
+    history.unshift(start);
+  }
+  history.push({ at: current.asOf, valueCents: current.totalValueCents });
   return history;
+}
+
+/**
+ * Record a portfolio's total value for its history chart, at most once per
+ * snapshot interval. The conditional insert keeps concurrent dashboard loads
+ * on different server instances from writing duplicates.
+ */
+export async function recordPortfolioSnapshot(
+  teamId: string,
+  totalValueCents: number,
+  at: Date = new Date(),
+): Promise<void> {
+  const db = await getDb();
+  await db.run(
+    `
+      INSERT INTO portfolio_snapshots (id, team_id, total_value_cents, captured_at)
+      SELECT ?, ?, ?, ?
+      WHERE NOT EXISTS (
+        SELECT 1 FROM portfolio_snapshots
+        WHERE team_id = ? AND captured_at > ?
+      )
+    `,
+    [
+      randomUUID(),
+      teamId,
+      totalValueCents,
+      at.toISOString(),
+      teamId,
+      new Date(at.getTime() - SNAPSHOT_INTERVAL_MS).toISOString(),
+    ],
+  );
 }
 
 export async function getDashboard(userId: string): Promise<Dashboard> {
@@ -695,7 +741,15 @@ export async function getDashboard(userId: string): Promise<Dashboard> {
           ? await getPortfolioHistory(
               portfolioTeamId,
               calculated.summary,
-              currentUser.role === "platform_admin",
+              // Competition teams all start from the same known value; the
+              // admin sandbox has no shared start.
+              currentUser.role !== "platform_admin" &&
+                competition.startsAt <= now.toISOString()
+                ? {
+                    at: competition.startsAt,
+                    valueCents: competition.startingCashCents,
+                  }
+                : null,
             )
           : [],
       recentOrders: await listOrders(currentUser.id, 8),

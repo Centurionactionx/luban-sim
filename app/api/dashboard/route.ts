@@ -1,6 +1,7 @@
 import {
   assertRequestAllowed,
   getDashboard,
+  recordPortfolioSnapshot,
   isDemoLoginAllowed,
   listDemoUsers,
   refreshAllQuotes,
@@ -28,6 +29,14 @@ export async function GET(request: Request): Promise<Response> {
     if (refreshMarket) await refreshAllQuotes();
     else await refreshMissingQuotes();
     const dashboard = await getDashboard(user.id);
+    // Feeds the portfolio history chart; at most one row per team every two
+    // hours. A failed write must never cost the person their dashboard.
+    if (dashboard.team && dashboard.portfolio) {
+      await recordPortfolioSnapshot(
+        dashboard.team.id,
+        dashboard.portfolio.totalValueCents,
+      ).catch(() => {});
+    }
 
     return json({
       ...dashboard,

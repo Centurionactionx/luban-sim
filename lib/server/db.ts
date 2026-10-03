@@ -900,7 +900,7 @@ async function runSeed(tx: DbExecutor, preserveSessions: boolean): Promise<void>
     await tx.run(insertSnapshot, [
       `snapshot-northstar-${index}`,
       "northstar",
-      0,
+      10_000_000,
       isoDaysFrom(now, index - 6),
     ]);
   }

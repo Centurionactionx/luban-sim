@@ -682,7 +682,7 @@ a {
 .admin-cash-editor__form {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   align-items: stretch;
   gap: 5px;
 }
@@ -1686,6 +1686,44 @@ a {
 
 .ticket-message--working {
   border-width: 2px;
+}
+
+/* Why the order button is disabled: a calm warning, not an error. */
+.ticket-message--blocked {
+  border-color: var(--pink);
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.ticket-quantity label {
+  color: var(--muted);
+  font-size: var(--type-meta);
+}
+
+.ticket-max {
+  justify-self: end;
+  min-height: 26px;
+  padding: 3px 9px;
+  border: 1px solid var(--purple);
+  border-radius: 3px;
+  background: var(--paper);
+  color: var(--purple-deep);
+  font-family: var(--font-data);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.ticket-max:hover:not(:disabled) {
+  background: var(--quiet-purple);
+}
+
+.ticket-max:disabled {
+  border-color: var(--hairline);
+  color: var(--muted);
+  cursor: default;
 }
 
 .order-disclosure {
