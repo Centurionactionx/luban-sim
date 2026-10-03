@@ -1200,45 +1200,63 @@ a {
   height: 17px;
 }
 
-.search-results {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  padding: 10px 18px;
-  border-bottom: 1px solid var(--rule);
-  background: var(--quiet-purple-2);
+.symbol-suggestions {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 6px);
+  right: 0;
+  width: min(420px, calc(100vw - 32px));
+  max-height: min(420px, 70vh);
+  overflow-y: auto;
+  border: 1.5px solid var(--rule);
+  border-radius: 4px;
+  background: var(--paper);
+  box-shadow: 0 10px 24px rgba(0, 23, 31, 0.16);
 }
 
-.search-results button {
-  min-height: 52px;
+.symbol-suggestions ul {
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+}
+
+.symbol-suggestions li {
+  min-height: 44px;
   display: grid;
-  grid-template-columns: 70px 1fr auto;
+  grid-template-columns: minmax(64px, auto) 1fr auto;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border: 0;
+  gap: 10px;
+  padding: 7px 12px;
   border-bottom: 1px solid var(--hairline);
-  background: transparent;
-  font-size: 10px;
-  text-align: left;
+  font-size: 10.5px;
+  cursor: pointer;
 }
 
-.search-results button:nth-child(odd) {
-  border-right: 1px solid var(--hairline);
+.symbol-suggestions li:last-child {
+  border-bottom: 0;
 }
 
-.search-results button:hover {
+.symbol-suggestions li.is-active {
   background: var(--quiet-purple);
+  box-shadow: inset 3px 0 0 var(--purple);
 }
 
-.search-results button strong,
-.search-results button > span:last-child {
+.symbol-suggestions li strong,
+.symbol-suggestions li > span:last-child {
   font-family: var(--font-data);
 }
 
-.search-results button span:nth-child(2) {
+.symbol-suggestions li > span:nth-child(2) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.symbol-suggestions__note {
+  margin: 0;
+  padding: 12px;
+  color: var(--muted);
+  font-size: 10.5px;
 }
 
 .quote-summary {
@@ -1358,11 +1376,11 @@ a {
 }
 
 .symbol-button .asset-tag,
-.search-results .asset-tag {
+.symbol-suggestions .asset-tag {
   margin-left: 6px;
 }
 
-.search-results button > span:last-child .asset-tag:only-child {
+.symbol-suggestions li > span:last-child .asset-tag:only-child {
   margin-left: 0;
 }
 
@@ -2791,14 +2809,6 @@ a {
     width: 160px;
   }
 
-  .search-results {
-    grid-template-columns: 1fr;
-    padding-inline: 14px;
-  }
-
-  .search-results button:nth-child(odd) {
-    border-right: 0;
-  }
 
   .quote-identity > div:first-child {
     align-items: flex-start;
@@ -2897,6 +2907,11 @@ a {
 
   .symbol-search {
     width: 100%;
+  }
+
+  .symbol-suggestions {
+    left: 0;
+    width: auto;
   }
 
   .portfolio-total > strong {

@@ -369,6 +369,8 @@ const currency = new Intl.NumberFormat("en-CA", {
 
 const number = new Intl.NumberFormat("en-CA");
 const TEAM_NAME_MAX_LENGTH = 80;
+const MAX_SUGGESTIONS = 8;
+const SUGGESTION_DELAY_MS = 250;
 
 function formatMoney(cents: number): string {
   return currency.format(cents / 100);
@@ -1071,6 +1073,11 @@ export function SimulatorApp({
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<InstrumentSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
+  // Live suggestions under the search box, like a browser's address bar.
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+  const [suggesting, setSuggesting] = useState(false);
+  const [activeSuggestion, setActiveSuggestion] = useState(-1);
+  const suggestionCache = useRef(new Map<string, InstrumentSearchResult[]>());
   const [side, setSide] = useState<TradeSide>("BUY");
   const [quantity, setQuantity] = useState("10");
   const [ticketStatus, setTicketStatus] = useState<TicketStatus>({
@@ -1473,6 +1480,93 @@ export function SimulatorApp({
     }
   };
 
+  const rememberSuggestions = (query: string, results: InstrumentSearchResult[]) => {
+    const cache = suggestionCache.current;
+    cache.set(query.trim().toLowerCase(), results);
+    if (cache.size > 100) {
+      const oldest = cache.keys().next().value;
+      if (oldest !== undefined) cache.delete(oldest);
+    }
+  };
+
+  const changeSearchQuery = (value: string) => {
+    setSearchQuery(value);
+    setActiveSuggestion(-1);
+    const query = value.trim();
+    if (!query) {
+      setSearchResults([]);
+      setSuggestionsOpen(false);
+      return;
+    }
+    // Typing back to an earlier query reuses its results instantly.
+    const cached = suggestionCache.current.get(query.toLowerCase());
+    if (cached) {
+      setSearchResults(cached);
+      setSuggestionsOpen(true);
+    }
+  };
+
+  const handleSearchKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
+    const visible = Math.min(searchResults.length, MAX_SUGGESTIONS);
+    if (event.key === "ArrowDown" && visible > 0) {
+      event.preventDefault();
+      setSuggestionsOpen(true);
+      setActiveSuggestion((index) => (index + 1) % visible);
+    } else if (event.key === "ArrowUp" && visible > 0) {
+      event.preventDefault();
+      setSuggestionsOpen(true);
+      setActiveSuggestion((index) => (index <= 0 ? visible - 1 : index - 1));
+    } else if (event.key === "Escape" && suggestionsOpen) {
+      event.preventDefault();
+      setSuggestionsOpen(false);
+      setActiveSuggestion(-1);
+    } else if (
+      event.key === "Enter" &&
+      suggestionsOpen &&
+      activeSuggestion >= 0 &&
+      searchResults[activeSuggestion]
+    ) {
+      // A highlighted suggestion wins; otherwise Enter runs a normal search.
+      event.preventDefault();
+      void loadSearchResult(searchResults[activeSuggestion]);
+    }
+  };
+
+  // Debounced live search. Each keystroke cancels the previous request, and
+  // the server caches every query, so typing costs few upstream calls.
+  useEffect(() => {
+    const query = searchQuery.trim();
+    if (!query || suggestionCache.current.has(query.toLowerCase())) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setSuggesting(true);
+      try {
+        const response = await fetch(`/api/quotes?q=${encodeURIComponent(query)}`, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!response.ok) return;
+        const payload = (await readJson(response)) as {
+          results?: InstrumentSearchResult[];
+        };
+        const results = payload.results ?? [];
+        rememberSuggestions(query, results);
+        setSearchResults(results);
+        setActiveSuggestion(-1);
+        setSuggestionsOpen(true);
+      } catch {
+        // Aborted by the next keystroke, or offline: the submit path still works.
+      } finally {
+        if (!controller.signal.aborted) setSuggesting(false);
+      }
+    }, SUGGESTION_DELAY_MS);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+      setSuggesting(false);
+    };
+  }, [searchQuery]);
+
   const searchQuotes = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const query = searchQuery.trim();
@@ -1490,7 +1584,10 @@ export function SimulatorApp({
         throw new Error(extractError(payload, "The symbol search failed."));
       }
       const results = payload.results ?? [];
+      rememberSuggestions(query, results);
       setSearchResults(results);
+      setActiveSuggestion(-1);
+      setSuggestionsOpen(true);
       const normalizedQuery = query
         .toUpperCase()
         .replace(/^([A-Z0-9]+)\.([A-Z])\.TO$/, "$1-$2.TO")
@@ -1568,6 +1665,8 @@ export function SimulatorApp({
     setSelectedQuote(quote);
     setSearchQuery("");
     setSearchResults([]);
+    setSuggestionsOpen(false);
+    setActiveSuggestion(-1);
     setQuoteHistory(null);
     setTicketStatus({
       kind: "idle",
@@ -2519,44 +2618,76 @@ export function SimulatorApp({
                   <input
                     id="symbol-search"
                     value={searchQuery}
-                    onChange={(event) => setSearchQuery(event.target.value)}
+                    onChange={(event) => changeSearchQuery(event.target.value)}
+                    onKeyDown={handleSearchKeyDown}
+                    onFocus={() => {
+                      if (searchQuery.trim() && searchResults.length > 0) {
+                        setSuggestionsOpen(true);
+                      }
+                    }}
+                    onBlur={() => {
+                      setSuggestionsOpen(false);
+                      setActiveSuggestion(-1);
+                    }}
                     placeholder="Symbol or name"
                     autoComplete="off"
+                    role="combobox"
+                    aria-autocomplete="list"
+                    aria-expanded={suggestionsOpen && searchResults.length > 0}
+                    aria-controls="symbol-suggestions"
+                    aria-activedescendant={
+                      suggestionsOpen && activeSuggestion >= 0
+                        ? `symbol-suggestion-${activeSuggestion}`
+                        : undefined
+                    }
                   />
                   <button type="submit" aria-label="Search symbols" disabled={searching}>
                     <SearchIcon />
                   </button>
+                  {suggestionsOpen && searchQuery.trim() ? (
+                    <div className="symbol-suggestions" aria-busy={searching || suggesting}>
+                      <ul
+                        id="symbol-suggestions"
+                        role="listbox"
+                        aria-label="Symbol suggestions"
+                      >
+                        {searchResults.slice(0, MAX_SUGGESTIONS).map((result, index) => {
+                          const tag = assetTagLabel(result.assetClass);
+                          return (
+                            <li
+                              key={result.symbol}
+                              id={`symbol-suggestion-${index}`}
+                              role="option"
+                              aria-selected={index === activeSuggestion}
+                              className={
+                                index === activeSuggestion ? "is-active" : undefined
+                              }
+                              // Keep focus in the box so blur doesn't close the
+                              // list before the click lands.
+                              onMouseDown={(event) => event.preventDefault()}
+                              onMouseEnter={() => setActiveSuggestion(index)}
+                              onClick={() => void loadSearchResult(result)}
+                            >
+                              <strong>{result.symbol}</strong>
+                              <span>{result.name}</span>
+                              <span>
+                                {tag ? <em className="asset-tag">{tag}</em> : null}
+                                {result.assetClass === "CRYPTO" ? null : result.exchange}
+                              </span>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                      {searchResults.length === 0 ? (
+                        <p className="symbol-suggestions__note">
+                          {suggesting ? "Searching…" : "No supported listing matches."}
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </form>
               }
             />
-
-            {searchResults.length > 0 ? (
-              <div
-                className="search-results"
-                role="region"
-                aria-label="Symbol results"
-                aria-busy={searching}
-              >
-                {searchResults.slice(0, 10).map((result) => {
-                  const tag = assetTagLabel(result.assetClass);
-                  return (
-                    <button
-                      key={result.symbol}
-                      type="button"
-                      disabled={searching}
-                      onClick={() => void loadSearchResult(result)}
-                    >
-                      <strong>{result.symbol}</strong>
-                      <span>{result.name}</span>
-                      <span>
-                        {tag ? <em className="asset-tag">{tag}</em> : null}
-                        {result.assetClass === "CRYPTO" ? null : result.exchange}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            ) : null}
 
             <section className="quote-summary" aria-labelledby="quote-heading">
               <div className="quote-symbol-block" aria-hidden="true">
