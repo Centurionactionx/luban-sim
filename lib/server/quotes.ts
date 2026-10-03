@@ -2269,13 +2269,19 @@ export async function searchMarketInstruments(
   );
   const exactSymbol = normalizeMarketSymbol(normalizedQuery);
   const tsxAlias = tsxAliasForBareTickerQuery(normalizedQuery);
+  // A bare ticker like BTC can be both a listed fund and a coin (BTC-CAD), so
+  // with crypto on, a local exact match must not hide the remote search.
+  const coinPairs =
+    isCryptoTradingEnabled() && /^[A-Z0-9]+$/.test(exactSymbol)
+      ? [`${exactSymbol}-CAD`, `${exactSymbol}-USD`]
+      : [];
   const exactLocal = local.find((result) => result.symbol === exactSymbol);
-  if (exactLocal) return [exactLocal];
+  if (exactLocal && coinPairs.length === 0) return [exactLocal];
 
   const exactTsxLocal = tsxAlias
     ? local.find((result) => result.symbol === tsxAlias)
     : undefined;
-  if (exactTsxLocal) {
+  if (exactTsxLocal && coinPairs.length === 0) {
     return [
       exactTsxLocal,
       ...local.filter((result) => result.symbol !== exactTsxLocal.symbol),
@@ -2316,14 +2322,19 @@ export async function searchMarketInstruments(
   for (const result of [...remote, ...local]) {
     if (!merged.has(result.symbol)) merged.set(result.symbol, result);
   }
+  // Exact ticker first, then that coin's pairs (CAD before USD), then the
+  // TSX alias; everything else keeps the provider's relevance order.
+  const priority = [exactSymbol, ...coinPairs, ...(tsxAlias ? [tsxAlias] : [])];
+  const rank = (symbol: string) => {
+    const index = priority.indexOf(symbol);
+    return index === -1 ? priority.length : index;
+  };
   const results = [...merged.values()]
-    .sort((left, right) => {
-      if (left.symbol === exactSymbol) return -1;
-      if (right.symbol === exactSymbol) return 1;
-      if (tsxAlias && left.symbol === tsxAlias) return -1;
-      if (tsxAlias && right.symbol === tsxAlias) return 1;
-      return 0;
-    })
+    .map((result, order) => ({ result, order }))
+    .sort((left, right) =>
+      rank(left.result.symbol) - rank(right.result.symbol) || left.order - right.order,
+    )
+    .map(({ result }) => result)
     .slice(0, 25);
 
   if (results.length === 0 && primarySearchError) {
