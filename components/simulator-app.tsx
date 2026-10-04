@@ -1410,7 +1410,7 @@ export function SimulatorApp({
     kind: "idle",
     message: "Ready for a simulated order.",
   });
-  const [portfolioRange, setPortfolioRange] = useState("1W");
+  const [portfolioRange, setPortfolioRange] = useState("7D");
   const [quoteRange, setQuoteRange] = useState<QuoteRange>("1D");
   const [quoteHistory, setQuoteHistory] = useState<QuoteHistory | null>(null);
   const [historyLoading, setHistoryLoading] = useState(true);
@@ -1721,7 +1721,7 @@ export function SimulatorApp({
   // so the line spans the whole range. ALL shows everything.
   const portfolioRangePoints = useMemo(() => {
     const history = dashboard.portfolioHistory;
-    const days = portfolioRange === "1W" ? 7 : portfolioRange === "1M" ? 30 : null;
+    const days = portfolioRange === "7D" ? 7 : portfolioRange === "1M" ? 30 : null;
     if (days === null || history.length === 0) return history;
     const endMs = Date.parse(dashboard.serverTime);
     const cutoff = endMs - days * 86_400_000;
@@ -3234,7 +3234,7 @@ export function SimulatorApp({
               <div className="chart-header">
                 <h3 id="portfolio-chart-title">Portfolio value history</h3>
                 <div className="range-tabs" aria-label="Portfolio chart range">
-                  {["1W", "1M", "ALL"].map((range) => (
+                  {["7D", "1M", "ALL"].map((range) => (
                     <button
                       key={range}
                       type="button"

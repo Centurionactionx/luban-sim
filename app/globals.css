@@ -3932,3 +3932,184 @@ a {
     border-color: CanvasText;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Detached tiles: the header, each dashboard column, and the footer sit on
+   the purple canvas as separate cards instead of one shared frame.
+   ------------------------------------------------------------------------- */
+
+:root {
+  --tile-gap: clamp(10px, 1.1vw, 16px);
+  --tile-radius: 10px;
+}
+
+.trading-room {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tile-gap);
+  /* Clip sideways like the old frame did, so edge tooltips never widen the page. */
+  overflow: visible;
+  overflow-x: clip;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+/* Header and prototype strip read as one top bar. */
+.app-header {
+  border: 2px solid var(--rule);
+  border-radius: var(--tile-radius) var(--tile-radius) 0 0;
+  background: var(--paper);
+}
+
+.simulation-strip {
+  margin-top: calc(-1 * var(--tile-gap));
+  border: 2px solid var(--rule);
+  border-top: 0;
+  border-radius: 0 0 var(--tile-radius) var(--tile-radius);
+}
+
+.connection-banner {
+  border: 2px solid var(--rule);
+  border-radius: var(--tile-radius);
+}
+
+.trading-grid,
+.trading-grid {
+  gap: var(--tile-gap);
+  align-items: stretch;
+}
+
+.room-column {
+  border: 2px solid var(--rule);
+  border-radius: var(--tile-radius);
+  box-shadow: 0 2px 0 rgba(0, 23, 31, 0.18);
+}
+
+.room-column + .room-column {
+  border-left: 2px solid var(--rule);
+}
+
+/* Keep hover fills inside the rounded corners. */
+.room-column > :first-child,
+.room-column > .rail-section:first-child > :first-child {
+  border-top-left-radius: calc(var(--tile-radius) - 2px);
+  border-top-right-radius: calc(var(--tile-radius) - 2px);
+}
+
+.room-column > .rail-section:first-child {
+  border-top-left-radius: calc(var(--tile-radius) - 2px);
+  border-top-right-radius: calc(var(--tile-radius) - 2px);
+}
+
+.room-column > .rail-section:last-child {
+  border-bottom-left-radius: calc(var(--tile-radius) - 2px);
+  border-bottom-right-radius: calc(var(--tile-radius) - 2px);
+}
+
+.status-footer {
+  border: 2px solid var(--rule);
+  border-radius: var(--tile-radius);
+  background: var(--paper);
+}
+
+@media (max-width: 1260px) {
+  .room-column--team {
+    border-top: 2px solid var(--rule);
+    border-left: 2px solid var(--rule) !important;
+  }
+}
+
+@media (max-width: 960px) {
+  .trading-grid {
+    gap: var(--tile-gap);
+  }
+
+  .room-column + .room-column {
+    border: 2px solid var(--rule);
+  }
+}
+
+/* Wider portfolio tile; its tables wrap text instead of scrolling sideways. */
+.trading-grid {
+  grid-template-columns:
+    minmax(400px, 1.2fr)
+    minmax(480px, 1.35fr)
+    minmax(320px, 0.9fr);
+}
+
+.room-column--portfolio .data-table th,
+.room-column--portfolio .data-table td,
+.leaderboard-section .data-table th,
+.leaderboard-section .data-table td {
+  padding-right: 6px;
+  padding-left: 6px;
+  white-space: normal;
+  overflow-wrap: break-word;
+  vertical-align: top;
+}
+
+.room-column--portfolio .data-table th:first-child,
+.room-column--portfolio .data-table td:first-child,
+.leaderboard-section .data-table th:first-child,
+.leaderboard-section .data-table td:first-child {
+  padding-left: 14px;
+}
+
+.room-column--portfolio .data-table th:last-child,
+.room-column--portfolio .data-table td:last-child,
+.leaderboard-section .data-table th:last-child,
+.leaderboard-section .data-table td:last-child {
+  padding-right: 14px;
+}
+
+/* Headers and buttons stay whole words. */
+.room-column--portfolio .data-table thead th,
+.leaderboard-section .data-table thead th,
+.room-column--portfolio .data-table .button--compact {
+  white-space: nowrap;
+}
+
+.room-column--portfolio .data-table thead th {
+  vertical-align: bottom;
+}
+
+.room-column--portfolio .symbol-button span {
+  max-width: none;
+  white-space: normal;
+}
+
+@media (max-width: 1260px) {
+  .trading-grid {
+    grid-template-columns: minmax(380px, 1fr) minmax(480px, 1.25fr);
+  }
+}
+
+@media (max-width: 960px) {
+  .trading-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* A little more room overall. */
+.trading-room {
+  width: min(1600px, 100%);
+}
+
+/* Equal side columns so the middle footer item sits at the true center. */
+@media (min-width: 721px) {
+  .status-footer {
+    grid-template-columns: 1fr auto 1fr;
+  }
+}
+
+/* Matching side tiles keep the chart tile at the exact center of the page. */
+.trading-room {
+  width: min(1720px, 100%);
+}
+
+@media (min-width: 1261px) {
+  .trading-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr) minmax(0, 1fr);
+  }
+}
