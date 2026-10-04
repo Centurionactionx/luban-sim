@@ -24,7 +24,8 @@ import { getAdminTradingTeamId } from "./admin-trading";
 import { getSessionUser } from "./auth";
 import { getDb, withReadTransaction } from "./db";
 import { getQuote, listQuotes, quoteCacheGeneration } from "./quotes";
-import { readReservations } from "./working-order-book";
+import { readReservations, workingOrdersAvailableTo } from "./working-order-book";
+import { listWorkingOrders } from "./working-orders";
 
 interface CompetitionRow {
   id: string;
@@ -291,7 +292,8 @@ export async function calculatePortfolio(
     });
   }
 
-  const reservedCashCents = (await readReservations(database, teamId)).cashCents;
+  const reservations = await readReservations(database, teamId);
+  const reservedCashCents = reservations.cashCents;
   const holdingsValueCents = interim.reduce(
     (total, holding) => total + holding.marketValueCents,
     0,
@@ -340,6 +342,10 @@ export async function calculatePortfolio(
       quoteAsOf: holding.quote.asOf,
       assetClass: holding.quote.assetClass ?? "STOCK",
       lotSize: holding.quote.lotSize ?? 1,
+      reservedQuantity: Math.min(
+        holding.quantity,
+        reservations.sharesBySymbol.get(holding.quote.symbol) ?? 0,
+      ),
     }))
     .sort((left, right) => right.marketValueCents - left.marketValueCents);
 
@@ -358,6 +364,7 @@ export async function calculatePortfolio(
       dayChangePercent: roundPercent(dayChangeCents, priorValueCents),
       // Cash set aside for waiting buy orders can't be spent twice.
       buyingPowerCents: cashCents - reservedCashCents,
+      reservedCashCents,
       asOf: at.toISOString(),
     },
     holdings,
@@ -759,6 +766,9 @@ export async function getDashboard(userId: string): Promise<Dashboard> {
       recentActivity: await listActivity(currentUser.id, 10),
       leaderboard: leaderboard.rows.slice(0, 5),
       availableSymbols: await listQuotes(now),
+      workingOrders: portfolioTeamId ? await listWorkingOrders(portfolioTeamId) : [],
+      workingOrdersEnabled:
+        currentUser.role !== "host" && workingOrdersAvailableTo(currentUser.role),
       serverTime: now.toISOString(),
     };
   });

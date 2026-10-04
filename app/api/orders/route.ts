@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  MAX_ORDER_PRICE_CENTS,
   assertRequestAllowed,
   listOrders,
   normalizeMarketSymbol,
@@ -22,6 +23,8 @@ import {
 
 export const dynamic = "force-dynamic";
 
+const priceCents = z.number().int().positive().max(MAX_ORDER_PRICE_CENTS);
+
 const orderSchema = z
   .object({
     orderType: z.literal("MARKET").default("MARKET"),
@@ -34,6 +37,15 @@ const orderSchema = z
       .max(16)
       .regex(/^[A-Za-z0-9.-]+$/, "Enter a valid ticker symbol.")
       .transform(normalizeMarketSymbol),
+    /** Optional exits for a buy: a take profit and/or a stop loss. */
+    bracket: z
+      .object({
+        takeProfitCents: priceCents.nullable().optional(),
+        stopLossCents: priceCents.nullable().optional(),
+        timeInForce: z.enum(["DAY", "GTC"]).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -60,6 +72,7 @@ export async function POST(request: Request): Promise<Response> {
       quantity: order.quantity,
       side: order.side,
       symbol: order.symbol,
+      bracket: order.bracket,
     };
     const replay = await replayOrder(input);
     if (replay) {

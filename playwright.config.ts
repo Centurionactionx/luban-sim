@@ -31,6 +31,9 @@ export default defineConfig({
       LUBAN_DATABASE_PATH: join(process.cwd(), "data", "luban.e2e.sqlite"),
       LUBAN_DEMO_MODE: "true",
       LUBAN_MARKET_DATA_PROVIDER: "synthetic",
+      LUBAN_ENABLE_WORKING_ORDERS: "true",
+      // Lets tests run the price checker on demand. Test-only value.
+      CRON_SECRET: "e2e-local-cron-secret",
     },
     reuseExistingServer: false,
     timeout: 120_000,

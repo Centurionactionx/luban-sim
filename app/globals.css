@@ -3591,3 +3591,333 @@ a {
   text-decoration: underline;
   text-underline-offset: 2px;
 }
+
+/* ---------------------------------------------------------------------------
+   Waiting orders: order type, price, time in force, bracket exits, and the
+   panel that lists them.
+   ------------------------------------------------------------------------- */
+
+.ticket-label-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.order-type--select {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+  padding: 6px 9px 8px;
+}
+
+.order-type--select label {
+  color: var(--muted);
+  font-family: var(--font-data);
+  font-size: var(--type-meta);
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.order-type select,
+.ticket-condition select {
+  width: 100%;
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 1.5px solid var(--rule);
+  border-radius: 4px;
+  background: var(--quiet-purple-2);
+  font-family: var(--font-data);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.help-tip {
+  position: relative;
+  display: inline-flex;
+}
+
+.help-tip__button {
+  width: 18px;
+  height: 18px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--purple);
+  border-radius: 50%;
+  background: var(--paper);
+  color: var(--purple-deep);
+  font-family: var(--font-data);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.help-tip[data-open="true"] .help-tip__button {
+  background: var(--purple);
+  color: var(--paper);
+}
+
+/* Enlarge the touch target without changing the visible circle. */
+.help-tip__button::after {
+  content: "";
+  position: absolute;
+  inset: -12px;
+}
+
+/* Specific enough to beat label styles (e.g. ".order-type span") it sits in. */
+.help-tip .help-tip__bubble,
+.help-tip .help-tip__line {
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 11.5px;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.45;
+  text-transform: none;
+}
+
+.help-tip__bubble {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 8px);
+  left: 50%;
+  width: min(300px, calc(100vw - 32px));
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1.5px solid var(--rule);
+  border-radius: 4px;
+  background: var(--paper);
+  box-shadow: 4px 4px 0 var(--purple);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 11.5px;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.45;
+  text-align: left;
+  text-transform: none;
+  white-space: normal;
+  transform: translateX(-50%);
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.help-tip[data-open="true"] .help-tip__bubble {
+  visibility: visible;
+  opacity: 1;
+}
+
+.help-tip__line {
+  display: block;
+}
+
+.help-tip .help-tip__line strong {
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.ticket-conditions,
+.ticket-bracket {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px 28px;
+  margin-top: 14px;
+}
+
+.ticket-bracket {
+  min-width: 0;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+}
+
+.ticket-bracket legend {
+  padding: 0 6px;
+  color: var(--muted);
+  font-family: var(--font-data);
+  font-size: var(--type-meta);
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.ticket-condition {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ticket-condition--wide {
+  grid-column: 1 / -1;
+}
+
+/* Same height with or without a "?" so side-by-side inputs line up. */
+.ticket-condition > label,
+.ticket-condition > .ticket-label-row {
+  min-height: 20px;
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+}
+
+.ticket-condition > label,
+.ticket-condition > .ticket-label-row label {
+  color: var(--muted);
+  font-family: var(--font-data);
+  font-size: var(--type-meta);
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.ticket-condition input {
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 11px;
+  border: 1.5px solid var(--rule);
+  border-radius: 4px;
+  background: var(--quiet-purple-2);
+  font-family: var(--font-data);
+  font-size: 15px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.ticket-condition select {
+  min-height: 44px;
+}
+
+.ticket-condition small {
+  color: var(--muted);
+  font-size: var(--type-description);
+}
+
+.optional-note {
+  color: var(--muted);
+  font-style: normal;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.working-orders-section {
+  border-top: 1px solid var(--rule);
+  padding-bottom: 12px;
+}
+
+.working-orders-table th[scope="row"] {
+  font-weight: 500;
+}
+
+.working-orders-table th[scope="row"] strong {
+  font-weight: 600;
+}
+
+.working-order--attached th[scope="row"] {
+  padding-left: 30px;
+}
+
+.button--compact {
+  min-height: 32px;
+  padding: 4px 10px;
+  font-size: 9.5px;
+}
+
+.working-orders-feedback {
+  margin: 10px 18px 0;
+}
+
+.activity-state--working_order_placed {
+  color: var(--purple-deep);
+  background: var(--quiet-purple);
+}
+
+.activity-state--working_order_cancelled,
+.activity-state--working_order_expired {
+  color: var(--muted);
+  background: var(--paper);
+}
+
+@media (max-width: 560px) {
+  .ticket-conditions,
+  .ticket-bracket {
+    grid-template-columns: 1fr;
+  }
+
+  .working-orders-table,
+  .working-orders-table tbody,
+  .working-orders-table tr,
+  .working-orders-table th,
+  .working-orders-table td {
+    display: block;
+  }
+
+  .working-orders-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+  }
+
+  .working-orders-table tbody {
+    padding: 0 12px 4px;
+  }
+
+  .working-orders-table tbody tr {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px 14px;
+    padding: 12px 2px;
+    border-top: 1px solid var(--hairline);
+  }
+
+  .working-orders-table tbody tr:first-child {
+    border-top: 0;
+  }
+
+  .working-orders-table th,
+  .working-orders-table td,
+  .working-orders-table th:first-child,
+  .working-orders-table td:first-child,
+  .working-orders-table th:last-child,
+  .working-orders-table td:last-child {
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    text-align: left;
+    white-space: normal;
+  }
+
+  .working-orders-table th::before,
+  .working-orders-table td::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 3px;
+    color: var(--muted);
+    font-size: 8px;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+
+  .working-orders-table th:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .working-order--attached th[scope="row"] {
+    padding-left: 0;
+  }
+
+  .working-orders-feedback {
+    margin-inline: 12px;
+  }
+}
+
+@media (forced-colors: active) {
+  .help-tip__bubble {
+    border-color: CanvasText;
+  }
+}

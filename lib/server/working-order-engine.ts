@@ -4,6 +4,7 @@ import type { AssetClass, Quote, TradeSide, WorkingOrderType } from "../contract
 import { AppError } from "../errors";
 import { acquireAccountReadLock, type DbExecutor } from "./database";
 import { getDb } from "./db";
+import { unitWord } from "../lots";
 import { getMarketDataProvider, marketDataNow, refreshQuote } from "./quotes";
 import { maxQuoteAgeMs, placeOrder } from "./trading";
 import {
@@ -154,7 +155,7 @@ async function logActivity(
       order.team_id,
       type,
       `${label} ${order.symbol} ${type === "WORKING_ORDER_EXPIRED" ? "expired" : "cancelled"}`,
-      `${label} for ${Number(order.quantity)} of ${order.symbol}: ${detail}`,
+      `${label} for ${Number(order.quantity)} ${unitWord(order.asset_class ?? "STOCK", Number(order.quantity))} of ${order.symbol}: ${detail}`,
       nowIso,
     ],
   );

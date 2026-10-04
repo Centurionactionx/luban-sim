@@ -33,7 +33,10 @@ import type {
   SessionUser,
   TeamSummary,
   TeamStatus,
+  TimeInForce,
   TradeSide,
+  WorkingOrderType,
+  WorkingOrderView,
 } from "@/lib/contracts";
 import { cryptoTokenSymbol, formatTokenQuantity, unitWord } from "@/lib/lots";
 import {
@@ -238,6 +241,7 @@ const fallbackPortfolio: PortfolioSummary = {
   dayChangeCents: 0,
   dayChangePercent: 0,
   buyingPowerCents: 10000000,
+  reservedCashCents: 0,
   asOf: FIXED_NOW,
 };
 
@@ -347,6 +351,8 @@ const fallbackDashboard: DashboardPayload = {
   recentActivity: fallbackActivity,
   leaderboard: fallbackLeaderboard,
   availableSymbols: fallbackQuotes,
+  workingOrders: [],
+  workingOrdersEnabled: false,
   serverTime: FIXED_NOW,
   session: {
     user: { ...fallbackUsers[0], email: "alex@demo.luban.org", status: "active" },
@@ -364,6 +370,7 @@ const emptyPortfolio: PortfolioSummary = {
   dayChangeCents: 0,
   dayChangePercent: 0,
   buyingPowerCents: 0,
+  reservedCashCents: 0,
   asOf: FIXED_NOW,
 };
 
@@ -606,6 +613,146 @@ function formatPerTokenMoney(
 /** Exact token amount for a whole number of crypto lots, e.g. "0.0003 BTC". */
 function tokenAmountLabel(quantity: number, lotSize: number, symbol: string): string {
   return `${formatTokenQuantity(quantity, lotSize)} ${cryptoTokenSymbol(symbol)}`;
+}
+
+type TicketOrderType = "MARKET" | WorkingOrderType;
+
+const ORDER_TYPE_LABELS: Record<TicketOrderType, string> = {
+  MARKET: "Market",
+  LIMIT: "Limit",
+  STOP_LOSS: "Stop loss",
+  TAKE_PROFIT: "Take profit",
+};
+const BUY_ORDER_TYPES: TicketOrderType[] = ["MARKET", "LIMIT"];
+const SELL_ORDER_TYPES: TicketOrderType[] = ["MARKET", "LIMIT", "STOP_LOSS", "TAKE_PROFIT"];
+const MAX_WAITING_ORDERS = 20;
+const MAX_ORDER_PRICE_CENTS = 10_000_000_000;
+
+/** "Limit buy", "Stop loss", ...: how a waiting order is named everywhere. */
+function workingOrderName(orderType: WorkingOrderType, side: TradeSide): string {
+  if (orderType === "STOP_LOSS") return "Stop loss";
+  if (orderType === "TAKE_PROFIT") return "Take profit";
+  return side === "BUY" ? "Limit buy" : "Limit sell";
+}
+
+/**
+ * A price typed into the ticket, in whole cents per share (per lot for
+ * crypto), or null when it isn't a usable price. Crypto prices are typed per
+ * whole token, like the quote above the ticket, and converted to the lot.
+ */
+function parseTicketPrice(value: string, isCrypto: boolean, lotSize: number): number | null {
+  const trimmed = value.trim().replace(/^\$/, "").replace(/,/g, "");
+  if (!(isCrypto ? /^\d*\.?\d{0,10}$/ : /^\d*\.?\d{0,2}$/).test(trimmed)) return null;
+  const amount = Number(trimmed);
+  if (!trimmed || !Number.isFinite(amount) || amount <= 0) return null;
+  const cents = Math.round(amount * 100 * (isCrypto ? lotSize : 1));
+  return cents >= 1 && cents <= MAX_ORDER_PRICE_CENTS ? cents : null;
+}
+
+/** A per-share (per-lot) price as people read it: per token for crypto. */
+function formatTicketPrice(
+  cents: number,
+  currency: "CAD" | "USD",
+  isCrypto: boolean,
+  lotSize: number,
+): string {
+  return isCrypto
+    ? formatPerTokenMoney(cents, lotSize, currency)
+    : formatNativeMoney(cents, currency);
+}
+
+function formatWorkingOrderPrice(order: WorkingOrderView): string {
+  const isCrypto = order.assetClass === "CRYPTO";
+  const price = formatTicketPrice(
+    order.triggerPriceCents,
+    order.listingCurrency,
+    isCrypto,
+    order.lotSize,
+  );
+  return isCrypto ? `${price} per ${cryptoTokenSymbol(order.symbol)}` : price;
+}
+
+function isPlatformAdminRole(dashboard: { currentUser: { role: string } }): boolean {
+  return dashboard.currentUser.role === "platform_admin";
+}
+
+function activityStateLabel(type: ActivityItem["type"]): string {
+  switch (type) {
+    case "ORDER_FILLED":
+      return "Filled";
+    case "WORKING_ORDER_PLACED":
+      return "Waiting";
+    case "WORKING_ORDER_CANCELLED":
+      return "Cancelled";
+    case "WORKING_ORDER_EXPIRED":
+      return "Expired";
+    default:
+      return "Logged";
+  }
+}
+
+/**
+ * A "?" that explains the control beside it. It opens on hover, on focus, and
+ * on a tap for touch screens; it stays open while the pointer is over it, and
+ * Escape, moving away, or tapping elsewhere closes it.
+ */
+function HelpTip({
+  id,
+  label,
+  children,
+}: {
+  id: string;
+  label: string;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  // Where the bubble sits, relative to the "?": centred on it, but kept
+  // 16px inside the window so it never runs off a narrow screen.
+  const [bubbleLeft, setBubbleLeft] = useState<number | null>(null);
+  const anchor = useRef<HTMLSpanElement>(null);
+  const show = () => {
+    const box = anchor.current?.getBoundingClientRect();
+    if (box) {
+      const viewport = document.documentElement.clientWidth;
+      const width = Math.min(300, viewport - 32);
+      const centred = box.left + box.width / 2 - width / 2;
+      const left = Math.max(16, Math.min(centred, viewport - 16 - width));
+      setBubbleLeft(left - box.left);
+    }
+    setOpen(true);
+  };
+  return (
+    <span
+      ref={anchor}
+      className="help-tip"
+      data-open={open}
+      onMouseEnter={show}
+      onMouseLeave={() => setOpen(false)}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") setOpen(false);
+      }}
+    >
+      <button
+        type="button"
+        className="help-tip__button"
+        aria-label={label}
+        aria-describedby={id}
+        onFocus={show}
+        onClick={show}
+        onBlur={() => setOpen(false)}
+      >
+        ?
+      </button>
+      <span
+        className="help-tip__bubble"
+        role="tooltip"
+        id={id}
+        style={bubbleLeft === null ? undefined : { left: bubbleLeft, transform: "none" }}
+      >
+        {children}
+      </span>
+    </span>
+  );
 }
 
 function assetTagLabel(assetClass: Quote["assetClass"]): string | null {
@@ -1195,6 +1342,16 @@ export function SimulatorApp({
   );
   const [side, setSide] = useState<TradeSide>("BUY");
   const [quantity, setQuantity] = useState("10");
+  const [orderType, setOrderType] = useState<TicketOrderType>("MARKET");
+  const [triggerPrice, setTriggerPrice] = useState("");
+  const [timeInForce, setTimeInForce] = useState<TimeInForce>("GTC");
+  // Bracket exits start blank: they are optional.
+  const [takeProfitPrice, setTakeProfitPrice] = useState("");
+  const [stopLossPrice, setStopLossPrice] = useState("");
+  const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(null);
+  const [workingOrdersFeedback, setWorkingOrdersFeedback] = useState<TicketStatus | null>(
+    null,
+  );
   const [ticketStatus, setTicketStatus] = useState<TicketStatus>({
     kind: "idle",
     message: "Ready for a simulated order.",
@@ -1521,9 +1678,6 @@ export function SimulatorApp({
   const wholeQuantity = Number(quantity);
   const quantityIsValid =
     Number.isInteger(wholeQuantity) && wholeQuantity > 0 && wholeQuantity <= 100_000;
-  const estimatedValue = quantityIsValid
-    ? selectedQuote.priceCadCents * wholeQuantity
-    : 0;
   const holdingForQuote = dashboard.holdings.find(
     (holding) => holding.symbol === selectedQuote.symbol,
   );
@@ -1536,6 +1690,96 @@ export function SimulatorApp({
   const selectedAssetTag = assetTagLabel(selectedQuote.assetClass);
   const tradingHaltReason = selectedQuote.tradingHaltReason ?? null;
   const heldQuantity = holdingForQuote?.quantity ?? 0;
+  // Shares (lots) held back for the team's waiting sells can't be sold again.
+  const reservedQuantity = Math.min(heldQuantity, holdingForQuote?.reservedQuantity ?? 0);
+  const freeQuantity = heldQuantity - reservedQuantity;
+  const workingOrdersEnabled = dashboard.workingOrdersEnabled;
+  // Stop loss and take profit only sell; switching to Buy falls back to Market.
+  const ticketOrderType: TicketOrderType = !workingOrdersEnabled
+    ? "MARKET"
+    : side === "BUY" && (orderType === "STOP_LOSS" || orderType === "TAKE_PROFIT")
+      ? "MARKET"
+      : orderType;
+  const isWaitingOrder = ticketOrderType !== "MARKET";
+  const ticketPrice = (value: string) =>
+    parseTicketPrice(value, selectedIsCrypto, selectedLotSize);
+  const triggerPriceCents = isWaitingOrder ? ticketPrice(triggerPrice) : null;
+  const bracketAllowed =
+    workingOrdersEnabled &&
+    side === "BUY" &&
+    (ticketOrderType === "MARKET" || ticketOrderType === "LIMIT");
+  const takeProfitEntered = bracketAllowed && takeProfitPrice.trim() !== "";
+  const stopLossEntered = bracketAllowed && stopLossPrice.trim() !== "";
+  const takeProfitCents = takeProfitEntered ? ticketPrice(takeProfitPrice) : null;
+  const stopLossCents = stopLossEntered ? ticketPrice(stopLossPrice) : null;
+  const bracketLegs = (takeProfitCents ? 1 : 0) + (stopLossCents ? 1 : 0);
+  const openWorkingOrderCount = dashboard.workingOrders.filter(
+    (order) => order.status === "WORKING" || order.status === "PENDING_PARENT",
+  ).length;
+  const newWorkingOrderCount = (isWaitingOrder ? 1 : 0) + bracketLegs;
+  // A limit buy sets aside its cost at the limit, in CAD, the way the server
+  // does: rounded per share, with a 2% currency cushion for USD listings.
+  const setsAsideCash = side === "BUY" && ticketOrderType === "LIMIT";
+  const ticketUnitCadCents =
+    isWaitingOrder && triggerPriceCents !== null
+      ? Math.ceil(
+          (triggerPriceCents *
+            selectedQuote.fxRateBasisPoints *
+            (setsAsideCash && selectedQuote.listingCurrency === "USD" ? 1.02 : 1)) /
+            10_000,
+        )
+      : selectedQuote.priceCadCents;
+  const estimatedValue = quantityIsValid ? ticketUnitCadCents * wholeQuantity : 0;
+  // The price an exit is judged against: the limit for a limit buy, or the
+  // current price for a market buy.
+  const bracketEntryCents =
+    ticketOrderType === "LIMIT" ? triggerPriceCents : selectedQuote.priceCents;
+  const priceInputUnit = selectedIsCrypto
+    ? `${selectedQuote.listingCurrency} per ${selectedToken}`
+    : selectedQuote.listingCurrency;
+  const currentPriceText = formatTicketPrice(
+    selectedQuote.priceCents,
+    selectedQuote.listingCurrency,
+    selectedIsCrypto,
+    selectedLotSize,
+  );
+  const ticketPriceText = (cents: number) =>
+    formatTicketPrice(cents, selectedQuote.listingCurrency, selectedIsCrypto, selectedLotSize);
+  const triggerPriceLabel =
+    ticketOrderType === "STOP_LOSS"
+      ? "Stop price"
+      : ticketOrderType === "TAKE_PROFIT"
+        ? "Target price"
+        : "Limit price";
+  // Why the waiting-order parts of the ticket can't be sent yet, or null.
+  const waitingOrderProblem: string | null =
+    isWaitingOrder && triggerPriceCents === null
+      ? triggerPrice.trim() === ""
+        ? `Enter a ${triggerPriceLabel.toLowerCase()}.`
+        : `Enter the ${triggerPriceLabel.toLowerCase()} as a positive amount${selectedIsCrypto ? "" : " with up to two decimals"}.`
+      : ticketOrderType === "STOP_LOSS" &&
+          triggerPriceCents !== null &&
+          triggerPriceCents >= selectedQuote.priceCents
+        ? `A stop loss sells if the price falls, so set it below the current price of ${currentPriceText}.`
+        : ticketOrderType === "TAKE_PROFIT" &&
+            triggerPriceCents !== null &&
+            triggerPriceCents <= selectedQuote.priceCents
+          ? `A take profit sells if the price rises, so set it above the current price of ${currentPriceText}.`
+          : takeProfitEntered && takeProfitCents === null
+            ? "Enter a valid take profit price, or leave it blank."
+            : stopLossEntered && stopLossCents === null
+              ? "Enter a valid stop loss price, or leave it blank."
+              : takeProfitCents !== null &&
+                  bracketEntryCents !== null &&
+                  takeProfitCents <= bracketEntryCents
+                ? `The take profit must be above the ${ticketOrderType === "LIMIT" ? "limit price" : "current price"} of ${ticketPriceText(bracketEntryCents)}.`
+                : stopLossCents !== null &&
+                    bracketEntryCents !== null &&
+                    stopLossCents >= bracketEntryCents
+                  ? `The stop loss must be below the ${ticketOrderType === "LIMIT" ? "limit price" : "current price"} of ${ticketPriceText(bracketEntryCents)}.`
+                  : openWorkingOrderCount + newWorkingOrderCount > MAX_WAITING_ORDERS
+                    ? `A ${isPlatformAdminRole(dashboard) ? "test account" : "team"} can have at most ${MAX_WAITING_ORDERS} waiting orders. Cancel one first.`
+                    : null;
   const holdingsHaveLots = dashboard.holdings.some(
     (holding) => holding.assetClass === "CRYPTO",
   );
@@ -1581,35 +1825,57 @@ export function SimulatorApp({
                         : dashboard.competition.phase === "paused"
                           ? "Trading is paused by the host."
                           : "Trading is not open for your account yet."
-                : !marketOpenForTrader
+                : !marketOpenForTrader && !isWaitingOrder
                   ? selectedQuote.marketOpensAt
                     ? `The ${selectedQuote.exchange} market is closed. It reopens ${formatScheduleInstant(selectedQuote.marketOpensAt)}.`
                     : `The ${selectedQuote.exchange} market is closed. Stocks and ETFs trade 9:30 a.m. to 4:00 p.m. ET on weekdays; crypto trades 24/7.`
                   : !quantityIsValid
                     ? `Enter a positive whole number of ${unitWord(selectedAssetClass, 2)}.`
-                    : side === "BUY" && estimatedValue > portfolio.buyingPowerCents
-                      ? `This order is larger than the ${accountName}'s available cash.`
-                      : side === "SELL" && wholeQuantity > heldQuantity
-                        ? heldQuantity === 0
-                          ? `The ${accountName} doesn't hold any ${selectedQuote.symbol}.`
-                          : `The ${accountName} holds only ${number.format(heldQuantity)} ${unitWord(selectedAssetClass, heldQuantity)} of ${selectedQuote.symbol}${
-                              selectedIsCrypto
-                                ? ` (${tokenAmountLabel(heldQuantity, selectedLotSize, selectedQuote.symbol)})`
-                                : ""
-                            }.`
-                        : null;
+                    : waitingOrderProblem
+                      ? waitingOrderProblem
+                      : side === "BUY" && estimatedValue > portfolio.buyingPowerCents
+                        ? `This order is larger than the ${accountName}'s available cash${
+                            portfolio.reservedCashCents > 0
+                              ? ` (${formatMoney(portfolio.reservedCashCents)} is set aside for waiting buys)`
+                              : ""
+                          }.`
+                        : side === "SELL" && wholeQuantity > freeQuantity
+                          ? heldQuantity === 0
+                            ? `The ${accountName} doesn't hold any ${selectedQuote.symbol}.`
+                            : reservedQuantity > 0
+                              ? `Only ${number.format(freeQuantity)} of the ${accountName}'s ${number.format(heldQuantity)} ${unitWord(selectedAssetClass, heldQuantity)} of ${selectedQuote.symbol} are free; the rest are held back for waiting sells.`
+                              : `The ${accountName} holds only ${number.format(heldQuantity)} ${unitWord(selectedAssetClass, heldQuantity)} of ${selectedQuote.symbol}${
+                                  selectedIsCrypto
+                                    ? ` (${tokenAmountLabel(heldQuantity, selectedLotSize, selectedQuote.symbol)})`
+                                    : ""
+                                }.`
+                          : null;
   const canTrade = tradeBlockedReason === null;
+  // Exits waiting on a limit buy are listed right under it.
+  const workingOrderRows = useMemo(() => {
+    const open = dashboard.workingOrders;
+    const ids = new Set(open.map((order) => order.id));
+    const rows: Array<{ order: WorkingOrderView; attached: boolean }> = [];
+    for (const order of open) {
+      if (order.parentId && ids.has(order.parentId)) continue;
+      rows.push({ order, attached: false });
+      for (const exit of open) {
+        if (exit.parentId === order.id) rows.push({ order: exit, attached: true });
+      }
+    }
+    return rows;
+  }, [dashboard.workingOrders]);
   // The most a single order can be: everything affordable when buying,
   // everything held when selling. Whole units only.
   const maxOrderQuantity =
     side === "BUY"
-      ? selectedQuote.priceCadCents > 0
+      ? ticketUnitCadCents > 0
         ? Math.min(
             100_000,
-            Math.floor(portfolio.buyingPowerCents / selectedQuote.priceCadCents),
+            Math.max(0, Math.floor(portfolio.buyingPowerCents / ticketUnitCadCents)),
           )
         : 0
-      : heldQuantity;
+      : freeQuantity;
   // An idle note ("SHOP.TO loaded…") gives way to the reason trading is blocked.
   const displayedTicketStatus: TicketStatus =
     ticketStatus.kind === "idle" && tradeBlockedReason && quoteLoaded
@@ -1975,6 +2241,109 @@ export function SimulatorApp({
     });
   };
 
+  // Editing the ticket retires the last result message, so a disabled
+  // button always shows why it's disabled for the ticket as it is now.
+  const editTicket = () =>
+    setTicketStatus((current) =>
+      current.kind === "working" || current.kind === "idle"
+        ? current
+        : { kind: "idle", message: "Ready for a simulated order." },
+    );
+
+  const placeWaitingOrder = async (
+    idempotencyKey: string,
+    bracket: { takeProfitCents: number | null; stopLossCents: number | null } | undefined,
+  ) => {
+    if (!isWaitingOrder || triggerPriceCents === null) return;
+    try {
+      let response: Response;
+      try {
+        response = await fetch("/api/working-orders", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": idempotencyKey,
+          },
+          body: JSON.stringify({
+            side,
+            symbol: selectedQuote.symbol,
+            quantity: wholeQuantity,
+            orderType: ticketOrderType,
+            triggerPriceCents,
+            timeInForce,
+            ...(bracket ? { bracket } : {}),
+          }),
+        });
+      } catch {
+        throw new Error(
+          "The server could not be reached. Retry this ticket — the same order can't be placed twice.",
+        );
+      }
+      const payload = await readJson(response);
+      if (!response.ok) {
+        if (response.status < 500 && response.status !== 408 && response.status !== 429) {
+          pendingOrder.current = null;
+        }
+        throw new Error(extractError(payload, "The order could not be placed."));
+      }
+      const [entry] = (payload as { workingOrders?: WorkingOrderView[] }).workingOrders ?? [];
+      if (!entry?.id) {
+        throw new Error("The order response was incomplete. Retry this ticket with the same order key.");
+      }
+      pendingOrder.current = null;
+      const amount = selectedIsCrypto
+        ? `${number.format(entry.quantity)} ${unitWord("CRYPTO", entry.quantity)} of ${entry.symbol}`
+        : `${number.format(entry.quantity)} ${entry.symbol}`;
+      setTicketStatus({
+        kind: "success",
+        message: `${workingOrderName(entry.orderType, entry.side)} for ${amount} at ${formatWorkingOrderPrice(entry)} is waiting ${
+          entry.timeInForce === "DAY" ? "until the end of the day" : "until it fills or is cancelled"
+        }.${entry.reservedCashCents > 0 ? ` ${formatMoney(entry.reservedCashCents)} is set aside for it.` : ""}${
+          bracket ? " Its exits start watching once it fills." : ""
+        }`,
+      });
+      setTriggerPrice("");
+      setTakeProfitPrice("");
+      setStopLossPrice("");
+      await fetchDashboard(true);
+    } catch (error) {
+      setTicketStatus({
+        kind: "error",
+        message:
+          error instanceof Error
+            ? `${error.message} Check the ticket and try again.`
+            : "The order could not be placed. Check the ticket and try again.",
+      });
+    }
+  };
+
+  const cancelWaitingOrder = async (order: WorkingOrderView) => {
+    setCancellingOrderId(order.id);
+    setWorkingOrdersFeedback(null);
+    try {
+      const response = await fetch(`/api/working-orders/${encodeURIComponent(order.id)}`, {
+        method: "DELETE",
+        credentials: "same-origin",
+      });
+      const payload = await readJson(response);
+      if (!response.ok) {
+        throw new Error(extractError(payload, "The order could not be cancelled."));
+      }
+      setWorkingOrdersFeedback({
+        kind: "success",
+        message: `${workingOrderName(order.orderType, order.side)} for ${order.symbol} cancelled.`,
+      });
+    } catch (error) {
+      setWorkingOrdersFeedback({
+        kind: "error",
+        message: error instanceof Error ? error.message : "The order could not be cancelled.",
+      });
+    } finally {
+      setCancellingOrderId(null);
+      await fetchDashboard(true);
+    }
+  };
+
   const placeOrder = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (tradeBlockedReason) {
@@ -1984,17 +2353,42 @@ export function SimulatorApp({
 
     setTicketStatus({
       kind: "working",
-      message: `Recording ${side.toLowerCase()} order in the ${isPlatformAdmin ? "private admin" : "shared team"} ledger…`,
+      message: isWaitingOrder
+        ? `Placing the ${ORDER_TYPE_LABELS[ticketOrderType].toLowerCase()} order…`
+        : `Recording ${side.toLowerCase()} order in the ${isPlatformAdmin ? "private admin" : "shared team"} ledger…`,
     });
 
     // Reuse the pending key only for a retry of the exact same ticket; any
-    // edit to symbol, side, or quantity is a new order with a new key.
-    const orderFingerprint = `${dashboard.currentUser.id}|${selectedQuote.symbol}|${side}|${wholeQuantity}`;
+    // edit to the ticket is a new order with a new key.
+    const orderFingerprint = [
+      dashboard.currentUser.id,
+      selectedQuote.symbol,
+      side,
+      wholeQuantity,
+      ticketOrderType,
+      triggerPriceCents ?? "-",
+      isWaitingOrder || bracketLegs > 0 ? timeInForce : "-",
+      takeProfitCents ?? "-",
+      stopLossCents ?? "-",
+    ].join("|");
     const idempotencyKey =
       pendingOrder.current?.fingerprint === orderFingerprint
         ? pendingOrder.current.key
         : createIdempotencyKey();
     pendingOrder.current = { key: idempotencyKey, fingerprint: orderFingerprint };
+    const bracket =
+      bracketLegs > 0
+        ? {
+            takeProfitCents,
+            stopLossCents,
+            ...(ticketOrderType === "MARKET" ? { timeInForce } : {}),
+          }
+        : undefined;
+
+    if (isWaitingOrder) {
+      await placeWaitingOrder(idempotencyKey, bracket);
+      return;
+    }
 
     try {
       let response: Response;
@@ -2010,6 +2404,7 @@ export function SimulatorApp({
             symbol: selectedQuote.symbol,
             quantity: wholeQuantity,
             orderType: "MARKET",
+            ...(bracket ? { bracket } : {}),
           }),
         });
       } catch {
@@ -2046,8 +2441,21 @@ export function SimulatorApp({
             : `${result.order.quantity} ${result.order.symbol}`
         } filled once at ${formatMoney(result.order.fillPriceCadCents)}${
           selectedIsCrypto ? " per lot" : ""
-        }. Portfolio v${result.portfolioVersion}.`,
+        }. Portfolio v${result.portfolioVersion}.${
+          bracket
+            ? ` ${[
+                takeProfitCents ? `Take profit at ${ticketPriceText(takeProfitCents)}` : null,
+                stopLossCents ? `stop loss at ${ticketPriceText(stopLossCents)}` : null,
+              ]
+                .filter(Boolean)
+                .join(" and ")} ${bracketLegs > 1 ? "are" : "is"} now waiting.`
+            : ""
+        }`,
       });
+      if (bracket) {
+        setTakeProfitPrice("");
+        setStopLossPrice("");
+      }
       await fetchDashboard(true);
     } catch (error) {
       setTicketStatus({
@@ -2709,7 +3117,12 @@ export function SimulatorApp({
               </div>
               <div>
                 <dt>Buying power</dt>
-                <dd>{formatMoney(portfolio.buyingPowerCents)}</dd>
+                <dd>
+                  {formatMoney(portfolio.buyingPowerCents)}
+                  {portfolio.reservedCashCents > 0 ? (
+                    <small>{formatMoney(portfolio.reservedCashCents)} set aside</small>
+                  ) : null}
+                </dd>
               </div>
               <div>
                 <dt>Daily return</dt>
@@ -2809,6 +3222,11 @@ export function SimulatorApp({
                                   )}
                                 </small>
                               ) : null}
+                              {holding.reservedQuantity ? (
+                                <small className="cell-note">
+                                  {number.format(holding.reservedQuantity)} held for waiting sells
+                                </small>
+                              ) : null}
                             </td>
                             <td data-label="Price">
                               {formatMoney(holding.currentPriceCadCents)}
@@ -2842,6 +3260,112 @@ export function SimulatorApp({
                 </div>
               )}
             </section>
+
+            {workingOrdersEnabled || dashboard.workingOrders.length > 0 ? (
+              <section
+                className="working-orders-section"
+                aria-labelledby="working-orders-heading"
+              >
+                <div className="subheading-row">
+                  <h3 id="working-orders-heading">Waiting orders</h3>
+                  <span>
+                    {openWorkingOrderCount} of {MAX_WAITING_ORDERS}
+                    {isPlatformAdmin ? "" : " · any teammate can cancel"}
+                  </span>
+                </div>
+                {workingOrderRows.length > 0 ? (
+                  <div className="table-scroll">
+                    <table className="data-table working-orders-table">
+                      <thead>
+                        <tr>
+                          <th scope="col">Order</th>
+                          <th scope="col">Quantity</th>
+                          <th scope="col">Price</th>
+                          <th scope="col">Lasts</th>
+                          <th scope="col">
+                            <span className="sr-only">Cancel</span>
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {workingOrderRows.map(({ order, attached }) => {
+                          const name = workingOrderName(order.orderType, order.side);
+                          const orderIsCrypto = order.assetClass === "CRYPTO";
+                          return (
+                            <tr
+                              key={order.id}
+                              className={attached ? "working-order--attached" : undefined}
+                            >
+                              <th scope="row" data-label="Order">
+                                <strong>
+                                  {attached ? <span aria-hidden="true">↳ </span> : null}
+                                  {name} · {order.symbol}
+                                </strong>
+                                <small className="cell-note">
+                                  {order.status === "PENDING_PARENT"
+                                    ? "Starts when the buy fills"
+                                    : order.ocoGroupId
+                                      ? `Placed by ${order.actorName} · one cancels the other`
+                                      : `Placed by ${order.actorName}`}
+                                </small>
+                              </th>
+                              <td data-label="Quantity">
+                                {number.format(order.quantity)}{" "}
+                                {unitWord(order.assetClass, order.quantity)}
+                                {orderIsCrypto ? (
+                                  <small className="cell-note">
+                                    {tokenAmountLabel(order.quantity, order.lotSize, order.symbol)}
+                                  </small>
+                                ) : null}
+                              </td>
+                              <td data-label="Price">
+                                {formatWorkingOrderPrice(order)}
+                                {order.reservedCashCents > 0 ? (
+                                  <small className="cell-note">
+                                    {formatMoney(order.reservedCashCents)} set aside
+                                  </small>
+                                ) : null}
+                              </td>
+                              <td data-label="Lasts">
+                                {order.timeInForce === "DAY" && order.expiresAt
+                                  ? `Until ${formatScheduleInstant(order.expiresAt)}`
+                                  : "Until cancelled"}
+                              </td>
+                              <td data-label="">
+                                <button
+                                  type="button"
+                                  className="button button--secondary button--compact"
+                                  disabled={cancellingOrderId !== null}
+                                  onClick={() => void cancelWaitingOrder(order)}
+                                  aria-label={`Cancel ${name.toLowerCase()} for ${order.symbol}`}
+                                >
+                                  {cancellingOrderId === order.id ? "Cancelling…" : "Cancel"}
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="empty-state">
+                    <p>
+                      No waiting orders. Choose Limit, Stop loss, or Take profit as the order
+                      type to set one, or add exits to a buy.
+                    </p>
+                  </div>
+                )}
+                {workingOrdersFeedback ? (
+                  <p
+                    className={`working-orders-feedback ticket-message ticket-message--${workingOrdersFeedback.kind}`}
+                    role={workingOrdersFeedback.kind === "error" ? "alert" : "status"}
+                  >
+                    {workingOrdersFeedback.message}
+                  </p>
+                ) : null}
+              </section>
+            ) : null}
 
             {isPlatformAdmin ? (
               <aside className="shared-callout shared-callout--private">
@@ -3126,7 +3650,14 @@ export function SimulatorApp({
                     type="button"
                     className={side === "BUY" ? "is-active" : ""}
                     aria-pressed={side === "BUY"}
-                    onClick={() => setSide("BUY")}
+                    onClick={() => {
+                      setSide("BUY");
+                      editTicket();
+                      // Stop loss and take profit only sell.
+                      if (orderType === "STOP_LOSS" || orderType === "TAKE_PROFIT") {
+                        setOrderType("MARKET");
+                      }
+                    }}
                   >
                     Buy
                   </button>
@@ -3134,16 +3665,219 @@ export function SimulatorApp({
                     type="button"
                     className={side === "SELL" ? "is-active is-active--sell" : ""}
                     aria-pressed={side === "SELL"}
-                    onClick={() => setSide("SELL")}
+                    onClick={() => {
+                      setSide("SELL");
+                      editTicket();
+                    }}
                   >
                     Sell
                   </button>
                 </fieldset>
-                <div className="order-type">
-                  <span>Order type</span>
-                  <strong>Market</strong>
-                </div>
+                {workingOrdersEnabled ? (
+                  <div className="order-type order-type--select">
+                    <span className="ticket-label-row">
+                      <label htmlFor="order-type-select">Order type</label>
+                      <HelpTip id="order-type-help" label="What do the order types mean?">
+                        <span className="help-tip__line">
+                          <strong>Market</strong> buys or sells right away at the current price.
+                        </span>
+                        <span className="help-tip__line">
+                          <strong>Limit</strong> waits for your price or better: a limit buy fills
+                          at or below it, a limit sell at or above it.
+                        </span>
+                        <span className="help-tip__line">
+                          <strong>Stop loss</strong> sells if the price falls to your stop, to cap
+                          a loss. It sells at the next price available, which can be lower if the
+                          price drops quickly.
+                        </span>
+                        <span className="help-tip__line">
+                          <strong>Take profit</strong> sells once the price rises to your target,
+                          to lock in a gain.
+                        </span>
+                      </HelpTip>
+                    </span>
+                    <select
+                      id="order-type-select"
+                      value={ticketOrderType}
+                      onChange={(event) => {
+                        setOrderType(event.target.value as TicketOrderType);
+                        editTicket();
+                      }}
+                    >
+                      {(side === "BUY" ? BUY_ORDER_TYPES : SELL_ORDER_TYPES).map((type) => (
+                        <option key={type} value={type}>
+                          {ORDER_TYPE_LABELS[type]}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : (
+                  <div className="order-type">
+                    <span>Order type</span>
+                    <strong>Market</strong>
+                  </div>
+                )}
               </div>
+
+              {isWaitingOrder ? (
+                <div className="ticket-conditions">
+                  <div className="ticket-condition">
+                    <label htmlFor="order-trigger-price">
+                      {triggerPriceLabel} · {priceInputUnit}
+                    </label>
+                    <input
+                      id="order-trigger-price"
+                      inputMode="decimal"
+                      autoComplete="off"
+                      type="text"
+                      value={triggerPrice}
+                      onChange={(event) => {
+                        setTriggerPrice(event.target.value);
+                        editTicket();
+                      }}
+                      aria-describedby="order-trigger-help"
+                    />
+                    <small id="order-trigger-help">
+                      {ticketOrderType === "STOP_LOSS"
+                        ? "Sells if the price falls to this"
+                        : ticketOrderType === "TAKE_PROFIT"
+                          ? "Sells if the price rises to this"
+                          : side === "BUY"
+                            ? "Buys at this price or lower"
+                            : "Sells at this price or higher"}
+                      {quoteLoaded
+                        ? ` · now ${currentPriceText}${selectedIsCrypto ? ` per ${selectedToken}` : ""}`
+                        : ""}
+                      {selectedIsCrypto && triggerPriceCents !== null
+                        ? ` · ${formatNativeMoney(triggerPriceCents, selectedQuote.listingCurrency)} per lot`
+                        : ""}
+                    </small>
+                  </div>
+                  <div className="ticket-condition">
+                    <span className="ticket-label-row">
+                      <label htmlFor="order-time-in-force">Time in force</label>
+                      <HelpTip id="time-in-force-help" label="What do Day and Good until cancelled mean?">
+                        <span className="help-tip__line">
+                          <strong>Day</strong> cancels the order at the end of today&apos;s trading
+                          ({selectedIsCrypto ? "midnight ET for crypto" : "4:00 p.m. ET"}) if it
+                          hasn&apos;t filled.
+                        </span>
+                        <span className="help-tip__line">
+                          <strong>Good until cancelled</strong> keeps it waiting until it fills,
+                          someone on your team cancels it, or the competition ends.
+                        </span>
+                      </HelpTip>
+                    </span>
+                    <select
+                      id="order-time-in-force"
+                      value={timeInForce}
+                      onChange={(event) => {
+                        setTimeInForce(event.target.value as TimeInForce);
+                        editTicket();
+                      }}
+                    >
+                      <option value="DAY">Day</option>
+                      <option value="GTC">Good until cancelled</option>
+                    </select>
+                    <small>
+                      {timeInForce === "DAY"
+                        ? `Ends ${selectedIsCrypto ? "at midnight ET" : "at 4:00 p.m. ET"} if not filled`
+                        : "Waits until it fills or is cancelled"}
+                    </small>
+                  </div>
+                </div>
+              ) : null}
+
+              {bracketAllowed ? (
+                <fieldset className="ticket-bracket">
+                  <legend className="ticket-label-row">
+                    <span>Exits for this buy</span>
+                    <HelpTip id="bracket-help" label="What are take profit and stop loss?">
+                      <span className="help-tip__line">
+                        <strong>Take profit</strong> sells these {unitWord(selectedAssetClass, 2)}{" "}
+                        automatically if the price rises to the level you set, locking in a gain.
+                      </span>
+                      <span className="help-tip__line">
+                        <strong>Stop loss</strong> sells them automatically if the price falls to
+                        the level you set, capping a loss.
+                      </span>
+                      <span className="help-tip__line">
+                        Set either, both, or neither. With both, whichever fills first cancels the
+                        other.
+                        {ticketOrderType === "LIMIT"
+                          ? " They start watching once the limit buy fills."
+                          : " They start watching as soon as the buy fills."}
+                      </span>
+                    </HelpTip>
+                  </legend>
+                  <div className="ticket-condition">
+                    <label htmlFor="bracket-take-profit">
+                      Take profit <em className="optional-note">(optional)</em>
+                    </label>
+                    <input
+                      id="bracket-take-profit"
+                      inputMode="decimal"
+                      autoComplete="off"
+                      type="text"
+                      placeholder={priceInputUnit}
+                      value={takeProfitPrice}
+                      onChange={(event) => {
+                        setTakeProfitPrice(event.target.value);
+                        editTicket();
+                      }}
+                    />
+                  </div>
+                  <div className="ticket-condition">
+                    <label htmlFor="bracket-stop-loss">
+                      Stop loss <em className="optional-note">(optional)</em>
+                    </label>
+                    <input
+                      id="bracket-stop-loss"
+                      inputMode="decimal"
+                      autoComplete="off"
+                      type="text"
+                      placeholder={priceInputUnit}
+                      value={stopLossPrice}
+                      onChange={(event) => {
+                        setStopLossPrice(event.target.value);
+                        editTicket();
+                      }}
+                    />
+                  </div>
+                  {ticketOrderType === "MARKET" && (takeProfitEntered || stopLossEntered) ? (
+                    <div className="ticket-condition ticket-condition--wide">
+                      <span className="ticket-label-row">
+                        <label htmlFor="bracket-time-in-force">Exits last</label>
+                        <HelpTip
+                          id="bracket-time-in-force-help"
+                          label="What do Day and Good until cancelled mean?"
+                        >
+                          <span className="help-tip__line">
+                            <strong>Day</strong> cancels the exits at the end of today&apos;s
+                            trading ({selectedIsCrypto ? "midnight ET for crypto" : "4:00 p.m. ET"})
+                            if they haven&apos;t filled.
+                          </span>
+                          <span className="help-tip__line">
+                            <strong>Good until cancelled</strong> keeps them waiting until one
+                            fills, someone on your team cancels them, or the competition ends.
+                          </span>
+                        </HelpTip>
+                      </span>
+                      <select
+                        id="bracket-time-in-force"
+                        value={timeInForce}
+                        onChange={(event) => {
+                          setTimeInForce(event.target.value as TimeInForce);
+                          editTicket();
+                        }}
+                      >
+                        <option value="DAY">Day</option>
+                        <option value="GTC">Good until cancelled</option>
+                      </select>
+                    </div>
+                  ) : null}
+                </fieldset>
+              ) : null}
 
               <div className="ticket-fields">
                 <div className="ticket-quantity">
@@ -3154,7 +3888,10 @@ export function SimulatorApp({
                     type="button"
                     className="ticket-max"
                     disabled={!quoteLoaded || maxOrderQuantity < 1}
-                    onClick={() => setQuantity(String(maxOrderQuantity))}
+                    onClick={() => {
+                      setQuantity(String(maxOrderQuantity));
+                      editTicket();
+                    }}
                     title={
                       side === "BUY"
                         ? `Buy as many ${unitWord(selectedAssetClass, 2)} as the cash allows`
@@ -3174,7 +3911,10 @@ export function SimulatorApp({
                     step="1"
                     type="number"
                     value={quantity}
-                    onChange={(event) => setQuantity(event.target.value)}
+                    onChange={(event) => {
+                      setQuantity(event.target.value);
+                      editTicket();
+                    }}
                     aria-describedby={
                       selectedIsCrypto
                         ? `quantity-help quantity-tokens${tradingHaltReason ? " quote-halt" : ""}`
@@ -3195,7 +3935,15 @@ export function SimulatorApp({
                   ) : null}
                 </div>
                 <div>
-                  <span>{selectedIsCrypto ? "Estimated fill per lot" : "Estimated fill"}</span>
+                  <span>
+                    {isWaitingOrder
+                      ? selectedIsCrypto
+                        ? "Current price per lot"
+                        : "Current price"
+                      : selectedIsCrypto
+                        ? "Estimated fill per lot"
+                        : "Estimated fill"}
+                  </span>
                   <strong>
                     {quoteLoaded ? formatMoney(selectedQuote.priceCadCents) : "—"}
                   </strong>
@@ -3209,29 +3957,49 @@ export function SimulatorApp({
                   <span>
                     {side === "BUY"
                       ? "Available cash"
-                      : selectedIsCrypto
-                        ? "Lots held"
-                        : "Shares held"}
+                      : reservedQuantity > 0
+                        ? "Free to sell"
+                        : selectedIsCrypto
+                          ? "Lots held"
+                          : "Shares held"}
                   </span>
                   <strong>
                     {side === "BUY"
                       ? formatMoney(portfolio.buyingPowerCents)
-                      : number.format(heldQuantity)}
+                      : number.format(freeQuantity)}
                   </strong>
                   <small>
                     {side === "BUY"
-                      ? isPlatformAdmin
-                        ? "Admin test account"
-                        : "Team account"
-                      : selectedIsCrypto
-                        ? `${selectedQuote.symbol} · ${tokenAmountLabel(heldQuantity, selectedLotSize, selectedQuote.symbol)}`
-                        : selectedQuote.symbol}
+                      ? portfolio.reservedCashCents > 0
+                        ? `${formatMoney(portfolio.reservedCashCents)} set aside for waiting buys`
+                        : isPlatformAdmin
+                          ? "Admin test account"
+                          : "Team account"
+                      : reservedQuantity > 0
+                        ? `${number.format(heldQuantity)} held · ${number.format(reservedQuantity)} held back for waiting sells`
+                        : selectedIsCrypto
+                          ? `${selectedQuote.symbol} · ${tokenAmountLabel(heldQuantity, selectedLotSize, selectedQuote.symbol)}`
+                          : selectedQuote.symbol}
                   </small>
                 </div>
                 <div>
-                  <span>Estimated order value</span>
-                  <strong>{quoteLoaded ? formatMoney(estimatedValue) : "—"}</strong>
-                  <small>$0.00 simulated commission</small>
+                  <span>
+                    {setsAsideCash
+                      ? "Cash set aside"
+                      : isWaitingOrder
+                        ? "Value at your price"
+                        : "Estimated order value"}
+                  </span>
+                  <strong>
+                    {quoteLoaded && (!isWaitingOrder || triggerPriceCents !== null)
+                      ? formatMoney(estimatedValue)
+                      : "—"}
+                  </strong>
+                  <small>
+                    {setsAsideCash && selectedQuote.listingCurrency === "USD"
+                      ? "Includes a 2% cushion for USD/CAD moves"
+                      : "$0.00 simulated commission"}
+                  </small>
                 </div>
               </div>
 
@@ -3244,7 +4012,9 @@ export function SimulatorApp({
                 >
                   {ticketStatus.kind === "working"
                     ? "Recording order…"
-                    : `Place simulated ${side.toLowerCase()}`}
+                    : isWaitingOrder
+                      ? `Place ${ORDER_TYPE_LABELS[ticketOrderType].toLowerCase()} order`
+                      : `Place simulated ${side.toLowerCase()}`}
                   <ArrowIcon />
                 </button>
                 <button
@@ -3252,6 +4022,9 @@ export function SimulatorApp({
                   type="button"
                   onClick={() => {
                     setQuantity("");
+                    setTriggerPrice("");
+                    setTakeProfitPrice("");
+                    setStopLossPrice("");
                     setTicketStatus({ kind: "idle", message: "Order ticket cleared." });
                   }}
                 >
@@ -3271,8 +4044,10 @@ export function SimulatorApp({
 
               <aside className="order-disclosure">
                 Orders are simulated and fill once at the server’s latest available market
-                snapshot. No brokerage order is sent. Past performance does not predict
-                future results.
+                snapshot.{workingOrdersEnabled
+                  ? " Waiting orders are checked about once a minute while their market is open."
+                  : ""}{" "}
+                No brokerage order is sent. Past performance does not predict future results.
               </aside>
             </form>
           </section>
@@ -3349,7 +4124,7 @@ export function SimulatorApp({
                       <span
                         className={`activity-state activity-state--${item.type.toLowerCase()}`}
                       >
-                        {item.type === "ORDER_FILLED" ? "Filled" : "Logged"}
+                        {activityStateLabel(item.type)}
                       </span>
                     </li>
                   ))

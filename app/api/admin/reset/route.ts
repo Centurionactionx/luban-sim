@@ -1,4 +1,9 @@
-import { isManagedAuthMode, refreshAllQuotes, resetPrototype } from "@/lib";
+import {
+  isManagedAuthMode,
+  refreshAllQuotes,
+  resetPrototype,
+  resetRequestThrottle,
+} from "@/lib";
 
 import {
   requireTrustedOrigin,
@@ -30,6 +35,8 @@ export async function POST(request: Request): Promise<Response> {
     // block the host from pausing, scheduling, resetting, or fixing balances.
     await refreshAllQuotes().catch(() => {});
     const overview = await resetPrototype(user.id);
+    // A fresh demo world starts with fresh per-person request allowances.
+    resetRequestThrottle();
 
     return json({ ok: true, ...overview });
   } catch (error) {

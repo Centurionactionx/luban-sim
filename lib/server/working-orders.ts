@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type {
+  AssetClass,
   PlaceWorkingOrderInput,
   TimeInForce,
   TradeSide,
@@ -9,7 +10,7 @@ import type {
   WorkingOrderView,
 } from "../contracts";
 import { AppError } from "../errors";
-import { unitWord } from "../lots";
+import { cryptoTokenSymbol, lotSizeFromExponent, unitWord } from "../lots";
 import { acquireAccountReadLock, type DbExecutor } from "./database";
 import { getDb } from "./db";
 import {
@@ -75,6 +76,8 @@ interface WorkingOrderRow {
   quantity: number;
   trigger_price_cents: number;
   listing_currency: "CAD" | "USD";
+  asset_class: AssetClass | null;
+  lot_exponent: number | null;
   reserved_cash_cents: number;
   time_in_force: TimeInForce;
   expires_at: string | null;
@@ -92,6 +95,7 @@ const SELECT_WORKING_ORDER = `
     w.id, w.team_id, w.actor_user_id, u.name AS actor_name, w.idempotency_key,
     w.symbol, w.side,
     w.order_type, w.quantity, w.trigger_price_cents, i.listing_currency,
+    i.asset_class, i.lot_exponent,
     w.reserved_cash_cents, w.time_in_force, w.expires_at, w.status,
     w.status_reason, w.parent_id, w.oco_group_id, w.filled_order_id,
     w.created_at, w.updated_at
@@ -111,6 +115,8 @@ function rowToView(row: WorkingOrderRow): WorkingOrderView {
     quantity: Number(row.quantity),
     triggerPriceCents: Number(row.trigger_price_cents),
     listingCurrency: row.listing_currency,
+    assetClass: row.asset_class ?? "STOCK",
+    lotSize: row.asset_class === "CRYPTO" ? lotSizeFromExponent(Number(row.lot_exponent ?? 0)) : 1,
     reservedCashCents: Number(row.reserved_cash_cents),
     timeInForce: row.time_in_force,
     expiresAt: row.expires_at,
@@ -130,12 +136,31 @@ export function workingOrderLabel(orderType: WorkingOrderType, side: TradeSide):
   return side === "BUY" ? "Limit buy" : "Limit sell";
 }
 
-function formatPrice(cents: number, currency: "CAD" | "USD"): string {
-  return `${new Intl.NumberFormat("en-CA", {
-    style: "currency",
-    currency: "CAD",
-    currencyDisplay: "narrowSymbol",
-  }).format(cents / 100)}${currency === "USD" ? " USD" : ""}`;
+/**
+ * A price as people typed it: per share, or per whole token for crypto
+ * (prices are stored per lot), e.g. "$125,000.00 per BTC".
+ */
+function formatPrice(
+  cents: number,
+  currency: "CAD" | "USD",
+  crypto?: { symbol: string; lotSize: number },
+): string {
+  const value = crypto ? cents / 100 / crypto.lotSize : cents / 100;
+  const formatted = new Intl.NumberFormat(
+    "en-CA",
+    value >= 1 || !crypto
+      ? { style: "currency", currency: "CAD", currencyDisplay: "narrowSymbol" }
+      : {
+          style: "currency",
+          currency: "CAD",
+          currencyDisplay: "narrowSymbol",
+          minimumSignificantDigits: 2,
+          maximumSignificantDigits: 4,
+        },
+  ).format(value);
+  return `${formatted}${currency === "USD" ? " USD" : ""}${
+    crypto ? ` per ${cryptoTokenSymbol(crypto.symbol)}` : ""
+  }`;
 }
 
 /** Serialize with fills and other order changes on the same team. */
@@ -501,12 +526,16 @@ export async function placeWorkingOrder(
     }
 
     const label = workingOrderLabel(order.orderType, order.side);
+    const crypto =
+      quote.assetClass === "CRYPTO"
+        ? { symbol: order.symbol, lotSize: quote.lotSize ?? 1 }
+        : undefined;
     const exits = [
       order.bracket?.takeProfitCents
-        ? `take profit ${formatPrice(order.bracket.takeProfitCents, quote.listingCurrency)}`
+        ? `take profit ${formatPrice(order.bracket.takeProfitCents, quote.listingCurrency, crypto)}`
         : null,
       order.bracket?.stopLossCents
-        ? `stop loss ${formatPrice(order.bracket.stopLossCents, quote.listingCurrency)}`
+        ? `stop loss ${formatPrice(order.bracket.stopLossCents, quote.listingCurrency, crypto)}`
         : null,
     ].filter(Boolean);
     await tx.run(
@@ -519,7 +548,7 @@ export async function placeWorkingOrder(
         teamId,
         order.actorUserId,
         `${label} ${order.symbol}`,
-        `${account.actor_name} placed a ${label.toLowerCase()} for ${order.quantity} ${unitWord(quote.assetClass, order.quantity)} of ${order.symbol} at ${formatPrice(order.triggerPriceCents, quote.listingCurrency)}${exits.length ? ` (${exits.join(", ")})` : ""}.`,
+        `${account.actor_name} placed a ${label.toLowerCase()} for ${order.quantity} ${unitWord(quote.assetClass, order.quantity)} of ${order.symbol} at ${formatPrice(order.triggerPriceCents, quote.listingCurrency, crypto)}${exits.length ? ` (${exits.join(", ")})` : ""}.`,
         nowIso,
       ],
     );
@@ -590,7 +619,13 @@ export async function cancelWorkingOrder(input: {
         teamId,
         input.actorUserId,
         `${label} ${row.symbol} cancelled`,
-        `${account.actor_name} cancelled a ${label.toLowerCase()} for ${Number(row.quantity)} of ${row.symbol} at ${formatPrice(Number(row.trigger_price_cents), row.listing_currency)}.`,
+        `${account.actor_name} cancelled a ${label.toLowerCase()} for ${Number(row.quantity)} ${unitWord(row.asset_class ?? "STOCK", Number(row.quantity))} of ${row.symbol} at ${formatPrice(
+          Number(row.trigger_price_cents),
+          row.listing_currency,
+          row.asset_class === "CRYPTO"
+            ? { symbol: row.symbol, lotSize: lotSizeFromExponent(Number(row.lot_exponent ?? 0)) }
+            : undefined,
+        )}.`,
         nowIso,
       ],
     );
@@ -612,11 +647,35 @@ export async function listWorkingOrders(
     `${SELECT_WORKING_ORDER}
      WHERE w.team_id = ?
        ${options.includeClosed ? "" : "AND w.status IN ('WORKING', 'PENDING_PARENT')"}
-     ORDER BY w.created_at DESC, w.order_type ASC
+     ORDER BY w.created_at DESC,
+       CASE w.order_type WHEN 'LIMIT' THEN 0 WHEN 'TAKE_PROFIT' THEN 1 ELSE 2 END
      LIMIT ?`,
     [teamId, options.limit ?? 50],
   );
   return rows.map(rowToView);
+}
+
+/**
+ * The waiting orders of the portfolio this person trades from: their team's,
+ * or an admin's private sandbox. Hosts and people without a team get none.
+ */
+export async function listWorkingOrdersForUser(
+  userId: string,
+  options: { includeClosed?: boolean; limit?: number } = {},
+): Promise<WorkingOrderView[]> {
+  const db = await getDb();
+  const row = await db.get<{ team_id: string | null }>(
+    `SELECT t.id AS team_id
+     FROM users u
+     LEFT JOIN team_members tm ON tm.user_id = u.id AND u.role = 'student'
+     LEFT JOIN teams t ON
+       (u.role = 'student' AND t.id = tm.team_id)
+       OR (u.role = 'platform_admin' AND t.sandbox_owner_user_id = u.id)
+     WHERE u.id = ? AND u.status = 'active'`,
+    [userId],
+  );
+  if (!row?.team_id) return [];
+  return listWorkingOrders(row.team_id, options);
 }
 
 /** Cash and shares a team has set aside for waiting orders (for display). */

@@ -337,10 +337,17 @@ export function assertBracketPrices(
   }
 }
 
+/** The highest price an order can name: $100 million per share or lot. */
+export const MAX_ORDER_PRICE_CENTS = 10_000_000_000;
+
 /** A positive whole number of cents, or null for "not set". */
 export function optionalPriceCents(value: unknown, field: string): number | null {
   if (value === undefined || value === null) return null;
-  if (!Number.isSafeInteger(value) || (value as number) <= 0) {
+  if (
+    !Number.isSafeInteger(value) ||
+    (value as number) <= 0 ||
+    (value as number) > MAX_ORDER_PRICE_CENTS
+  ) {
     throw new AppError(
       "INVALID_PRICE",
       `The ${field} must be a positive price.`,

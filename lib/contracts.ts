@@ -243,6 +243,8 @@ export interface HoldingView {
   quoteAsOf: string;
   assetClass?: AssetClass;
   lotSize?: number;
+  /** Shares (lots) held back for the team's waiting sells. */
+  reservedQuantity?: number;
 }
 
 export interface PortfolioPoint {
@@ -260,6 +262,8 @@ export interface PortfolioSummary {
   dayChangeCents: number;
   dayChangePercent: number;
   buyingPowerCents: number;
+  /** Cash set aside for waiting buys (already left out of buying power). */
+  reservedCashCents: number;
   asOf: string;
 }
 
@@ -331,6 +335,10 @@ export interface Dashboard {
   recentActivity: ActivityItem[];
   leaderboard: LeaderboardRow[];
   availableSymbols: Quote[];
+  /** The portfolio's open waiting orders, newest first. */
+  workingOrders: WorkingOrderView[];
+  /** Whether this person may place limit, stop loss, and take profit orders. */
+  workingOrdersEnabled: boolean;
   serverTime: string;
 }
 
@@ -401,6 +409,9 @@ export interface WorkingOrderView {
   quantity: number;
   triggerPriceCents: number;
   listingCurrency: "CAD" | "USD";
+  assetClass: AssetClass;
+  /** Tokens per lot for crypto; 1 for stocks and ETFs. */
+  lotSize: number;
   reservedCashCents: number;
   timeInForce: TimeInForce;
   expiresAt: string | null;
