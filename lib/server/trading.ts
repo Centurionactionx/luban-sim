@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type {
   BracketInput,
   CompetitionStatus,
+  Quote,
   OrderView,
   PlaceOrderInput,
   SerializedAppError,
@@ -15,7 +16,9 @@ import { acquireAccountReadLock, type DbExecutor } from "./database";
 import { cryptoTokenSymbol, formatTokenQuantity, unitWord } from "../lots";
 import { assertTeamLedgerReconciles, getDb } from "./db";
 import {
+  MAX_OPEN_WORKING_ORDERS_PER_TEAM,
   assertBracketPrices,
+  countOpenWorkingOrders,
   insertBracketExits,
   optionalPriceCents,
   readReservations,
@@ -43,7 +46,7 @@ const MIN_CRYPTO_LOT_CAD_CENTS = 100;
  * minutes behind, so the default leaves a small margin above that delay
  * while refusing fills at prices from a previous session or a dead feed.
  */
-function maxQuoteAgeMs(): number {
+export function maxQuoteAgeMs(): number {
   const raw = Number(process.env.LUBAN_MAX_QUOTE_AGE_MINUTES);
 
   if (Number.isSafeInteger(raw) && raw >= 1 && raw <= 1_440) {
@@ -116,7 +119,10 @@ interface NormalizedOrderInput {
   bracket: NormalizedBracket | null;
 }
 
-function normalizeOrderInput(input: PlaceOrderInput): NormalizedOrderInput {
+function normalizeOrderInput(
+  input: PlaceOrderInput,
+  systemTriggered = false,
+): NormalizedOrderInput {
   const actorUserId = input.actorUserId?.trim();
   const symbol = input.symbol ? normalizeMarketSymbol(input.symbol) : "";
   const side = String(input.side ?? "").toUpperCase();
@@ -124,6 +130,15 @@ function normalizeOrderInput(input: PlaceOrderInput): NormalizedOrderInput {
 
   if (!actorUserId) {
     throw new AppError("UNAUTHORIZED", "Sign in before placing an order.", 401);
+  }
+  // "working:" keys mark fills the system makes for waiting orders (they
+  // skip the per-minute allowance), so traders can't use that prefix.
+  if (!systemTriggered && idempotencyKey && /^(working|bracket):/i.test(idempotencyKey)) {
+    throw new AppError(
+      "INVALID_IDEMPOTENCY_KEY",
+      "That idempotency key format is reserved.",
+      400,
+    );
   }
   if (!symbol || !MARKET_SYMBOL_PATTERN.test(symbol)) {
     throw new AppError("INVALID_SYMBOL", "Enter a valid market symbol.", 400);
@@ -202,6 +217,20 @@ export interface FillOptions {
   releaseWorkingOrderIds?: readonly string[];
   /** System-triggered fills don't count toward the per-minute order limit. */
   systemTriggered?: boolean;
+  /**
+   * Fill against exactly this quote (the one the waiting order was checked
+   * on), not whatever the cache holds a moment later. The usual stale,
+   * halted, and market-hours checks still apply to it.
+   */
+  fillQuote?: Quote;
+  /** The clock the fill quote was taken on, so freshness is judged on it. */
+  now?: Date;
+  /**
+   * A limit or take profit must never fill on the wrong side of its price.
+   * Checked on the fill quote before the transaction, so a refusal stores
+   * nothing and the order simply waits for the next check.
+   */
+  priceLimit?: { side: TradeSide; limitCents: number };
   /** The fill must land in this team's portfolio, or it is refused. */
   expectTeamId?: string;
   /**
@@ -265,7 +294,9 @@ function shouldPersistRejection(error: unknown): error is AppError {
     error.code !== "PORTFOLIO_CONFLICT" &&
     // A throttled attempt must stay retryable: persisting it would replay
     // the 429 forever for that idempotency key.
-    error.code !== "ORDER_RATE_LIMITED"
+    error.code !== "ORDER_RATE_LIMITED" &&
+    // A run that lost a race for a waiting order: nothing to remember.
+    error.code !== "WORKING_ORDER_NOT_WAITING"
   );
 }
 
@@ -294,8 +325,9 @@ function replayOutcome(
  */
 export async function replayOrder(
   input: PlaceOrderInput,
+  systemTriggered = false,
 ): Promise<TradeReceipt | null> {
-  const normalized = normalizeOrderInput(input);
+  const normalized = normalizeOrderInput(input, systemTriggered);
   const db = await getDb();
   const existing = await db.get<IdempotencyRecordRow>(
     `SELECT request_fingerprint, outcome_type, result_json, error_json
@@ -319,13 +351,13 @@ export async function placeOrder(
   input: PlaceOrderInput,
   options: FillOptions = {},
 ): Promise<TradeReceipt> {
-  const normalized = normalizeOrderInput(input);
+  const normalized = normalizeOrderInput(input, options.systemTriggered);
   const db = await getDb();
 
   // Idempotent replays must resolve without touching market data, so the
   // stored outcome is consulted before the quote is read. The transaction
   // below re-checks under its own serialization to close the race.
-  const replayed = await replayOrder(input);
+  const replayed = await replayOrder(input, options.systemTriggered);
   if (replayed) {
     return replayed;
   }
@@ -334,8 +366,21 @@ export async function placeOrder(
   // transaction so no transaction ever waits on quote state.
   // One clock reading (the provider's, so injected test clocks agree with
   // the quotes they produce) drives the quote lookup and both freshness checks.
-  const marketNow = marketDataNow();
-  const quote = await requireQuote(normalized.symbol, marketNow);
+  const marketNow = options.now ?? marketDataNow();
+  const quote =
+    options.fillQuote?.symbol === normalized.symbol
+      ? options.fillQuote
+      : await requireQuote(normalized.symbol, marketNow);
+  if (options.priceLimit) {
+    const { side, limitCents } = options.priceLimit;
+    if (side === "BUY" ? quote.priceCents > limitCents : quote.priceCents < limitCents) {
+      throw new AppError(
+        "WORKING_ORDER_PRICE_MOVED",
+        "The price moved past the order's limit before it could fill.",
+        409,
+      );
+    }
+  }
   // A known price that may not trade, e.g. a crypto pair failing its data
   // checks or one valued at its last known price. Checked first so the
   // trader sees the specific reason. Nothing fills until the pair recovers.
@@ -528,6 +573,15 @@ export async function placeOrder(
       if (!account) {
         throw new AppError("UNAUTHORIZED", "Sign in before placing an order.", 401);
       }
+      // A waiting order's placer who has left its team can never fill it;
+      // checked first so no team-status refusal makes it wait forever.
+      if (options.expectTeamId && account.team_id !== options.expectTeamId) {
+        throw new AppError(
+          "WORKING_ORDER_TEAM_CHANGED",
+          "The person who placed this order is no longer on the team.",
+          409,
+        );
+      }
       if (account.user_status !== "active") {
         throw new AppError("ACCOUNT_SUSPENDED", "This account is suspended.", 403);
       }
@@ -626,12 +680,18 @@ export async function placeOrder(
           409,
         );
       }
-      if (options.expectTeamId && account.team_id !== options.expectTeamId) {
-        throw new AppError(
-          "WORKING_ORDER_TEAM_CHANGED",
-          "The person who placed this order is no longer on the team.",
-          409,
-        );
+      if (normalized.bracket) {
+        const exits =
+          (normalized.bracket.takeProfitCents ? 1 : 0) +
+          (normalized.bracket.stopLossCents ? 1 : 0);
+        const open = await countOpenWorkingOrders(tx, account.team_id);
+        if (open + exits > MAX_OPEN_WORKING_ORDERS_PER_TEAM) {
+          throw new AppError(
+            "TOO_MANY_WORKING_ORDERS",
+            `A team can have at most ${MAX_OPEN_WORKING_ORDERS_PER_TEAM} waiting orders. Cancel one first.`,
+            409,
+          );
+        }
       }
       if (options.beforeFill) {
         await options.beforeFill(tx);

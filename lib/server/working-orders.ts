@@ -12,7 +12,13 @@ import { AppError } from "../errors";
 import { unitWord } from "../lots";
 import { acquireAccountReadLock, type DbExecutor } from "./database";
 import { getDb } from "./db";
-import { MARKET_SYMBOL_PATTERN, normalizeMarketSymbol, requireQuote } from "./quotes";
+import {
+  MARKET_SYMBOL_PATTERN,
+  isAssetClassEnabled,
+  isSymbolBlocked,
+  normalizeMarketSymbol,
+  requireQuote,
+} from "./quotes";
 import {
   MAX_OPEN_WORKING_ORDERS_PER_TEAM,
   assertBracketPrices,
@@ -33,6 +39,13 @@ import {
  */
 
 const MAX_QUANTITY = 100_000;
+/** Waiting orders one person can place per rolling minute. */
+const MAX_PLACEMENTS_PER_MINUTE = 30;
+/**
+ * USD listings set aside 2% extra CAD, so ordinary USD/CAD movement before the
+ * fill doesn't leave a funded order short of cash.
+ */
+const USD_RESERVE_BUFFER = 1.02;
 const ORDER_TYPES: readonly WorkingOrderType[] = ["LIMIT", "STOP_LOSS", "TAKE_PROFIT"];
 
 interface AccountRow {
@@ -165,6 +178,10 @@ async function readAccount(tx: DbExecutor, userId: string): Promise<AccountRow> 
       403,
     );
   }
+  return account;
+}
+
+function assertWorkingOrdersAvailable(account: AccountRow): void {
   if (!workingOrdersAvailableTo(account.role)) {
     throw new AppError(
       "WORKING_ORDERS_DISABLED",
@@ -172,7 +189,24 @@ async function readAccount(tx: DbExecutor, userId: string): Promise<AccountRow> 
       409,
     );
   }
-  return account;
+}
+
+/**
+ * Lock the person's team, then read the account again under the lock, so
+ * cash and membership can't change between the read and the write.
+ */
+async function lockAccount(tx: DbExecutor, userId: string): Promise<AccountRow> {
+  const first = await readAccount(tx, userId);
+  await lockTeam(tx, first.team_id as string);
+  const locked = await readAccount(tx, userId);
+  if (locked.team_id !== first.team_id) {
+    throw new AppError(
+      "PORTFOLIO_CONFLICT",
+      "The team changed while this request was being processed. Try again.",
+      409,
+    );
+  }
+  return locked;
 }
 
 /**
@@ -299,12 +333,42 @@ export async function placeWorkingOrder(
   if (order.bracket) {
     assertBracketPrices(order.triggerPriceCents, order.bracket, "limit price");
   }
-  // What a limit buy sets aside: its cost at the limit, in CAD at today's rate.
+  if (quote.tradingHaltReason) {
+    throw new AppError("TRADING_HALTED", quote.tradingHaltReason, 409, { symbol: order.symbol });
+  }
+  if (order.side === "BUY") {
+    if (!isAssetClassEnabled(quote.assetClass)) {
+      throw new AppError(
+        "ASSET_CLASS_DISABLED",
+        `${quote.assetClass === "CRYPTO" ? "Crypto" : "ETF"} trading is not open in this competition.`,
+        409,
+      );
+    }
+    if (isSymbolBlocked(order.symbol)) {
+      throw new AppError(
+        "SYMBOL_BLOCKED",
+        `${order.symbol} has been removed from the simulator.`,
+        409,
+      );
+    }
+    if (quote.assetClass === "CRYPTO" && quote.priceCadCents < 100) {
+      throw new AppError(
+        "LOT_TOO_SMALL",
+        `One lot of ${order.symbol} is worth less than $1, so new buys are paused.`,
+        409,
+      );
+    }
+  }
+  // What a limit buy sets aside: its cost at the limit, priced per share the
+  // way a fill is (rounded CAD per share, times quantity), with a buffer for
+  // exchange-rate movement on USD listings.
+  const fxBasisPoints =
+    quote.listingCurrency === "USD"
+      ? quote.fxRateBasisPoints * USD_RESERVE_BUFFER
+      : quote.fxRateBasisPoints;
   const reservedCashCents =
     order.side === "BUY"
-      ? Math.ceil(
-          (order.triggerPriceCents * order.quantity * quote.fxRateBasisPoints) / 10_000,
-        )
+      ? Math.ceil((order.triggerPriceCents * fxBasisPoints) / 10_000) * order.quantity
       : 0;
   if (!Number.isSafeInteger(reservedCashCents)) {
     throw new AppError("ORDER_TOO_LARGE", "This order is too large for the simulator.", 400);
@@ -312,9 +376,8 @@ export async function placeWorkingOrder(
 
   const db = await getDb();
   return db.transaction(async (tx) => {
-    const account = await readAccount(tx, order.actorUserId);
+    const account = await lockAccount(tx, order.actorUserId);
     const teamId = account.team_id as string;
-    await lockTeam(tx, teamId);
 
     // A repeated request returns what the first one created.
     const entry = await tx.get<WorkingOrderRow>(
@@ -327,7 +390,8 @@ export async function placeWorkingOrder(
         entry.side !== order.side ||
         entry.order_type !== order.orderType ||
         Number(entry.quantity) !== order.quantity ||
-        Number(entry.trigger_price_cents) !== order.triggerPriceCents
+        Number(entry.trigger_price_cents) !== order.triggerPriceCents ||
+        entry.time_in_force !== order.timeInForce
       ) {
         throw new AppError(
           "IDEMPOTENCY_CONFLICT",
@@ -342,8 +406,22 @@ export async function placeWorkingOrder(
       return [entry, ...legs].map(rowToView);
     }
 
+    assertWorkingOrdersAvailable(account);
     const nowIso = new Date().toISOString();
     assertCanPlace(account, nowIso);
+
+    const recent = await tx.get<{ count: number }>(
+      `SELECT COUNT(*) AS count FROM working_orders
+       WHERE actor_user_id = ? AND parent_id IS NULL AND created_at > ?`,
+      [order.actorUserId, new Date(Date.now() - 60_000).toISOString()],
+    );
+    if (Number(recent?.count ?? 0) >= MAX_PLACEMENTS_PER_MINUTE) {
+      throw new AppError(
+        "ORDER_RATE_LIMITED",
+        `Slow down: at most ${MAX_PLACEMENTS_PER_MINUTE} waiting orders per minute. Try again shortly.`,
+        429,
+      );
+    }
 
     const open = await countOpenWorkingOrders(tx, teamId);
     const newOrders = 1 + (order.bracket?.takeProfitCents ? 1 : 0) + (order.bracket?.stopLossCents ? 1 : 0);
@@ -467,9 +545,10 @@ export async function cancelWorkingOrder(input: {
 }): Promise<WorkingOrderView> {
   const db = await getDb();
   return db.transaction(async (tx) => {
-    const account = await readAccount(tx, input.actorUserId);
+    // Cancelling always works, even with the feature switched off, so set-aside
+    // cash and shares can always be freed.
+    const account = await lockAccount(tx, input.actorUserId);
     const teamId = account.team_id as string;
-    await lockTeam(tx, teamId);
 
     const row = await tx.get<WorkingOrderRow>(`${SELECT_WORKING_ORDER} WHERE w.id = ?`, [
       input.workingOrderId,

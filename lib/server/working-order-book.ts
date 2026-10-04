@@ -114,6 +114,18 @@ export function workingOrderExpiresAt(
   return zonedInputValueToIso(`${date}T16:00`);
 }
 
+/**
+ * Whether North American stock and ETF markets could be open: weekdays,
+ * 9:25 a.m. to 4:05 p.m. Eastern (a few minutes either side of the session).
+ * Lets the price checker skip fetching stock quotes at night and on weekends;
+ * the quote's own session data still decides whether a fill happens.
+ */
+export function stockSessionMayBeOpen(at: Date): boolean {
+  const now = torontoDateParts(at);
+  if (now.weekday === 0 || now.weekday === 6) return false;
+  return now.minutes >= 9 * 60 + 25 && now.minutes <= 16 * 60 + 5;
+}
+
 export interface Reservations {
   /** CAD cents set aside for waiting buys. */
   cashCents: number;

@@ -644,7 +644,14 @@ export async function runPostgresMigrations(tx: DbExecutor): Promise<void> {
   await tx.run(
     "CREATE INDEX IF NOT EXISTS idx_working_orders_team_status ON working_orders (team_id, status)",
   );
-  await tx.run("ALTER TABLE working_orders ENABLE ROW LEVEL SECURITY");
+  // Only when needed: ALTER TABLE takes a table-wide lock that would wait
+  // behind in-flight fills on every cold start.
+  const workingOrdersRls = await tx.get<{ relrowsecurity: boolean }>(
+    "SELECT relrowsecurity FROM pg_class WHERE oid = 'working_orders'::regclass",
+  );
+  if (!workingOrdersRls?.relrowsecurity) {
+    await tx.run("ALTER TABLE working_orders ENABLE ROW LEVEL SECURITY");
+  }
 
   // v11: ETFs and lot-based crypto. Every existing instrument is a stock
   // priced per share, which is exactly what the defaults describe.

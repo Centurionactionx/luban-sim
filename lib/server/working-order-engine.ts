@@ -1,25 +1,29 @@
 import { randomUUID } from "node:crypto";
 
-import type { Quote, TradeSide, WorkingOrderType } from "../contracts";
+import type { AssetClass, Quote, TradeSide, WorkingOrderType } from "../contracts";
 import { AppError } from "../errors";
 import { acquireAccountReadLock, type DbExecutor } from "./database";
 import { getDb } from "./db";
-import { marketDataNow, refreshQuote } from "./quotes";
-import { placeOrder } from "./trading";
-import { workingOrderTriggered } from "./working-order-book";
+import { getMarketDataProvider, marketDataNow, refreshQuote } from "./quotes";
+import { maxQuoteAgeMs, placeOrder } from "./trading";
+import {
+  stockSessionMayBeOpen,
+  workingOrderTriggered,
+  workingOrdersAvailableTo,
+} from "./working-order-book";
 import { workingOrderLabel } from "./working-orders";
 
 /**
- * The price checker. Each run expires what is due, then fills every waiting
- * order whose price has been reached. It runs every minute from Supabase
- * pg_cron (POST /api/cron/working-orders) and, as a backup, after dashboard
- * loads. Runs may overlap freely: a fill re-checks, under the team lock and
- * before any money moves, that its order is still waiting, so each order
- * fills at most once.
+ * The price checker. Each run expires and cancels what is due, then fills
+ * every waiting order whose price has been reached. It runs every minute from
+ * Supabase pg_cron (POST /api/cron/working-orders) and, as a backup, after
+ * dashboard loads. Runs may overlap freely: a fill re-checks, under the team
+ * lock and before any money moves, that its order is still waiting, so each
+ * order fills at most once.
  */
 
-/** Same freshness bar as a manual order: no fills on an old price. */
-const MAX_QUOTE_AGE_MS = 20 * 60_000;
+/** Symbols whose quotes are fetched at the same time in one run. */
+const QUOTE_CONCURRENCY = 6;
 
 export interface WorkingOrderRunReport {
   checked: number;
@@ -29,15 +33,19 @@ export interface WorkingOrderRunReport {
   skippedSymbols: string[];
 }
 
-interface CandidateRow {
+interface OpenOrderRow {
   id: string;
   team_id: string;
   actor_user_id: string;
+  actor_role: string | null;
   symbol: string;
+  asset_class: AssetClass | null;
   side: TradeSide;
   order_type: WorkingOrderType;
   quantity: number;
   trigger_price_cents: number;
+  status: "WORKING" | "PENDING_PARENT";
+  expires_at: string | null;
   parent_id: string | null;
   oco_group_id: string | null;
   sandbox_owner_user_id: string | null;
@@ -49,8 +57,9 @@ interface CandidateRow {
 
 /**
  * Problems that may clear by the next run (closed market, old price, a
- * write race): leave the order waiting. Anything else cancels the order with
- * a plain reason, because retrying can't succeed.
+ * write race, a frozen team): leave the order waiting. Server-side errors
+ * also wait (and are logged) rather than cancel a student's order. Anything
+ * else cancels the order with a plain reason, because retrying can't succeed.
  */
 const TRANSIENT_CODES = new Set([
   "MARKET_CLOSED",
@@ -63,6 +72,7 @@ const TRANSIENT_CODES = new Set([
   "TRADING_CLOSED",
   "TEAM_NOT_ACTIVE",
   "WORKING_ORDER_NOT_WAITING",
+  "WORKING_ORDER_PRICE_MOVED",
 ]);
 
 function cancellationReason(error: AppError): string {
@@ -72,6 +82,7 @@ function cancellationReason(error: AppError): string {
     case "INSUFFICIENT_SHARES":
       return "The team no longer held enough shares when the price was reached.";
     case "WORKING_ORDER_TEAM_CHANGED":
+    case "TEAM_REQUIRED":
       return "The person who placed it is no longer on the team.";
     case "ACCOUNT_SUSPENDED":
       return "The account that placed it is suspended.";
@@ -122,7 +133,7 @@ async function closeOrder(
 
 async function logActivity(
   tx: DbExecutor,
-  order: { team_id: string; actor_user_id: string; symbol: string; side: TradeSide; order_type: WorkingOrderType; quantity: number },
+  order: OpenOrderRow,
   type: "WORKING_ORDER_CANCELLED" | "WORKING_ORDER_EXPIRED",
   detail: string,
   nowIso: string,
@@ -150,69 +161,80 @@ async function logActivity(
 }
 
 /**
- * Expire orders past their DAY close, and every open competition order once
- * the competition has ended. Admin sandbox orders only expire by the clock.
+ * Closes orders in one pass, logging one activity entry per thing a person
+ * placed: an order closed with its buy is covered by the buy's entry, and a
+ * bracket's two exits share one entry.
  */
-async function expireDueOrders(nowIso: string): Promise<number> {
-  const db = await getDb();
-  const due = await db.all<CandidateRow & { expires_at: string | null }>(
-    `SELECT w.id, w.team_id, w.actor_user_id, w.symbol, w.side, w.order_type,
-            w.quantity, w.parent_id, w.expires_at, t.sandbox_owner_user_id,
-            c.ends_at AS competition_ends_at
-     FROM working_orders AS w
-     JOIN teams AS t ON t.id = w.team_id
-     LEFT JOIN competitions AS c ON c.id = t.competition_id
-     WHERE w.status IN ('WORKING', 'PENDING_PARENT')
-       AND (
-         (w.expires_at IS NOT NULL AND w.expires_at <= ?)
-         OR (t.sandbox_owner_user_id IS NULL AND c.ends_at IS NOT NULL AND c.ends_at <= ?)
-       )
-     ORDER BY w.created_at ASC`,
-    [nowIso, nowIso],
-  );
+class Closer {
+  private readonly closed = new Set<string>();
+  private readonly loggedGroups = new Set<string>();
+  count = 0;
 
-  let expired = 0;
-  for (const order of due) {
-    const competitionEnded =
-      !order.sandbox_owner_user_id &&
-      order.competition_ends_at !== null &&
-      order.competition_ends_at <= nowIso;
-    const reason = competitionEnded
-      ? "The competition ended."
-      : "It reached the end of its trading day.";
-    const closed = await db.transaction(async (tx) => {
+  async close(
+    order: OpenOrderRow,
+    status: "CANCELLED" | "EXPIRED",
+    reason: string,
+    nowIso: string,
+  ): Promise<boolean> {
+    const db = await getDb();
+    const ok = await db.transaction(async (tx) => {
       await lockTeam(tx, order.team_id);
-      const ok = await closeOrder(tx, order.id, "EXPIRED", reason, nowIso);
-      // One entry per order a person placed; exits that expire with their
-      // buy are covered by the buy's entry.
-      if (ok && order.parent_id === null) {
-        await logActivity(tx, order, "WORKING_ORDER_EXPIRED", reason, nowIso);
+      const done = await closeOrder(tx, order.id, status, reason, nowIso);
+      if (!done) return false;
+      const coveredByParent = order.parent_id !== null && this.closed.has(order.parent_id);
+      const coveredByPartner =
+        order.oco_group_id !== null && this.loggedGroups.has(order.oco_group_id);
+      if (!coveredByParent && !coveredByPartner) {
+        await logActivity(
+          tx,
+          order,
+          status === "EXPIRED" ? "WORKING_ORDER_EXPIRED" : "WORKING_ORDER_CANCELLED",
+          reason,
+          nowIso,
+        );
+        if (order.oco_group_id) this.loggedGroups.add(order.oco_group_id);
       }
-      return ok;
+      return true;
     });
-    if (closed) expired += 1;
+    if (ok) {
+      this.closed.add(order.id);
+      this.count += 1;
+    }
+    return ok;
   }
-  return expired;
 }
 
-async function readCandidates(): Promise<CandidateRow[]> {
+async function readOpenOrders(): Promise<OpenOrderRow[]> {
   const db = await getDb();
-  return db.all<CandidateRow>(
-    `SELECT w.id, w.team_id, w.actor_user_id, w.symbol, w.side, w.order_type,
-            w.quantity, w.trigger_price_cents, w.parent_id, w.oco_group_id,
+  // Orders a person placed come before exits attached to them, so closing a
+  // buy takes its waiting exits with it.
+  return db.all<OpenOrderRow>(
+    `SELECT w.id, w.team_id, w.actor_user_id, u.role AS actor_role, w.symbol,
+            i.asset_class, w.side, w.order_type, w.quantity, w.trigger_price_cents,
+            w.status, w.expires_at, w.parent_id, w.oco_group_id,
             t.sandbox_owner_user_id, t.status AS team_status,
             c.status AS competition_status, c.starts_at AS competition_starts_at,
             c.ends_at AS competition_ends_at
      FROM working_orders AS w
      JOIN teams AS t ON t.id = w.team_id
+     JOIN instruments AS i ON i.symbol = w.symbol
+     LEFT JOIN users AS u ON u.id = w.actor_user_id
      LEFT JOIN competitions AS c ON c.id = t.competition_id
-     WHERE w.status = 'WORKING'
-     ORDER BY w.created_at ASC`,
+     WHERE w.status IN ('WORKING', 'PENDING_PARENT')
+     ORDER BY CASE WHEN w.parent_id IS NULL THEN 0 ELSE 1 END, w.created_at ASC, w.id ASC`,
+  );
+}
+
+function competitionOver(order: OpenOrderRow, nowIso: string): boolean {
+  if (order.sandbox_owner_user_id) return false;
+  return (
+    order.competition_status === "ended" ||
+    (order.competition_ends_at !== null && order.competition_ends_at <= nowIso)
   );
 }
 
 /** Whether the team may trade right now; the admin sandbox always may. */
-function teamCanTrade(order: CandidateRow, nowIso: string): boolean {
+function teamCanTrade(order: OpenOrderRow, nowIso: string): boolean {
   if (order.sandbox_owner_user_id) return true;
   return (
     order.team_status === "active" &&
@@ -226,22 +248,28 @@ function teamCanTrade(order: CandidateRow, nowIso: string): boolean {
 function usableQuote(quote: Quote | null, now: Date): quote is Quote {
   if (!quote || quote.isStale || quote.tradingHaltReason) return false;
   const age = now.getTime() - Date.parse(quote.asOf);
-  if (!Number.isFinite(age) || age > MAX_QUOTE_AGE_MS) return false;
+  if (!Number.isFinite(age) || age > maxQuoteAgeMs()) return false;
   return (
     quote.marketOpen &&
     (quote.marketClosesAt === null || now.getTime() < Date.parse(quote.marketClosesAt))
   );
 }
 
-type FillOutcome = "filled" | "cancelled" | "waiting";
+type FillOutcome = "filled" | "replayed" | "cancelled" | "waiting";
 
-async function fillOrder(order: CandidateRow, now: Date): Promise<FillOutcome> {
+async function fillOrder(
+  order: OpenOrderRow,
+  quote: Quote,
+  now: Date,
+  closer: Closer,
+): Promise<FillOutcome> {
   const label = workingOrderLabel(order.order_type, order.side);
   // One key per order per minute: a rerun within the minute replays, and a
   // transient refusal never blocks the next minute's attempt.
   const minute = Math.floor(now.getTime() / 60_000);
+  const nowIso = now.toISOString();
   try {
-    await placeOrder(
+    const receipt = await placeOrder(
       {
         actorUserId: order.actor_user_id,
         symbol: order.symbol,
@@ -254,12 +282,24 @@ async function fillOrder(order: CandidateRow, now: Date): Promise<FillOutcome> {
         releaseWorkingOrderIds: [order.id],
         expectTeamId: order.team_id,
         activityLabel: label,
+        // Fill on the very quote that triggered the order, and never on the
+        // wrong side of a limit or take profit. A stop loss is a market order
+        // once triggered, so it takes the price it gets.
+        fillQuote: quote,
+        now,
+        priceLimit:
+          order.order_type === "STOP_LOSS"
+            ? undefined
+            : { side: order.side, limitCents: Number(order.trigger_price_cents) },
         beforeFill: async (tx) => {
-          const current = await tx.get<{ status: string }>(
-            "SELECT status FROM working_orders WHERE id = ?",
+          const current = await tx.get<{ status: string; expires_at: string | null }>(
+            "SELECT status, expires_at FROM working_orders WHERE id = ?",
             [order.id],
           );
-          if (current?.status !== "WORKING") {
+          if (
+            current?.status !== "WORKING" ||
+            (current.expires_at !== null && current.expires_at <= nowIso)
+          ) {
             throw new AppError(
               "WORKING_ORDER_NOT_WAITING",
               "This order was already filled, cancelled, or expired.",
@@ -268,7 +308,6 @@ async function fillOrder(order: CandidateRow, now: Date): Promise<FillOutcome> {
           }
         },
         afterFill: async (tx, filled) => {
-          const nowIso = new Date().toISOString();
           const marked = await tx.run(
             `UPDATE working_orders
              SET status = 'FILLED', filled_order_id = ?, status_reason = NULL, updated_at = ?
@@ -299,26 +338,33 @@ async function fillOrder(order: CandidateRow, now: Date): Promise<FillOutcome> {
         },
       },
     );
-    return "filled";
+    return receipt.duplicate ? "replayed" : "filled";
   } catch (error) {
-    if (!(error instanceof AppError) || TRANSIENT_CODES.has(error.code)) {
-      if (!(error instanceof AppError)) {
-        console.error("Working order fill failed", order.id, error);
-      }
+    if (!(error instanceof AppError) || error.status >= 500) {
+      console.error("Working order fill failed; it will be retried", order.id, error);
       return "waiting";
     }
-    const reason = cancellationReason(error);
-    const db = await getDb();
-    const cancelled = await db.transaction(async (tx) => {
-      await lockTeam(tx, order.team_id);
-      const ok = await closeOrder(tx, order.id, "CANCELLED", reason, new Date().toISOString());
-      if (ok) {
-        await logActivity(tx, order, "WORKING_ORDER_CANCELLED", reason, new Date().toISOString());
-      }
-      return ok;
-    });
+    if (TRANSIENT_CODES.has(error.code)) return "waiting";
+    const cancelled = await closer.close(order, "CANCELLED", cancellationReason(error), nowIso);
     return cancelled ? "cancelled" : "waiting";
   }
+}
+
+async function mapLimited<T, R>(
+  items: readonly T[],
+  limit: number,
+  work: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await work(items[index]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 /**
@@ -328,49 +374,72 @@ async function fillOrder(order: CandidateRow, now: Date): Promise<FillOutcome> {
 export async function runWorkingOrders(at?: Date): Promise<WorkingOrderRunReport> {
   const now = at ?? marketDataNow();
   const nowIso = now.toISOString();
+  const closer = new Closer();
   const report: WorkingOrderRunReport = {
     checked: 0,
     filled: 0,
     cancelled: 0,
-    expired: await expireDueOrders(nowIso),
+    expired: 0,
     skippedSymbols: [],
   };
 
-  const open = await readCandidates();
-  // A disqualified team can never trade again, so its orders are cancelled
-  // rather than left waiting. Frozen teams keep theirs: a host can unfreeze.
-  for (const order of open.filter((o) => !o.sandbox_owner_user_id && o.team_status === "disqualified")) {
-    const db = await getDb();
-    const reason = "The team was disqualified.";
-    const cancelled = await db.transaction(async (tx) => {
-      await lockTeam(tx, order.team_id);
-      const ok = await closeOrder(tx, order.id, "CANCELLED", reason, nowIso);
-      if (ok && order.parent_id === null) {
-        await logActivity(tx, order, "WORKING_ORDER_CANCELLED", reason, nowIso);
+  // 1. Close what can no longer fill.
+  for (const order of await readOpenOrders()) {
+    if (competitionOver(order, nowIso)) {
+      if (await closer.close(order, "EXPIRED", "The competition ended.", nowIso)) {
+        report.expired += 1;
       }
-      return ok;
-    });
-    if (cancelled) report.cancelled += 1;
+    } else if (order.expires_at !== null && order.expires_at <= nowIso) {
+      if (await closer.close(order, "EXPIRED", "It reached the end of its trading day.", nowIso)) {
+        report.expired += 1;
+      }
+    } else if (!order.sandbox_owner_user_id && order.team_status === "disqualified") {
+      if (await closer.close(order, "CANCELLED", "The team was disqualified.", nowIso)) {
+        report.cancelled += 1;
+      }
+    } else if (!workingOrdersAvailableTo(order.actor_role ?? "")) {
+      // Switching the feature off frees everything it was holding.
+      if (await closer.close(order, "CANCELLED", "Waiting orders were switched off.", nowIso)) {
+        report.cancelled += 1;
+      }
+    }
   }
-  const candidates = open.filter((order) => teamCanTrade(order, nowIso));
+
+  // 2. Fill what has reached its price.
+  const candidates = (await readOpenOrders()).filter(
+    (order) => order.status === "WORKING" && teamCanTrade(order, nowIso),
+  );
   report.checked = candidates.length;
-  const bySymbol = new Map<string, CandidateRow[]>();
+  const bySymbol = new Map<string, OpenOrderRow[]>();
   for (const order of candidates) {
     bySymbol.set(order.symbol, [...(bySymbol.get(order.symbol) ?? []), order]);
   }
 
-  for (const [symbol, orders] of bySymbol) {
-    let quote: Quote | null = null;
+  // Stocks can't fill outside their session, so don't ask Yahoo at night.
+  // (Test and demo data keep no exchange hours.)
+  const sessionMayBeOpen =
+    getMarketDataProvider().id !== "YAHOO_FINANCE" || stockSessionMayBeOpen(now);
+  const symbols = [...bySymbol.keys()].filter((symbol) => {
+    const crypto = bySymbol.get(symbol)![0].asset_class === "CRYPTO";
+    if (crypto || sessionMayBeOpen) return true;
+    report.skippedSymbols.push(symbol);
+    return false;
+  });
+  const quotes = await mapLimited(symbols, QUOTE_CONCURRENCY, async (symbol) => {
     try {
-      quote = await refreshQuote(symbol, now);
+      return await refreshQuote(symbol, now);
     } catch {
-      quote = null;
+      return null;
     }
+  });
+
+  for (const [index, symbol] of symbols.entries()) {
+    const quote = quotes[index];
     if (!usableQuote(quote, now)) {
       report.skippedSymbols.push(symbol);
       continue;
     }
-    for (const order of orders) {
+    for (const order of bySymbol.get(symbol)!) {
       if (
         !workingOrderTriggered(
           {
@@ -383,7 +452,7 @@ export async function runWorkingOrders(at?: Date): Promise<WorkingOrderRunReport
       ) {
         continue;
       }
-      const outcome = await fillOrder(order, now);
+      const outcome = await fillOrder(order, quote, now, closer);
       if (outcome === "filled") report.filled += 1;
       if (outcome === "cancelled") report.cancelled += 1;
     }
