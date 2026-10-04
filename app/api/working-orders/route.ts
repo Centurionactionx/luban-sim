@@ -7,10 +7,12 @@ import {
   listWorkingOrdersForUser,
   normalizeMarketSymbol,
   placeWorkingOrder,
+  refreshQuote,
   runWorkingOrdersIfDue,
 } from "@/lib";
 
 import {
+  ApiError,
   handleRouteError,
   json,
   parseJson,
@@ -75,6 +77,18 @@ export async function POST(request: Request): Promise<Response> {
     // the upstream provider. The per-person placement limit lives inside
     // placeWorkingOrder's transaction.
     assertRequestAllowed(`order-quote:${user.id}`, 30);
+    // Fetch a live quote first, as market orders do. A fresh serverless
+    // instance has no cached price yet, and without this the order would be
+    // checked against the "no current price" fallback and refused as paused.
+    const quote = await refreshQuote(order.symbol);
+    if (!quote) {
+      throw new ApiError(
+        404,
+        "UNKNOWN_SYMBOL",
+        `No market quote is available for ${order.symbol}.`,
+        "symbol",
+      );
+    }
     const orders = await placeWorkingOrder({
       actorUserId: user.id,
       idempotencyKey,
