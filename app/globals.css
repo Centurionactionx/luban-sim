@@ -3707,6 +3707,17 @@ a {
 .help-tip[data-open="true"] .help-tip__bubble {
   visibility: visible;
   opacity: 1;
+  pointer-events: auto;
+}
+
+/* Bridges the gap under the "?" so the pointer can move onto the text. */
+.help-tip__bubble::before {
+  content: "";
+  position: absolute;
+  top: -10px;
+  right: 0;
+  left: 0;
+  height: 10px;
 }
 
 .help-tip__line {
@@ -3736,8 +3747,8 @@ a {
   border-radius: 4px;
 }
 
-.ticket-bracket legend {
-  padding: 0 6px;
+.ticket-bracket__title {
+  grid-column: 1 / -1;
   color: var(--muted);
   font-family: var(--font-data);
   font-size: var(--type-meta);

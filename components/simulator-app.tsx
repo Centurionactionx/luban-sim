@@ -38,7 +38,13 @@ import type {
   WorkingOrderType,
   WorkingOrderView,
 } from "@/lib/contracts";
-import { cryptoTokenSymbol, formatTokenQuantity, unitWord } from "@/lib/lots";
+import {
+  cryptoTokenSymbol,
+  formatTokenQuantity,
+  lotExponentFromSize,
+  unitWord,
+} from "@/lib/lots";
+import { priceInputToCents, reservedCadCentsPerUnit } from "@/lib/order-math";
 import {
   DISPLAY_TIME_ZONE,
   isoToZonedInputValue,
@@ -636,17 +642,31 @@ function workingOrderName(orderType: WorkingOrderType, side: TradeSide): string 
 }
 
 /**
- * A price typed into the ticket, in whole cents per share (per lot for
- * crypto), or null when it isn't a usable price. Crypto prices are typed per
- * whole token, like the quote above the ticket, and converted to the lot.
+ * A price typed into the ticket. Crypto prices are typed per whole token, like
+ * the quote above the ticket, and stored per lot in whole cents, so they are
+ * rounded in the trader's favour: down for buys and stops, up for sells at a
+ * target. `cents` is null for text that isn't a price and 0 for a price below
+ * one cent per lot; `rounded` says the stored price differs from the typed one.
  */
-function parseTicketPrice(value: string, isCrypto: boolean, lotSize: number): number | null {
-  const trimmed = value.trim().replace(/^\$/, "").replace(/,/g, "");
-  if (!(isCrypto ? /^\d*\.?\d{0,10}$/ : /^\d*\.?\d{0,2}$/).test(trimmed)) return null;
-  const amount = Number(trimmed);
-  if (!trimmed || !Number.isFinite(amount) || amount <= 0) return null;
-  const cents = Math.round(amount * 100 * (isCrypto ? lotSize : 1));
-  return cents >= 1 && cents <= MAX_ORDER_PRICE_CENTS ? cents : null;
+interface TicketPrice {
+  cents: number | null;
+  rounded: boolean;
+}
+
+function parseTicketPrice(
+  value: string,
+  isCrypto: boolean,
+  lotSize: number,
+  round: "down" | "up",
+): TicketPrice {
+  const options = {
+    lotExponent: isCrypto ? lotExponentFromSize(lotSize) : 0,
+    maxDecimals: isCrypto ? 10 : 2,
+  };
+  const cents = priceInputToCents(value, { ...options, round });
+  if (cents === null || cents > MAX_ORDER_PRICE_CENTS) return { cents: null, rounded: false };
+  const other = priceInputToCents(value, { ...options, round: round === "down" ? "up" : "down" });
+  return { cents, rounded: other !== cents };
 }
 
 /** A per-share (per-lot) price as people read it: per token for crypto. */
@@ -692,9 +712,9 @@ function activityStateLabel(type: ActivityItem["type"]): string {
 }
 
 /**
- * A "?" that explains the control beside it. It opens on hover, on focus, and
- * on a tap for touch screens; it stays open while the pointer is over it, and
- * Escape, moving away, or tapping elsewhere closes it.
+ * A "?" that explains the control beside it (WCAG 1.4.13). It opens on hover,
+ * focus, or a tap; the pointer can move onto the text without closing it; a
+ * second tap, a tap elsewhere, leaving it, or Escape closes it.
  */
 function HelpTip({
   id,
@@ -706,10 +726,38 @@ function HelpTip({
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+  // Opened by a click or tap, rather than just hovered or focused: it then
+  // stays open until a second press, a press elsewhere, or Escape.
+  const pinned = useRef(false);
   // Where the bubble sits, relative to the "?": centred on it, but kept
   // 16px inside the window so it never runs off a narrow screen.
   const [bubbleLeft, setBubbleLeft] = useState<number | null>(null);
   const anchor = useRef<HTMLSpanElement>(null);
+  const hide = () => {
+    pinned.current = false;
+    setOpen(false);
+  };
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        pinned.current = false;
+        setOpen(false);
+      }
+    };
+    const onPointer = (event: PointerEvent) => {
+      if (!anchor.current?.contains(event.target as Node)) {
+        pinned.current = false;
+        setOpen(false);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("pointerdown", onPointer);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("pointerdown", onPointer);
+    };
+  }, [open]);
   const show = () => {
     const box = anchor.current?.getBoundingClientRect();
     if (box) {
@@ -727,9 +775,8 @@ function HelpTip({
       className="help-tip"
       data-open={open}
       onMouseEnter={show}
-      onMouseLeave={() => setOpen(false)}
-      onKeyDown={(event) => {
-        if (event.key === "Escape") setOpen(false);
+      onMouseLeave={() => {
+        if (!pinned.current) setOpen(false);
       }}
     >
       <button
@@ -738,8 +785,15 @@ function HelpTip({
         aria-label={label}
         aria-describedby={id}
         onFocus={show}
-        onClick={show}
-        onBlur={() => setOpen(false)}
+        onClick={() => {
+          if (pinned.current) {
+            hide();
+          } else {
+            pinned.current = true;
+            show();
+          }
+        }}
+        onBlur={hide}
       >
         ?
       </button>
@@ -1701,32 +1755,51 @@ export function SimulatorApp({
       ? "MARKET"
       : orderType;
   const isWaitingOrder = ticketOrderType !== "MARKET";
-  const ticketPrice = (value: string) =>
-    parseTicketPrice(value, selectedIsCrypto, selectedLotSize);
-  const triggerPriceCents = isWaitingOrder ? ticketPrice(triggerPrice) : null;
+  const ticketPrice = (value: string, round: "down" | "up") =>
+    parseTicketPrice(value, selectedIsCrypto, selectedLotSize, round);
+  // Buys and stops round down, sells at a target round up (see parseTicketPrice).
+  const triggerParsed: TicketPrice = isWaitingOrder
+    ? ticketPrice(
+        triggerPrice,
+        ticketOrderType === "TAKE_PROFIT" || (ticketOrderType === "LIMIT" && side === "SELL")
+          ? "up"
+          : "down",
+      )
+    : { cents: null, rounded: false };
+  const triggerPriceCents = triggerParsed.cents || null;
   const bracketAllowed =
     workingOrdersEnabled &&
     side === "BUY" &&
     (ticketOrderType === "MARKET" || ticketOrderType === "LIMIT");
   const takeProfitEntered = bracketAllowed && takeProfitPrice.trim() !== "";
   const stopLossEntered = bracketAllowed && stopLossPrice.trim() !== "";
-  const takeProfitCents = takeProfitEntered ? ticketPrice(takeProfitPrice) : null;
-  const stopLossCents = stopLossEntered ? ticketPrice(stopLossPrice) : null;
+  const takeProfitParsed: TicketPrice = takeProfitEntered
+    ? ticketPrice(takeProfitPrice, "up")
+    : { cents: null, rounded: false };
+  const stopLossParsed: TicketPrice = stopLossEntered
+    ? ticketPrice(stopLossPrice, "down")
+    : { cents: null, rounded: false };
+  const takeProfitCents = takeProfitParsed.cents || null;
+  const stopLossCents = stopLossParsed.cents || null;
+  // The smallest crypto price step: one cent per lot, shown per token.
+  const priceStepText = selectedIsCrypto
+    ? `${formatPerTokenMoney(1, selectedLotSize, selectedQuote.listingCurrency)} per ${selectedToken}`
+    : "";
   const bracketLegs = (takeProfitCents ? 1 : 0) + (stopLossCents ? 1 : 0);
   const openWorkingOrderCount = dashboard.workingOrders.filter(
     (order) => order.status === "WORKING" || order.status === "PENDING_PARENT",
   ).length;
   const newWorkingOrderCount = (isWaitingOrder ? 1 : 0) + bracketLegs;
-  // A limit buy sets aside its cost at the limit, in CAD, the way the server
-  // does: rounded per share, with a 2% currency cushion for USD listings.
+  // A limit buy sets aside its cost at the limit, in CAD, exactly the way the
+  // server does (same helper): rounded up per share, with a 2% currency
+  // cushion for USD listings.
   const setsAsideCash = side === "BUY" && ticketOrderType === "LIMIT";
   const ticketUnitCadCents =
     isWaitingOrder && triggerPriceCents !== null
-      ? Math.ceil(
-          (triggerPriceCents *
-            selectedQuote.fxRateBasisPoints *
-            (setsAsideCash && selectedQuote.listingCurrency === "USD" ? 1.02 : 1)) /
-            10_000,
+      ? reservedCadCentsPerUnit(
+          triggerPriceCents,
+          selectedQuote.fxRateBasisPoints,
+          setsAsideCash ? selectedQuote.listingCurrency : "CAD",
         )
       : selectedQuote.priceCadCents;
   const estimatedValue = quantityIsValid ? ticketUnitCadCents * wholeQuantity : 0;
@@ -1756,7 +1829,9 @@ export function SimulatorApp({
     isWaitingOrder && triggerPriceCents === null
       ? triggerPrice.trim() === ""
         ? `Enter a ${triggerPriceLabel.toLowerCase()}.`
-        : `Enter the ${triggerPriceLabel.toLowerCase()} as a positive amount${selectedIsCrypto ? "" : " with up to two decimals"}.`
+        : triggerParsed.cents === 0
+          ? `That ${triggerPriceLabel.toLowerCase()} is below the smallest step of ${priceStepText}.`
+          : `Enter the ${triggerPriceLabel.toLowerCase()} as a positive amount${selectedIsCrypto ? "" : " with up to two decimals"}.`
       : ticketOrderType === "STOP_LOSS" &&
           triggerPriceCents !== null &&
           triggerPriceCents >= selectedQuote.priceCents
@@ -1766,9 +1841,13 @@ export function SimulatorApp({
             triggerPriceCents <= selectedQuote.priceCents
           ? `A take profit sells if the price rises, so set it above the current price of ${currentPriceText}.`
           : takeProfitEntered && takeProfitCents === null
-            ? "Enter a valid take profit price, or leave it blank."
+            ? takeProfitParsed.cents === 0
+              ? `The take profit is below the smallest step of ${priceStepText}.`
+              : "Enter a valid take profit price, or leave it blank."
             : stopLossEntered && stopLossCents === null
-              ? "Enter a valid stop loss price, or leave it blank."
+              ? stopLossParsed.cents === 0
+                ? `The stop loss is below the smallest step of ${priceStepText}.`
+                : "Enter a valid stop loss price, or leave it blank."
               : takeProfitCents !== null &&
                   bracketEntryCents !== null &&
                   takeProfitCents <= bracketEntryCents
@@ -2235,6 +2314,13 @@ export function SimulatorApp({
     setSuggestionsOpen(false);
     setActiveSuggestion(-1);
     setQuoteHistory(null);
+    // Prices typed for another listing mean nothing for this one (different
+    // currency, scale, or lot size), so they start blank again.
+    if (quote.symbol !== selectedQuote.symbol) {
+      setTriggerPrice("");
+      setTakeProfitPrice("");
+      setStopLossPrice("");
+    }
     setTicketStatus({
       kind: "idle",
       message: `${quote.symbol} loaded from ${marketSourceLabel(quote.source)}.`,
@@ -2297,7 +2383,9 @@ export function SimulatorApp({
       setTicketStatus({
         kind: "success",
         message: `${workingOrderName(entry.orderType, entry.side)} for ${amount} at ${formatWorkingOrderPrice(entry)} is waiting ${
-          entry.timeInForce === "DAY" ? "until the end of the day" : "until it fills or is cancelled"
+          entry.timeInForce === "DAY" && entry.expiresAt
+            ? `until ${formatScheduleInstant(entry.expiresAt)}`
+            : "until it fills or is cancelled"
         }.${entry.reservedCashCents > 0 ? ` ${formatMoney(entry.reservedCashCents)} is set aside for it.` : ""}${
           bracket ? " Its exits start watching once it fills." : ""
         }`,
@@ -2314,6 +2402,8 @@ export function SimulatorApp({
             ? `${error.message} Check the ticket and try again.`
             : "The order could not be placed. Check the ticket and try again.",
       });
+      // Show what the team really has waiting, whatever happened.
+      void fetchDashboard(true);
     }
   };
 
@@ -3751,6 +3841,9 @@ export function SimulatorApp({
                       {selectedIsCrypto && triggerPriceCents !== null
                         ? ` · ${formatNativeMoney(triggerPriceCents, selectedQuote.listingCurrency)} per lot`
                         : ""}
+                      {triggerParsed.rounded && triggerPriceCents !== null
+                        ? ` · rounds to ${ticketPriceText(triggerPriceCents)} (steps of ${priceStepText})`
+                        : ""}
                     </small>
                   </div>
                   <div className="ticket-condition">
@@ -3758,9 +3851,10 @@ export function SimulatorApp({
                       <label htmlFor="order-time-in-force">Time in force</label>
                       <HelpTip id="time-in-force-help" label="What do Day and Good until cancelled mean?">
                         <span className="help-tip__line">
-                          <strong>Day</strong> cancels the order at the end of today&apos;s trading
+                          <strong>Day</strong> cancels the order at the end of the trading day
                           ({selectedIsCrypto ? "midnight ET for crypto" : "4:00 p.m. ET"}) if it
-                          hasn&apos;t filled.
+                          hasn&apos;t filled. Placed after the close, it lasts through the next
+                          trading day.
                         </span>
                         <span className="help-tip__line">
                           <strong>Good until cancelled</strong> keeps it waiting until it fills,
@@ -3789,9 +3883,13 @@ export function SimulatorApp({
               ) : null}
 
               {bracketAllowed ? (
-                <fieldset className="ticket-bracket">
-                  <legend className="ticket-label-row">
-                    <span>Exits for this buy</span>
+                <div
+                  className="ticket-bracket"
+                  role="group"
+                  aria-labelledby="bracket-heading"
+                >
+                  <div className="ticket-label-row ticket-bracket__title">
+                    <span id="bracket-heading">Exits for this buy</span>
                     <HelpTip id="bracket-help" label="What are take profit and stop loss?">
                       <span className="help-tip__line">
                         <strong>Take profit</strong> sells these {unitWord(selectedAssetClass, 2)}{" "}
@@ -3809,7 +3907,7 @@ export function SimulatorApp({
                           : " They start watching as soon as the buy fills."}
                       </span>
                     </HelpTip>
-                  </legend>
+                  </div>
                   <div className="ticket-condition">
                     <label htmlFor="bracket-take-profit">
                       Take profit <em className="optional-note">(optional)</em>
@@ -3826,6 +3924,9 @@ export function SimulatorApp({
                         editTicket();
                       }}
                     />
+                    {takeProfitParsed.rounded && takeProfitCents !== null ? (
+                      <small>Rounds up to {ticketPriceText(takeProfitCents)}</small>
+                    ) : null}
                   </div>
                   <div className="ticket-condition">
                     <label htmlFor="bracket-stop-loss">
@@ -3843,6 +3944,9 @@ export function SimulatorApp({
                         editTicket();
                       }}
                     />
+                    {stopLossParsed.rounded && stopLossCents !== null ? (
+                      <small>Rounds down to {ticketPriceText(stopLossCents)}</small>
+                    ) : null}
                   </div>
                   {ticketOrderType === "MARKET" && (takeProfitEntered || stopLossEntered) ? (
                     <div className="ticket-condition ticket-condition--wide">
@@ -3853,9 +3957,9 @@ export function SimulatorApp({
                           label="What do Day and Good until cancelled mean?"
                         >
                           <span className="help-tip__line">
-                            <strong>Day</strong> cancels the exits at the end of today&apos;s
-                            trading ({selectedIsCrypto ? "midnight ET for crypto" : "4:00 p.m. ET"})
-                            if they haven&apos;t filled.
+                            <strong>Day</strong> cancels the exits at the end of the trading day
+                            ({selectedIsCrypto ? "midnight ET for crypto" : "4:00 p.m. ET"}) if
+                            they haven&apos;t filled.
                           </span>
                           <span className="help-tip__line">
                             <strong>Good until cancelled</strong> keeps them waiting until one
@@ -3876,7 +3980,7 @@ export function SimulatorApp({
                       </select>
                     </div>
                   ) : null}
-                </fieldset>
+                </div>
               ) : null}
 
               <div className="ticket-fields">

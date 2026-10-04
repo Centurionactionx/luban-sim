@@ -11,6 +11,7 @@ import type {
 } from "../contracts";
 import { AppError } from "../errors";
 import { cryptoTokenSymbol, lotSizeFromExponent, unitWord } from "../lots";
+import { reservedCadCentsPerUnit } from "../order-math";
 import { acquireAccountReadLock, type DbExecutor } from "./database";
 import { getDb } from "./db";
 import {
@@ -42,11 +43,6 @@ import {
 const MAX_QUANTITY = 100_000;
 /** Waiting orders one person can place per rolling minute. */
 const MAX_PLACEMENTS_PER_MINUTE = 30;
-/**
- * USD listings set aside 2% extra CAD, so ordinary USD/CAD movement before the
- * fill doesn't leave a funded order short of cash.
- */
-const USD_RESERVE_BUFFER = 1.02;
 const ORDER_TYPES: readonly WorkingOrderType[] = ["LIMIT", "STOP_LOSS", "TAKE_PROFIT"];
 
 interface AccountRow {
@@ -329,6 +325,47 @@ function normalizeInput(input: PlaceWorkingOrderInput) {
 }
 
 /**
+ * What an earlier request with the same idempotency key created, or null.
+ * Reusing a key for a different order is refused.
+ */
+async function replayWorkingOrder(
+  executor: DbExecutor,
+  order: ReturnType<typeof normalizeInput>,
+): Promise<WorkingOrderView[] | null> {
+  const entry = await executor.get<WorkingOrderRow>(
+    `${SELECT_WORKING_ORDER} WHERE w.actor_user_id = ? AND w.idempotency_key = ?`,
+    [order.actorUserId, order.idempotencyKey],
+  );
+  if (!entry) return null;
+  const legs = await executor.all<WorkingOrderRow>(
+    `${SELECT_WORKING_ORDER} WHERE w.parent_id = ? ORDER BY w.order_type DESC`,
+    [entry.id],
+  );
+  const legPrice = (type: WorkingOrderType) => {
+    const leg = legs.find((row) => row.order_type === type);
+    return leg ? Number(leg.trigger_price_cents) : null;
+  };
+  if (
+    entry.parent_id !== null ||
+    entry.symbol !== order.symbol ||
+    entry.side !== order.side ||
+    entry.order_type !== order.orderType ||
+    Number(entry.quantity) !== order.quantity ||
+    Number(entry.trigger_price_cents) !== order.triggerPriceCents ||
+    entry.time_in_force !== order.timeInForce ||
+    legPrice("TAKE_PROFIT") !== (order.bracket?.takeProfitCents ?? null) ||
+    legPrice("STOP_LOSS") !== (order.bracket?.stopLossCents ?? null)
+  ) {
+    throw new AppError(
+      "IDEMPOTENCY_CONFLICT",
+      "That idempotency key was already used for a different order.",
+      409,
+    );
+  }
+  return [entry, ...legs].map(rowToView);
+}
+
+/**
  * Place a limit, stop-loss, or take-profit order. A limit buy may carry a
  * bracket; its exits wait (PENDING_PARENT) until the buy fills. Repeating a
  * request with the same idempotency key returns the original order.
@@ -337,6 +374,11 @@ export async function placeWorkingOrder(
   input: PlaceWorkingOrderInput,
 ): Promise<WorkingOrderView[]> {
   const order = normalizeInput(input);
+  // A retry returns what the first request created before anything else is
+  // checked: the price may have moved since, and a refusal now would make
+  // the trader think the order was never placed.
+  const replayed = await replayWorkingOrder(await getDb(), order);
+  if (replayed) return replayed;
   const quote = await requireQuote(order.symbol);
 
   if (order.orderType === "STOP_LOSS" && order.triggerPriceCents >= quote.priceCents) {
@@ -387,13 +429,13 @@ export async function placeWorkingOrder(
   // What a limit buy sets aside: its cost at the limit, priced per share the
   // way a fill is (rounded CAD per share, times quantity), with a buffer for
   // exchange-rate movement on USD listings.
-  const fxBasisPoints =
-    quote.listingCurrency === "USD"
-      ? quote.fxRateBasisPoints * USD_RESERVE_BUFFER
-      : quote.fxRateBasisPoints;
   const reservedCashCents =
     order.side === "BUY"
-      ? Math.ceil((order.triggerPriceCents * fxBasisPoints) / 10_000) * order.quantity
+      ? reservedCadCentsPerUnit(
+          order.triggerPriceCents,
+          quote.fxRateBasisPoints,
+          quote.listingCurrency,
+        ) * order.quantity
       : 0;
   if (!Number.isSafeInteger(reservedCashCents)) {
     throw new AppError("ORDER_TOO_LARGE", "This order is too large for the simulator.", 400);
@@ -404,32 +446,9 @@ export async function placeWorkingOrder(
     const account = await lockAccount(tx, order.actorUserId);
     const teamId = account.team_id as string;
 
-    // A repeated request returns what the first one created.
-    const entry = await tx.get<WorkingOrderRow>(
-      `${SELECT_WORKING_ORDER} WHERE w.actor_user_id = ? AND w.idempotency_key = ?`,
-      [order.actorUserId, order.idempotencyKey],
-    );
-    if (entry) {
-      if (
-        entry.symbol !== order.symbol ||
-        entry.side !== order.side ||
-        entry.order_type !== order.orderType ||
-        Number(entry.quantity) !== order.quantity ||
-        Number(entry.trigger_price_cents) !== order.triggerPriceCents ||
-        entry.time_in_force !== order.timeInForce
-      ) {
-        throw new AppError(
-          "IDEMPOTENCY_CONFLICT",
-          "That idempotency key was already used for a different order.",
-          409,
-        );
-      }
-      const legs = await tx.all<WorkingOrderRow>(
-        `${SELECT_WORKING_ORDER} WHERE w.parent_id = ? ORDER BY w.order_type ASC`,
-        [entry.id],
-      );
-      return [entry, ...legs].map(rowToView);
-    }
+    // Checked again under the lock, in case the same request raced itself.
+    const replayed = await replayWorkingOrder(tx, order);
+    if (replayed) return replayed;
 
     assertWorkingOrdersAvailable(account);
     const nowIso = new Date().toISOString();
@@ -556,7 +575,7 @@ export async function placeWorkingOrder(
     const created = await tx.all<WorkingOrderRow>(
       `${SELECT_WORKING_ORDER}
        WHERE w.id = ? OR w.parent_id = ?
-       ORDER BY w.created_at ASC, w.order_type ASC`,
+       ORDER BY CASE WHEN w.parent_id IS NULL THEN 0 ELSE 1 END, w.order_type DESC`,
       [entryId, entryId],
     );
     return created.map(rowToView);

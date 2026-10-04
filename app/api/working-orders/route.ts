@@ -52,7 +52,8 @@ const workingOrderSchema = z
 export async function GET(request: Request): Promise<Response> {
   try {
     const user = await requireAuthenticatedUser();
-    assertRequestAllowed(`poll:${user.id}`, 120);
+    // Its own allowance, so it never eats into the dashboard's polling.
+    assertRequestAllowed(`working-list:${user.id}`, 60);
     const limit = parseLimit(request, { defaultValue: 50, maximum: 100 });
     const includeClosed = new URL(request.url).searchParams.get("closed") === "1";
 
@@ -85,8 +86,9 @@ export async function POST(request: Request): Promise<Response> {
       timeInForce: order.timeInForce,
       bracket: order.bracket,
     });
-    // An order placed at or past the current price fills on the next check;
-    // run one now rather than wait for the minute.
+    // An order placed at or past the current price fills on the next check.
+    // Ask for one now (at most one every 30 seconds per server) rather than
+    // always waiting for the minute.
     after(runWorkingOrdersIfDue);
 
     return json({ ok: true, workingOrders: orders }, { status: 201 });
