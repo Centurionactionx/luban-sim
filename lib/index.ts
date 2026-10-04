@@ -1,4 +1,5 @@
 export * from "./contracts";
+export * from "./history-options";
 export * from "./errors";
 
 export {
@@ -108,6 +109,7 @@ export {
   recordPortfolioSnapshot,
   getLeaderboard,
   getOrderByIdempotencyKey,
+  getTeamHoldings,
   getTeamSummary,
   listActivity,
   listOrders,

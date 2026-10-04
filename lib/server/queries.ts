@@ -15,6 +15,7 @@ import type {
   PortfolioSummary,
   Quote,
   SessionUser,
+  TeamHoldingsView,
   TeamStatus,
   TeamSummary,
   TradeSide,
@@ -50,6 +51,7 @@ interface HoldingRow {
   symbol: string;
   quantity: number;
   average_cost_cents: number;
+  industry: string | null;
 }
 
 interface OrderRow {
@@ -215,6 +217,38 @@ export async function getTeamSummary(
   };
 }
 
+const UNKNOWN_SECTOR = "Unclassified";
+const UNKNOWN_INDUSTRY = "Other";
+
+/**
+ * Where a holding sits on the portfolio map. Crypto groups by coin and funds
+ * under one "ETFs" sector, because neither has a company sector; stocks use
+ * the listing's sector and industry, with "Unclassified" / "Other" standing
+ * in for whatever the feed never reported.
+ */
+export function mapGrouping(
+  quote: Pick<Quote, "symbol" | "name" | "sector" | "assetClass">,
+  storedIndustry: string | null | undefined,
+): { sector: string; industry: string } {
+  const industry = storedIndustry?.trim() || UNKNOWN_INDUSTRY;
+
+  if (quote.assetClass === "CRYPTO") {
+    // A pair's name may carry its quote currency ("Bitcoin CAD").
+    const coin = quote.name.replace(/\s+(?:CAD|USD)$/, "").trim();
+    return { sector: "Crypto", industry: coin || quote.symbol };
+  }
+
+  // Older seeds list a fund as a STOCK whose sector is "ETF".
+  if (quote.assetClass === "ETF" || quote.sector === "ETF") {
+    return {
+      sector: "ETFs",
+      industry: industry === UNKNOWN_INDUSTRY ? "ETF" : industry,
+    };
+  }
+
+  return { sector: quote.sector.trim() || UNKNOWN_SECTOR, industry };
+}
+
 export interface PortfolioCalculation {
   summary: PortfolioSummary;
   holdings: HoldingView[];
@@ -245,10 +279,11 @@ export async function calculatePortfolio(
   const competition = await getCompetitionSummary();
   const holdingRows = await database.all<HoldingRow>(
     `
-      SELECT symbol, quantity, average_cost_cents
-      FROM holdings
-      WHERE team_id = ? AND quantity > 0
-      ORDER BY symbol ASC
+      SELECT h.symbol, h.quantity, h.average_cost_cents, i.industry
+      FROM holdings h
+      LEFT JOIN instruments i ON i.symbol = h.symbol
+      WHERE h.team_id = ? AND h.quantity > 0
+      ORDER BY h.symbol ASC
     `,
     [teamId],
   );
@@ -261,6 +296,7 @@ export async function calculatePortfolio(
     costBasisCents: number;
     gainLossCents: number;
     dayChangeCents: number;
+    storedIndustry: string | null;
   }> = [];
 
   for (const row of holdingRows) {
@@ -289,6 +325,7 @@ export async function calculatePortfolio(
       gainLossCents,
       dayChangeCents:
         (quote.priceCadCents - quote.previousCloseCadCents) * quantity,
+      storedIndustry: row.industry,
     });
   }
 
@@ -346,6 +383,9 @@ export async function calculatePortfolio(
         holding.quantity,
         reservations.sharesBySymbol.get(holding.quote.symbol) ?? 0,
       ),
+      ...mapGrouping(holding.quote, holding.storedIndustry),
+      dayChangeCents: holding.dayChangeCents,
+      dayChangePercent: holding.quote.changePercent,
     }))
     .sort((left, right) => right.marketValueCents - left.marketValueCents);
 
@@ -369,6 +409,78 @@ export async function calculatePortfolio(
     },
     holdings,
   };
+}
+
+/**
+ * One team's holdings for the portfolio map, valued exactly as the dashboard
+ * values them. Hosts and platform admins may read any competition team (an
+ * admin also their own private trading account); students only their own.
+ * A student asking about another team gets 403 whether or not it exists, so
+ * team ids can't be probed.
+ */
+export async function getTeamHoldings(
+  userId: string,
+  teamId: string,
+  at: Date = new Date(),
+): Promise<TeamHoldingsView> {
+  return withReadTransaction(async () => {
+    const user = await requireSessionUser(userId);
+    let sandboxOwnerUserId: string | undefined;
+
+    if (user.role === "student") {
+      if (!user.teamId || user.teamId !== teamId) {
+        throw new AppError(
+          "TEAM_FORBIDDEN",
+          "You can only view your own team's holdings.",
+          403,
+        );
+      }
+    } else if (user.role === "host" || user.role === "platform_admin") {
+      if (
+        user.role === "platform_admin" &&
+        (await getAdminTradingTeamId(user.id)) === teamId
+      ) {
+        sandboxOwnerUserId = user.id;
+      }
+    } else {
+      throw new AppError(
+        "TEAM_FORBIDDEN",
+        "You can only view your own team's holdings.",
+        403,
+      );
+    }
+
+    const db = await getDb();
+    const competition = await getCompetitionSummary();
+    const team = await db.get<{ id: string; name: string }>(
+      sandboxOwnerUserId
+        ? `SELECT id, name FROM teams
+           WHERE id = ? AND sandbox_owner_user_id = ?`
+        : `SELECT id, name FROM teams
+           WHERE id = ? AND competition_id = ?
+             AND sandbox_owner_user_id IS NULL`,
+      [teamId, sandboxOwnerUserId ?? competition.id],
+    );
+
+    if (!team) {
+      throw new AppError("TEAM_NOT_FOUND", "That team does not exist.", 404);
+    }
+
+    const { summary, holdings } = await calculatePortfolio(
+      team.id,
+      at,
+      sandboxOwnerUserId,
+    );
+
+    return {
+      teamId: team.id,
+      teamName: team.name,
+      asOf: summary.asOf,
+      cashCents: summary.cashCents,
+      totalValueCents: summary.totalValueCents,
+      holdings,
+    };
+  });
 }
 
 function orderRowToView(row: OrderRow): OrderView {

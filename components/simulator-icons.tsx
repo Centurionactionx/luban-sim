@@ -148,3 +148,37 @@ export function LockIcon(props: IconProps) {
     </IconBase>
   );
 }
+
+export function ExpandIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7" />
+    </IconBase>
+  );
+}
+
+export function TreemapIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <rect x="3.5" y="4" width="17" height="16" rx="1.5" />
+      <path d="M12 4v16M12 13h8.5M3.5 11H12M16 13v7" />
+    </IconBase>
+  );
+}
+
+export function CloseIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M6 6l12 12M18 6L6 18" />
+    </IconBase>
+  );
+}
+
+export function CalendarIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <rect x="4" y="5" width="16" height="15" rx="2" />
+      <path d="M4 10h16M9 3v4M15 3v4" />
+    </IconBase>
+  );
+}

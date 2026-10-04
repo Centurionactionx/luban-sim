@@ -9,6 +9,17 @@ import type {
 } from "../contracts";
 import type { HistoricalMarketPrice } from "../backtest-contracts";
 import { AppError } from "../errors";
+import {
+  DEFAULT_QUOTE_INTERVAL,
+  allowedIntervals,
+  customHistoryWindow,
+  isIntradayInterval,
+  presetHistoryWindow,
+  resolveInterval,
+  QUOTE_INTERVAL_LABELS,
+  type HistoryWindow,
+  type QuoteInterval,
+} from "../history-options";
 import { lotExponentFromSize, lotSizeFromExponent } from "../lots";
 import { MARKET_REFRESH_INTERVAL_MS } from "../market-config";
 import { getDb } from "./db";
@@ -106,6 +117,20 @@ const YAHOO_EXCHANGES: Record<
 
 export const QUOTE_RANGES = ["1D", "5D", "1M", "3M"] as const;
 
+/**
+ * A validated history request. Presets may omit it to get their default bar
+ * size; a CUSTOM range always carries its from/to dates.
+ */
+export interface HistoryRequest {
+  interval: QuoteInterval;
+  from: string | null;
+  to: string | null;
+}
+
+function presetRequest(range: QuoteRange): HistoryRequest {
+  return { interval: DEFAULT_QUOTE_INTERVAL[range], from: null, to: null };
+}
+
 interface QuoteRangeConfig {
   providerRange: string;
   interval: string;
@@ -140,11 +165,28 @@ export const QUOTE_RANGE_CONFIG: Record<QuoteRange, QuoteRangeConfig> = {
   },
 };
 
+const SYNTHETIC_INTERVAL_MS: Record<QuoteInterval, number> = {
+  "1m": 60_000,
+  "2m": 2 * 60_000,
+  "5m": 5 * 60_000,
+  "15m": 15 * 60_000,
+  "30m": 30 * 60_000,
+  "60m": 60 * 60_000,
+  "1d": 24 * 60 * 60_000,
+  "1wk": 7 * 24 * 60 * 60_000,
+};
+
+function estimatedSyntheticBars(window: HistoryWindow, interval: QuoteInterval): number {
+  return (window.spanDays * 24 * 60 * 60_000) / SYNTHETIC_INTERVAL_MS[interval];
+}
+
 export interface MarketInstrument {
   symbol: string;
   name: string;
   exchange: string;
   sector: string;
+  /** "Other" until the feed reports one. Missing means "Other". */
+  industry?: string;
   listingCurrency: "CAD" | "USD";
   basePriceCents: number;
   previousCloseCents: number;
@@ -181,8 +223,9 @@ export interface MarketDataProvider {
   resolveInstrument?(symbol: string): Promise<InstrumentSearchResult | null>;
   history?(
     instrument: MarketInstrument,
-    range: QuoteRange,
+    range: QuoteRange | "CUSTOM",
     at: Date,
+    request?: HistoryRequest,
   ): Promise<QuoteHistory>;
   historicalPrice?(
     instrument: MarketInstrument,
@@ -201,6 +244,7 @@ interface InstrumentRow {
   name: string;
   exchange: string;
   sector: string;
+  industry: string | null;
   listing_currency: "CAD" | "USD";
   base_price_cents: number;
   previous_close_cents: number;
@@ -211,8 +255,11 @@ interface InstrumentRow {
   last_priced_at: string | null;
 }
 
+/** Stored when the feed gives no industry; the map groups these together. */
+export const UNKNOWN_INDUSTRY = "Other";
+
 const INSTRUMENT_COLUMNS = `
-  symbol, name, exchange, sector, listing_currency,
+  symbol, name, exchange, sector, industry, listing_currency,
   base_price_cents, previous_close_cents, fx_rate_basis_points,
   asset_class, lot_exponent, last_price_cents, last_priced_at`;
 
@@ -258,6 +305,9 @@ interface YahooSearchQuote {
   exchange?: unknown;
   quoteType?: unknown;
   sector?: unknown;
+  industry?: unknown;
+  /** Display spelling of industry, e.g. "Software—Infrastructure". */
+  industryDisp?: unknown;
 }
 
 interface YahooSearchPayload {
@@ -359,6 +409,7 @@ function rowToInstrument(row: InstrumentRow): MarketInstrument {
     name: row.name,
     exchange: row.exchange,
     sector: row.sector,
+    industry: row.industry ?? UNKNOWN_INDUSTRY,
     listingCurrency: row.listing_currency,
     basePriceCents: Number(row.base_price_cents),
     previousCloseCents: Number(row.previous_close_cents),
@@ -683,6 +734,14 @@ function cryptoDisplayName(name: string, currency: "CAD" | "USD"): string {
   return name.endsWith(suffix) ? name.slice(0, -suffix.length).trim() || name : name;
 }
 
+/** Yahoo's display spelling when present, else its plain industry. */
+function yahooSearchIndustry(quote: YahooSearchQuote): string | undefined {
+  for (const value of [quote.industryDisp, quote.industry]) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
 function parseYahooSearch(payload: unknown): InstrumentSearchResult[] {
   const rawQuotes = (payload as YahooSearchPayload | null)?.quotes;
   if (!Array.isArray(rawQuotes)) {
@@ -744,12 +803,15 @@ function parseYahooSearch(payload: unknown): InstrumentSearchResult[] {
       typeof quote.sector === "string" && quote.sector.trim()
         ? quote.sector.trim()
         : "Unclassified";
+    const industry = yahooSearchIndustry(quote);
     if (!results.has(symbol)) {
       results.set(symbol, {
         symbol,
         name,
         exchange: market.exchange,
         sector: assetClass === "ETF" && sector === "Unclassified" ? "ETF" : sector,
+        // Left off when unknown; storage defaults it to "Other".
+        ...(industry ? { industry } : {}),
         listingCurrency: market.listingCurrency,
         assetClass,
       });
@@ -993,9 +1055,10 @@ function quoteFromYahooChart(
 
 function historyFromYahooChart(
   instrument: MarketInstrument,
-  range: QuoteRange,
+  range: QuoteRange | "CUSTOM",
   chart: ParsedYahooChart,
   fetchedAt: Date,
+  request: HistoryRequest = presetRequest(range === "CUSTOM" ? "1D" : range),
 ): QuoteHistory {
   // Charts use the same per-lot prices as quotes and orders.
   const lotExponent = instrument.lotExponent ?? 0;
@@ -1044,7 +1107,8 @@ function historyFromYahooChart(
     interval:
       typeof chart.meta.dataGranularity === "string"
         ? chart.meta.dataGranularity
-        : QUOTE_RANGE_CONFIG[range].interval,
+        : request.interval,
+    ...(request.from && request.to ? { from: request.from, to: request.to } : {}),
     listingCurrency: instrument.listingCurrency,
     exchangeTimeZone:
       instrumentAssetClass(instrument) === "CRYPTO"
@@ -1118,17 +1182,50 @@ export class DeterministicMarketDataProvider implements MarketDataProvider {
 
   async history(
     instrument: MarketInstrument,
-    range: QuoteRange,
+    range: QuoteRange | "CUSTOM",
     at: Date,
+    request: HistoryRequest = presetRequest(range === "CUSTOM" ? "1D" : range),
   ): Promise<QuoteHistory> {
-    const config = QUOTE_RANGE_CONFIG[range];
     const quote = this.quote(instrument, at);
-    const points = Array.from({ length: config.testPointCount }, (_, index) => {
-      const remaining = config.testPointCount - index - 1;
-      const seed = hashString(`${instrument.symbol}:${range}:${index}`);
+    // Preset defaults keep their fixed test shape; other bar sizes and custom
+    // windows get one synthetic bar per interval, ending at the window's end.
+    const preset =
+      range !== "CUSTOM" && request.interval === DEFAULT_QUOTE_INTERVAL[range]
+        ? QUOTE_RANGE_CONFIG[range]
+        : null;
+    const window =
+      range === "CUSTOM" && request.from && request.to
+        ? customHistoryWindow(request.from, request.to, at)
+        : null;
+    const windowEndMs = window?.ok
+      ? Math.min(at.getTime(), window.toMs + 86_400_000 - 1)
+      : at.getTime();
+    const stepMs = preset?.testStepMs ?? SYNTHETIC_INTERVAL_MS[request.interval];
+    const pointCount =
+      preset?.testPointCount ??
+      Math.max(
+        2,
+        Math.min(
+          400,
+          window?.ok
+            ? Math.floor((windowEndMs - window.fromMs) / stepMs) + 1
+            : Math.round(
+                estimatedSyntheticBars(
+                  presetHistoryWindow(range === "CUSTOM" ? "1D" : range),
+                  request.interval,
+                ),
+              ),
+        ),
+      );
+    const endsNow = windowEndMs === at.getTime();
+    const points = Array.from({ length: pointCount }, (_, index) => {
+      const remaining = pointCount - index - 1;
+      const seed = hashString(
+        `${instrument.symbol}:${range}:${request.interval}:${request.from ?? ""}:${index}`,
+      );
       const change = Math.round((pseudoRandom(seed) - 0.5) * 120);
       return {
-        at: new Date(at.getTime() - remaining * config.testStepMs).toISOString(),
+        at: new Date(windowEndMs - remaining * stepMs).toISOString(),
         openCents: null,
         highCents: null,
         lowCents: null,
@@ -1136,16 +1233,19 @@ export class DeterministicMarketDataProvider implements MarketDataProvider {
         volume: null,
       } satisfies QuoteHistoryPoint;
     });
-    points[points.length - 1] = {
-      ...points.at(-1)!,
-      at: quote.asOf,
-      closeCents: quote.priceCents,
-    };
+    if (endsNow) {
+      points[points.length - 1] = {
+        ...points.at(-1)!,
+        at: quote.asOf,
+        closeCents: quote.priceCents,
+      };
+    }
 
     return {
       symbol: instrument.symbol,
       range,
-      interval: config.interval,
+      interval: request.interval,
+      ...(request.from && request.to ? { from: request.from, to: request.to } : {}),
       listingCurrency: instrument.listingCurrency,
       exchangeTimeZone: "America/Toronto",
       points,
@@ -1392,15 +1492,16 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
 
   async history(
     instrument: MarketInstrument,
-    range: QuoteRange,
+    range: QuoteRange | "CUSTOM",
+    _at?: Date,
+    request: HistoryRequest = presetRequest(range === "CUSTOM" ? "1D" : range),
   ): Promise<QuoteHistory> {
-    const key = `${instrument.symbol}:${range}`;
+    const key = `${instrument.symbol}:${range}:${request.interval}:${request.from ?? ""}:${request.to ?? ""}`;
     const cached = this.state.histories.get(key);
     const nowMs = this.now();
-    const ttl =
-      range === "1D" || range === "5D"
-        ? INTRADAY_HISTORY_TTL_MS
-        : DAILY_HISTORY_TTL_MS;
+    const ttl = isIntradayInterval(request.interval)
+      ? INTRADAY_HISTORY_TTL_MS
+      : DAILY_HISTORY_TTL_MS;
     if (cached && nowMs - cached.fetchedAtMs < ttl && !cached.value.isStale) {
       return cached.value;
     }
@@ -1417,17 +1518,26 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
           return refreshedCache.value;
         }
 
-        const config = QUOTE_RANGE_CONFIG[range];
-        const chart = await this.fetchChart(
-          instrument.symbol,
-          config.providerRange,
-          config.interval,
-        );
+        const chart =
+          range === "CUSTOM" && request.from && request.to
+            ? await this.fetchChartBetween(
+                instrument.symbol,
+                Date.parse(`${request.from}T00:00:00Z`) / 1_000,
+                // The end date is inclusive: run to the start of the next day.
+                Date.parse(`${request.to}T00:00:00Z`) / 1_000 + 86_400,
+                request.interval,
+              )
+            : await this.fetchChart(
+                instrument.symbol,
+                QUOTE_RANGE_CONFIG[range === "CUSTOM" ? "1D" : range].providerRange,
+                request.interval,
+              );
         const value = historyFromYahooChart(
           instrument,
           range,
           chart,
           new Date(refreshedNow),
+          request,
         );
         boundedSet(this.state.histories, key, { value, fetchedAtMs: refreshedNow });
         return value;
@@ -1867,7 +1977,7 @@ async function readRefreshInstruments(): Promise<MarketInstrument[]> {
   const db = await getDb();
   const rows = await db.all<InstrumentRow>(`
       SELECT
-        i.symbol, i.name, i.exchange, i.sector, i.listing_currency,
+        i.symbol, i.name, i.exchange, i.sector, i.industry, i.listing_currency,
         i.base_price_cents, i.previous_close_cents, i.fx_rate_basis_points,
         i.asset_class, i.lot_exponent, i.last_price_cents, i.last_priced_at
       FROM instruments AS i
@@ -1954,18 +2064,23 @@ async function persistDiscoveredInstrument(
   const db = await getDb();
   // asset_class and lot_exponent are deliberately left alone on conflict:
   // holdings are counted in lots, so a listed pair's lot can never change.
+  // A lookup that has no industry keeps the one already known.
   await db.run(
     `
       INSERT INTO instruments (
-        symbol, name, exchange, sector, listing_currency,
+        symbol, name, exchange, sector, industry, listing_currency,
         base_price_cents, previous_close_cents, fx_rate_basis_points,
         is_active, auto_refresh,
         asset_class, lot_exponent, last_price_cents, last_priced_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?, ?)
       ON CONFLICT(symbol) DO UPDATE SET
         name = excluded.name,
         exchange = excluded.exchange,
         sector = excluded.sector,
+        industry = CASE
+          WHEN excluded.industry = '${UNKNOWN_INDUSTRY}' THEN instruments.industry
+          ELSE excluded.industry
+        END,
         listing_currency = excluded.listing_currency,
         base_price_cents = excluded.base_price_cents,
         previous_close_cents = excluded.previous_close_cents,
@@ -1979,6 +2094,7 @@ async function persistDiscoveredInstrument(
       result.name,
       result.exchange,
       result.sector,
+      result.industry ?? UNKNOWN_INDUSTRY,
       result.listingCurrency,
       quote.priceCents,
       quote.previousCloseCents,
@@ -2203,8 +2319,9 @@ export async function requireQuote(
 
 export async function getQuoteHistory(
   symbol: string,
-  range: QuoteRange,
+  range: QuoteRange | "CUSTOM",
   at?: Date | string,
+  options: HistoryOptions = {},
 ): Promise<QuoteHistory> {
   const instrument = await readInstrument(symbol);
   if (!instrument) {
@@ -2215,7 +2332,7 @@ export async function getQuoteHistory(
       { symbol: symbol.trim().toUpperCase() },
     );
   }
-  if (!QUOTE_RANGES.includes(range)) {
+  if (range !== "CUSTOM" && !QUOTE_RANGES.includes(range)) {
     throw new AppError("INVALID_QUOTE_RANGE", "Unsupported quote range.", 400);
   }
   if (!activeProvider.history) {
@@ -2225,7 +2342,54 @@ export async function getQuoteHistory(
       503,
     );
   }
-  return activeProvider.history(instrument, range, normalizeAt(at));
+  const now = normalizeAt(at);
+  const request = resolveHistoryRequest(range, now, options);
+  return activeProvider.history(instrument, range, now, request);
+}
+
+export interface HistoryOptions {
+  interval?: QuoteInterval | null;
+  from?: string | null;
+  to?: string | null;
+}
+
+function resolveHistoryRequest(
+  range: QuoteRange | "CUSTOM",
+  now: Date,
+  options: HistoryOptions,
+): HistoryRequest {
+  let window: HistoryWindow;
+  if (range === "CUSTOM") {
+    const custom = customHistoryWindow(options.from ?? "", options.to ?? "", now);
+    if (!custom.ok) throw new AppError("INVALID_QUOTE_WINDOW", custom.message, 400);
+    window = custom.window;
+  } else {
+    window = presetHistoryWindow(range);
+  }
+
+  const allowed = allowedIntervals(window);
+  const requested =
+    options.interval ?? (range === "CUSTOM" ? null : DEFAULT_QUOTE_INTERVAL[range]);
+  if (requested && !allowed.includes(requested)) {
+    throw new AppError(
+      "INVALID_QUOTE_INTERVAL",
+      allowed.length > 0
+        ? `${QUOTE_INTERVAL_LABELS[requested]} bars aren't available for this window. Try ${allowed
+            .map((interval) => QUOTE_INTERVAL_LABELS[interval])
+            .join(", ")}.`
+        : "No bar size is available for this window.",
+      400,
+    );
+  }
+  const interval = resolveInterval(window, requested);
+  if (!interval) {
+    throw new AppError("INVALID_QUOTE_WINDOW", "No bar size is available for this window.", 400);
+  }
+  return {
+    interval,
+    from: range === "CUSTOM" ? options.from ?? null : null,
+    to: range === "CUSTOM" ? options.to ?? null : null,
+  };
 }
 
 export async function getHistoricalMarketPrice(
@@ -2368,7 +2532,7 @@ async function readCompetitionFavourites(
   const rows = await db.all<InstrumentRow & { trades: number }>(
     `
       SELECT
-        i.symbol, i.name, i.exchange, i.sector, i.listing_currency,
+        i.symbol, i.name, i.exchange, i.sector, i.industry, i.listing_currency,
         i.base_price_cents, i.previous_close_cents, i.fx_rate_basis_points,
         i.asset_class, i.lot_exponent, i.last_price_cents, i.last_priced_at,
         COUNT(*) AS trades
@@ -2380,7 +2544,7 @@ async function readCompetitionFavourites(
         AND o.created_at > ?
         AND i.is_active = 1
       GROUP BY
-        i.symbol, i.name, i.exchange, i.sector, i.listing_currency,
+        i.symbol, i.name, i.exchange, i.sector, i.industry, i.listing_currency,
         i.base_price_cents, i.previous_close_cents, i.fx_rate_basis_points,
         i.asset_class, i.lot_exponent, i.last_price_cents, i.last_priced_at
       ORDER BY trades DESC, i.symbol ASC
@@ -2465,6 +2629,35 @@ export async function getPopularInstruments(): Promise<PopularSection[]> {
   return sections;
 }
 
+/**
+ * Listed rows from before industries were stored read "Other". When a search
+ * brings back an industry for one of them, remember it. Only rows still
+ * unknown are written, so repeat searches cost one read.
+ */
+async function backfillIndustries(results: InstrumentSearchResult[]): Promise<void> {
+  const known = new Map<string, string>();
+  for (const result of results) {
+    if (result.industry && result.industry !== UNKNOWN_INDUSTRY) {
+      known.set(result.symbol, result.industry);
+    }
+  }
+  if (known.size === 0) return;
+
+  const db = await getDb();
+  const symbols = [...known.keys()];
+  const unknown = await db.all<{ symbol: string }>(
+    `SELECT symbol FROM instruments
+     WHERE industry = ? AND symbol IN (${symbols.map(() => "?").join(", ")})`,
+    [UNKNOWN_INDUSTRY, ...symbols],
+  );
+  for (const row of unknown) {
+    await db.run(
+      "UPDATE instruments SET industry = ? WHERE symbol = ? AND industry = ?",
+      [known.get(row.symbol), row.symbol, UNKNOWN_INDUSTRY],
+    );
+  }
+}
+
 export async function searchMarketInstruments(
   query: string,
 ): Promise<InstrumentSearchResult[]> {
@@ -2542,6 +2735,12 @@ export async function searchMarketInstruments(
         // The USD pair is still a valid result on its own.
       }
     }
+  }
+
+  try {
+    await backfillIndustries(remote);
+  } catch {
+    // A missed backfill only leaves the map grouping as "Other" for now.
   }
 
   const merged = new Map<string, InstrumentSearchResult>();

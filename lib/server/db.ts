@@ -21,7 +21,9 @@ import {
 import { postgresConnectionOptions } from "./postgres-config";
 
 const DEFAULT_DATABASE_PATH = join(process.cwd(), "data", "luban.sqlite");
-const SCHEMA_VERSION = 12;
+const SCHEMA_VERSION = 13;
+/** Map grouping within a sector; "Other" until the feed reports one. */
+const INSTRUMENT_INDUSTRY_COLUMN = "industry TEXT NOT NULL DEFAULT 'Other'";
 
 const globalDatabase = globalThis as typeof globalThis & {
   __lubanSqliteHandle?: DatabaseSync;
@@ -133,6 +135,7 @@ function createSqliteSchema(database: DatabaseSync): void {
   ensureOrderReceiptColumns(database);
   ensureInstrumentRefreshColumn(database);
   ensureInstrumentAssetColumns(database);
+  ensureInstrumentIndustryColumn(database);
   ensureAccountColumns(database);
   ensureDeletedStatus(database);
   ensureAdminSandboxOwnerColumn(database);
@@ -242,6 +245,7 @@ const SHARED_TABLE_BODIES = {
       name TEXT NOT NULL,
       exchange TEXT NOT NULL,
       sector TEXT NOT NULL,
+      ${INSTRUMENT_INDUSTRY_COLUMN},
       listing_currency TEXT NOT NULL CHECK (listing_currency IN ('CAD', 'USD')),
       base_price_cents ${big} NOT NULL CHECK (base_price_cents > 0),
       previous_close_cents ${big} NOT NULL CHECK (previous_close_cents > 0),
@@ -607,12 +611,25 @@ function instrumentAssetColumnList(big: string): string[] {
 function instrumentAssetColumns(big: string): string {
   return instrumentAssetColumnList(big).join(",\n      ");
 }
-
 /**
  * Idempotent, cheap migrations applied to an already-provisioned PostgreSQL
  * schema on cold start (fresh databases get the current DDL directly).
  */
 export async function runPostgresMigrations(tx: DbExecutor): Promise<void> {
+  // v13: industry for the portfolio map. Existing rows read "Other" until
+  // their next lookup. Checked first so warm starts skip the table lock.
+  const industryColumn = await tx.get<{ present: number }>(
+    `SELECT 1 AS present
+     FROM information_schema.columns
+     WHERE table_schema = current_schema()
+       AND table_name = 'instruments' AND column_name = 'industry'`,
+  );
+  if (!industryColumn) {
+    await tx.run(
+      `ALTER TABLE instruments ADD COLUMN IF NOT EXISTS ${INSTRUMENT_INDUSTRY_COLUMN}`,
+    );
+  }
+
   // v12: limit, stop-loss, and take-profit orders. A new table only; nothing
   // existing changes.
   await tx.run(`CREATE TABLE IF NOT EXISTS working_orders (
@@ -894,24 +911,25 @@ async function runSeed(tx: DbExecutor, preserveSessions: boolean): Promise<void>
   await tx.run(insertMember, ["maya", 0, isoDaysFrom(now, -6, 2)]);
   await tx.run(insertMember, ["jordan", 0, isoDaysFrom(now, -5, 3)]);
 
+  // Industries use Yahoo's spelling so a later lookup doesn't regroup them.
   const insertInstrument = `
     INSERT INTO instruments (
-      symbol, name, exchange, sector, listing_currency,
+      symbol, name, exchange, sector, industry, listing_currency,
       base_price_cents, previous_close_cents, fx_rate_basis_points,
       is_active, auto_refresh
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1)
   `;
   const instruments = [
-    ["SHOP.TO", "Shopify Inc.", "TSX", "Technology", "CAD", 15_840, 15_610, 10_000],
-    ["RY.TO", "Royal Bank of Canada", "TSX", "Financials", "CAD", 21_765, 21_590, 10_000],
-    ["TD.TO", "Toronto-Dominion Bank", "TSX", "Financials", "CAD", 11_520, 11_440, 10_000],
-    ["ENB.TO", "Enbridge Inc.", "TSX", "Energy", "CAD", 6_590, 6_625, 10_000],
-    ["CNR.TO", "Canadian National Railway", "TSX", "Industrials", "CAD", 14_480, 14_390, 10_000],
-    ["XEQT.TO", "iShares Core Equity ETF", "TSX", "ETF", "CAD", 3_925, 3_901, 10_000],
-    ["BNS.TO", "Bank of Nova Scotia", "TSX", "Financials", "CAD", 9_025, 8_970, 10_000],
-    ["AAPL", "Apple Inc.", "NASDAQ", "Technology", "USD", 23_845, 23_610, 13_600],
-    ["MSFT", "Microsoft Corporation", "NASDAQ", "Technology", "USD", 51_020, 50_750, 13_600],
-    ["NVDA", "NVIDIA Corporation", "NASDAQ", "Technology", "USD", 18_935, 18_620, 13_600],
+    ["SHOP.TO", "Shopify Inc.", "TSX", "Technology", "Software—Application", "CAD", 15_840, 15_610, 10_000],
+    ["RY.TO", "Royal Bank of Canada", "TSX", "Financials", "Banks—Diversified", "CAD", 21_765, 21_590, 10_000],
+    ["TD.TO", "Toronto-Dominion Bank", "TSX", "Financials", "Banks—Diversified", "CAD", 11_520, 11_440, 10_000],
+    ["ENB.TO", "Enbridge Inc.", "TSX", "Energy", "Oil & Gas Midstream", "CAD", 6_590, 6_625, 10_000],
+    ["CNR.TO", "Canadian National Railway", "TSX", "Industrials", "Railroads", "CAD", 14_480, 14_390, 10_000],
+    ["XEQT.TO", "iShares Core Equity ETF", "TSX", "ETF", "Global Equity", "CAD", 3_925, 3_901, 10_000],
+    ["BNS.TO", "Bank of Nova Scotia", "TSX", "Financials", "Banks—Diversified", "CAD", 9_025, 8_970, 10_000],
+    ["AAPL", "Apple Inc.", "NASDAQ", "Technology", "Consumer Electronics", "USD", 23_845, 23_610, 13_600],
+    ["MSFT", "Microsoft Corporation", "NASDAQ", "Technology", "Software—Infrastructure", "USD", 51_020, 50_750, 13_600],
+    ["NVDA", "NVIDIA Corporation", "NASDAQ", "Technology", "Semiconductors", "USD", 18_935, 18_620, 13_600],
   ];
   for (const instrument of instruments) {
     await tx.run(insertInstrument, instrument as unknown[]);
@@ -1261,6 +1279,17 @@ function ensureInstrumentAssetColumns(database: DatabaseSync): void {
     if (!columns.some((existing) => existing.name === name)) {
       database.exec(`ALTER TABLE instruments ADD COLUMN ${column};`);
     }
+  }
+}
+
+/** v13: existing rows read "Other" until their next lookup. */
+function ensureInstrumentIndustryColumn(database: DatabaseSync): void {
+  const columns = database.prepare("PRAGMA table_info(instruments)").all() as unknown as Array<{
+    name: string;
+  }>;
+
+  if (!columns.some((column) => column.name === "industry")) {
+    database.exec(`ALTER TABLE instruments ADD COLUMN ${INSTRUMENT_INDUSTRY_COLUMN};`);
   }
 }
 

@@ -192,6 +192,8 @@ export interface InstrumentSearchResult {
   name: string;
   exchange: string;
   sector: string;
+  /** Missing or "Other" when the feed gives no industry. */
+  industry?: string;
   listingCurrency: "CAD" | "USD";
   /** Missing means STOCK. */
   assetClass?: AssetClass;
@@ -214,8 +216,12 @@ export interface QuoteHistoryPoint {
 
 export interface QuoteHistory {
   symbol: string;
-  range: QuoteRange;
+  /** CUSTOM when the request named its own from/to dates. */
+  range: QuoteRange | "CUSTOM";
   interval: string;
+  /** The requested custom window (YYYY-MM-DD, inclusive), when there was one. */
+  from?: string;
+  to?: string;
   listingCurrency: "CAD" | "USD";
   exchangeTimeZone: string;
   points: QuoteHistoryPoint[];
@@ -245,6 +251,27 @@ export interface HoldingView {
   lotSize?: number;
   /** Shares (lots) held back for the team's waiting sells. */
   reservedQuantity?: number;
+  /** Map grouping. "Unclassified" when the feed gives no sector. */
+  sector: string;
+  /** Map grouping within a sector. "Other" when the feed gives none. */
+  industry: string;
+  /** Change since the previous close for the whole position, in CAD cents. */
+  dayChangeCents: number;
+  /** The listing's change since the previous close, in percent. */
+  dayChangePercent: number;
+}
+
+/**
+ * One team's holdings for the portfolio map. Hosts and platform admins can
+ * read any team's; everyone else only their own.
+ */
+export interface TeamHoldingsView {
+  teamId: string;
+  teamName: string;
+  asOf: string;
+  cashCents: number;
+  totalValueCents: number;
+  holdings: HoldingView[];
 }
 
 export interface PortfolioPoint {

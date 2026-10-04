@@ -9,6 +9,7 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -31,6 +32,7 @@ import type {
   QuoteHistory,
   QuoteRange,
   SessionUser,
+  TeamHoldingsView,
   TeamSummary,
   TeamStatus,
   TimeInForce,
@@ -46,6 +48,19 @@ import {
 } from "@/lib/lots";
 import { priceInputToCents, reservedCadCentsPerUnit } from "@/lib/order-math";
 import {
+  DEFAULT_QUOTE_INTERVAL,
+  EARLIEST_HISTORY_DATE,
+  QUOTE_INTERVALS,
+  QUOTE_INTERVAL_LABELS,
+  allowedIntervals,
+  customHistoryWindow,
+  isIntradayInterval,
+  presetHistoryWindow,
+  resolveInterval,
+  torontoToday,
+  type QuoteInterval,
+} from "@/lib/history-options";
+import {
   DISPLAY_TIME_ZONE,
   isoToZonedInputValue,
   zonedInputValueToIso,
@@ -58,6 +73,9 @@ import {
   ArrowIcon,
   CashIcon,
   ChevronDownIcon,
+  CalendarIcon,
+  CloseIcon,
+  ExpandIcon,
   FlaskIcon,
   InfoIcon,
   LockIcon,
@@ -67,9 +85,11 @@ import {
   PulseIcon,
   RefreshIcon,
   SearchIcon,
+  TreemapIcon,
   UserIcon,
   UsersIcon,
 } from "./simulator-icons";
+import { PortfolioMap } from "./portfolio-map";
 
 type DashboardPayload = Omit<Dashboard, "leaderboard"> & {
   leaderboard: LeaderboardRow[] | Leaderboard;
@@ -80,6 +100,18 @@ type DashboardPayload = Omit<Dashboard, "leaderboard"> & {
 };
 
 type RailSectionId = "presence" | "activity" | "leaderboard" | "host";
+
+/** What the portfolio map dialog shows: this portfolio, or a team a host opened. */
+type MapDialogView =
+  | { kind: "own" }
+  | {
+      kind: "team";
+      teamId: string;
+      teamName: string;
+      status: "loading" | "ready" | "error";
+      holdings: TeamHoldingsView | null;
+      error: string;
+    };
 type TeamEditorField = "name" | "cash";
 
 const INITIAL_RAIL_SECTIONS: Record<RailSectionId, boolean> = {
@@ -439,7 +471,7 @@ const MAKER_LINKS = [
   },
 ];
 /** Hover box width (176px) plus its 10px gap from the line and an edge margin. */
-const CHART_TOOLTIP_SPACE_PX = 192;
+const CHART_TOOLTIP_SPACE_PX = 172;
 const SUGGESTION_DELAY_MS = 120;
 
 /**
@@ -862,24 +894,232 @@ function formatChartVolume(volume: number): string {
   }).format(volume);
 }
 
+type ChartStyle = "line" | "candle" | "bar";
+
+const CHART_STYLES: { value: ChartStyle; label: string }[] = [
+  { value: "line", label: "Line" },
+  { value: "candle", label: "Candle" },
+  { value: "bar", label: "Bar" },
+];
+
+type ChartClockParts = {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+};
+
+type ChartTickKind = "time" | "day" | "month" | "year";
+
+const CHART_CLOCK_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
+
+function chartClockParts(iso: string, timeZone: string): ChartClockParts | null {
+  const value = new Date(iso);
+  if (Number.isNaN(value.getTime())) return null;
+  let formatter = CHART_CLOCK_FORMATTERS.get(timeZone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat("en-CA", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+      timeZone,
+    });
+    CHART_CLOCK_FORMATTERS.set(timeZone, formatter);
+  }
+  const parts = Object.fromEntries(
+    formatter.formatToParts(value).map((part) => [part.type, part.value]),
+  );
+  return {
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
+    hour: Number(parts.hour) % 24,
+    minute: Number(parts.minute),
+  };
+}
+
+function chartWeekKey(parts: ChartClockParts): string {
+  const dayStart = Date.UTC(parts.year, parts.month - 1, parts.day);
+  const daysSinceMonday = (new Date(dayStart).getUTCDay() + 6) % 7;
+  return String(dayStart - daysSinceMonday * 86_400_000);
+}
+
+// Finest first: the axis uses the finest step that fits, like a trading
+// terminal labelling every half hour on a wide 1D chart and every month on 3M.
+const CHART_TICK_STEPS: {
+  kind: ChartTickKind;
+  key: (parts: ChartClockParts) => string;
+}[] = [
+  ...[15, 30, 60, 120].map((minutes) => ({
+    kind: "time" as const,
+    key: (parts: ChartClockParts) =>
+      `${parts.year}-${parts.month}-${parts.day} ${Math.floor(
+        (parts.hour * 60 + parts.minute) / minutes,
+      )}`,
+  })),
+  {
+    kind: "day",
+    key: (parts) => `${parts.year}-${parts.month}-${parts.day}`,
+  },
+  { kind: "day", key: chartWeekKey },
+  { kind: "month", key: (parts) => `${parts.year}-${parts.month}` },
+  { kind: "year", key: (parts) => `${parts.year}` },
+];
+
+function formatChartTick(iso: string, kind: ChartTickKind, timeZone: string): string {
+  return new Intl.DateTimeFormat(
+    "en-CA",
+    kind === "time"
+      ? { hour: "numeric", minute: "2-digit", timeZone }
+      : kind === "day"
+        ? { month: "short", day: "numeric", timeZone }
+        : kind === "month"
+          ? { month: "short", timeZone }
+          : { year: "numeric", timeZone },
+  ).format(new Date(iso));
+}
+
+function formatChartCrosshairTime(
+  iso: string,
+  range: QuoteRange | undefined,
+  timeZone: string,
+): string {
+  const value = new Date(iso);
+  if (Number.isNaN(value.getTime())) return "—";
+  return new Intl.DateTimeFormat(
+    "en-CA",
+    range === "1D"
+      ? { hour: "numeric", minute: "2-digit", timeZone }
+      : range === "5D"
+        ? { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone }
+        : { month: "short", day: "numeric", year: "numeric", timeZone },
+  ).format(value);
+}
+
+/** Bare axis number, no currency symbol, so labels stay narrow. */
+function formatChartAxisValue(cents: number): string {
+  return new Intl.NumberFormat("en-CA", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(cents / 100);
+}
+
+function chartTimeTicks(
+  points: ChartPoint[],
+  xFractions: number[],
+  timeZone: string,
+  maxTicks: number,
+) {
+  const parts = points.map((point) => chartClockParts(point.at, timeZone));
+  if (parts.some((part) => part === null)) return [];
+  const clock = parts as ChartClockParts[];
+  // Labels too close to an edge would be clipped, so they are skipped.
+  const fits = (index: number) => xFractions[index] > 0.05 && xFractions[index] < 0.95;
+  let chosen: { kind: ChartTickKind; indices: number[] } | null = null;
+
+  for (const step of CHART_TICK_STEPS) {
+    const indices: number[] = [];
+    for (let index = 1; index < points.length; index += 1) {
+      if (step.key(clock[index]) !== step.key(clock[index - 1]) && fits(index)) {
+        indices.push(index);
+      }
+    }
+    if (indices.length === 0) continue;
+    if (indices.length <= maxTicks) {
+      // A lone coarse label ("Oct") says less than a thinned finer set.
+      if (indices.length === 1 && chosen) break;
+      chosen = { kind: step.kind, indices };
+      break;
+    }
+    chosen = { kind: step.kind, indices };
+  }
+  if (!chosen) return [];
+
+  const { kind, indices } = chosen;
+  const stride = Math.max(1, Math.ceil(indices.length / maxTicks));
+  return indices
+    .filter((_, position) => position % stride === 0)
+    .map((index) => ({
+      at: points[index].at,
+      x: xFractions[index],
+      label: formatChartTick(points[index].at, kind, timeZone),
+    }));
+}
+
+function niceChartStep(rough: number): number {
+  const magnitude = 10 ** Math.floor(Math.log10(Math.max(rough, 1)));
+  const normalized = rough / magnitude;
+  const multiplier =
+    normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 2.5 ? 2.5 : normalized <= 5 ? 5 : 10;
+  const step = multiplier * magnitude;
+  // Cents are whole numbers; 2.5 cents rounds up to the next clean step.
+  return Number.isInteger(step) ? step : 5 * magnitude;
+}
+
 function chartGeometry(
   points: ChartPoint[],
   width: number,
   height: number,
-  compressGaps = false,
+  {
+    compressGaps = false,
+    referenceCents = null,
+    tickCount = 4,
+    includeVolume = true,
+    ohlc = false,
+  }: {
+    compressGaps?: boolean;
+    referenceCents?: number | null;
+    tickCount?: number;
+    includeVolume?: boolean;
+    /** Candles and bars: fit each bar's high and low, not just its close. */
+    ohlc?: boolean;
+  } = {},
 ) {
   const values = points.map((point) => point.valueCents);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const spread = Math.max(max - min, 1);
-  const top = 14;
-  const bottom = height - 24;
-  const left = 8;
-  const right = width - 8;
+  // Bars without a recorded open open at the previous close; high and low
+  // then fall back to the wider of open and close.
+  const bars = points.map((point, index) => {
+    const openCents = point.openCents ?? points[index - 1]?.valueCents ?? point.valueCents;
+    return {
+      openCents,
+      closeCents: point.valueCents,
+      highCents: point.highCents ?? Math.max(openCents, point.valueCents),
+      lowCents: point.lowCents ?? Math.min(openCents, point.valueCents),
+    };
+  });
+  const dataMin = ohlc
+    ? Math.min(...bars.map((bar) => bar.lowCents))
+    : Math.min(...values);
+  const dataMax = ohlc
+    ? Math.max(...bars.map((bar) => bar.highCents))
+    : Math.max(...values);
+  const low = referenceCents === null ? dataMin : Math.min(dataMin, referenceCents);
+  const high = referenceCents === null ? dataMax : Math.max(dataMax, referenceCents);
+  const padding =
+    high > low ? (high - low) * 0.08 : Math.max(Math.abs(high) * 0.01, 1);
+  const min = low - padding;
+  const max = high + padding;
+  const spread = max - min;
+
+  const volumes = points.map((point) => point.volume ?? 0);
+  const maxVolume = Math.max(...volumes);
+  const showVolume = includeVolume && maxVolume > 0;
+
+  const top = 10;
+  const plotBottom = height - 2;
+  const volumeHeight = showVolume ? (plotBottom - top) * 0.16 : 0;
+  const bottom = plotBottom - volumeHeight - (showVolume ? 8 : 0);
+  const left = 2;
+  const right = width - 4;
   const times = points.map((point) => Date.parse(point.at));
   const validTimes = times.every((time) => Number.isFinite(time));
   const firstTime = times[0];
   const timeSpread = validTimes ? Math.max(times.at(-1)! - firstTime, 1) : 1;
+  const toY = (cents: number) => bottom - ((cents - min) / spread) * (bottom - top);
 
   const coordinates = points.map((point, index) => ({
     x:
@@ -888,17 +1128,159 @@ function chartGeometry(
         ? (times[index] - firstTime) / timeSpread
         : index / Math.max(points.length - 1, 1)) *
         (right - left),
-    y: bottom - ((point.valueCents - min) / spread) * (bottom - top),
+    y: toY(point.valueCents),
   }));
 
+  const step = niceChartStep(spread / tickCount);
+  const yTicks: { value: number; y: number }[] = [];
+  for (let value = Math.ceil(min / step) * step; value <= max; value += step) {
+    yTicks.push({ value, y: toY(value) });
+  }
+
+  const barWidth = Math.max(((right - left) / points.length) * 0.6, 0.6);
+  const priceBars = coordinates.map((coordinate, index) => {
+    const bar = bars[index];
+    return {
+      at: points[index].at,
+      x: coordinate.x,
+      width: barWidth,
+      up: bar.closeCents >= bar.openCents,
+      openY: toY(bar.openCents),
+      closeY: toY(bar.closeCents),
+      highY: toY(bar.highCents),
+      lowY: toY(bar.lowCents),
+    };
+  });
+  const volumeBars = showVolume
+    ? coordinates.map((coordinate, index) => {
+        const barHeight = (volumes[index] / maxVolume) * volumeHeight;
+        const point = points[index];
+        const openCents = point.openCents ?? points[index - 1]?.valueCents ?? point.valueCents;
+        return {
+          at: point.at,
+          up: point.valueCents >= openCents,
+          x: coordinate.x - barWidth / 2,
+          y: plotBottom - barHeight,
+          width: barWidth,
+          height: barHeight,
+        };
+      })
+    : [];
+
+  const path = coordinates
+    .map((point, index) => `${index === 0 ? "M" : "L"}${point.x.toFixed(1)} ${point.y.toFixed(1)}`)
+    .join(" ");
+
   return {
-    min,
-    max,
+    dataMin,
+    dataMax,
+    top,
+    plotBottom,
+    left,
+    right,
+    toY,
     coordinates,
-    path: coordinates
-      .map((point, index) => `${index === 0 ? "M" : "L"}${point.x.toFixed(1)} ${point.y.toFixed(1)}`)
-      .join(" "),
+    yTicks,
+    volumeBars,
+    priceBars,
+    path,
+    areaPath: `${path} L${coordinates.at(-1)!.x.toFixed(1)} ${plotBottom} L${coordinates[0].x.toFixed(1)} ${plotBottom} Z`,
   };
+}
+
+function ChartStyleIcon({ style }: { style: ChartStyle }) {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+      {style === "line" ? (
+        <path d="M1 12l4-5 3 3 6-7" fill="none" stroke="currentColor" strokeWidth="1.6" />
+      ) : style === "candle" ? (
+        <g stroke="currentColor" strokeWidth="1.4">
+          <path d="M4.5 2v12M11.5 1v13" fill="none" />
+          <rect x="2.5" y="5" width="4" height="5" fill="currentColor" />
+          <rect x="9.5" y="3.5" width="4" height="7" fill="none" />
+        </g>
+      ) : (
+        <g stroke="currentColor" strokeWidth="1.6" fill="none">
+          <path d="M5 2v12M2.5 5H5M5 10h2.5" />
+          <path d="M11 3v11M8.5 11H11M11 6h2.5" />
+        </g>
+      )}
+    </svg>
+  );
+}
+
+function ChartReadout({
+  point,
+  currency,
+  announce,
+  hasVolume,
+  volumeOpen,
+  onToggleVolume,
+}: {
+  point: ChartPoint;
+  currency: "CAD" | "USD";
+  /** Read keyboard and touch moves aloud; mouse sweeps stay quiet. */
+  announce: boolean;
+  hasVolume: boolean;
+  volumeOpen: boolean;
+  onToggleVolume: () => void;
+}) {
+  const fields: [string, string][] = [
+    ["O", point.openCents],
+    ["H", point.highCents],
+    ["L", point.lowCents],
+    ["C", point.valueCents],
+  ]
+    .filter((field): field is [string, number] => field[1] != null)
+    .map(([key, cents]) => [key, formatChartAxisValue(cents)]);
+  if (point.volume != null) {
+    fields.push([
+      "V",
+      new Intl.NumberFormat("en-CA", { notation: "compact", maximumFractionDigits: 1 }).format(
+        point.volume,
+      ),
+    ]);
+  }
+  return (
+    <div className="chart__legend">
+      <dl
+        className="chart__readout"
+        role="status"
+        aria-live={announce ? "polite" : "off"}
+        aria-atomic="true"
+      >
+        {fields.map(([key, value]) => (
+          <div key={key}>
+            <dt>{key}</dt>
+            <dd>{value}</dd>
+          </div>
+        ))}
+        <div className="chart__readout-currency">
+          <dt>{currency}</dt>
+        </div>
+      </dl>
+      {hasVolume ? (
+        <div className="chart__study">
+          <span>
+            Vol undr
+            {volumeOpen && point.volume != null ? (
+              <strong>{formatChartVolume(point.volume)}</strong>
+            ) : null}
+          </span>
+          <button
+            type="button"
+            className="chart__study-toggle"
+            aria-pressed={volumeOpen}
+            aria-label={volumeOpen ? "Hide volume underlay" : "Show volume underlay"}
+            data-open={volumeOpen}
+            onClick={onToggleVolume}
+          >
+            <ChevronDownIcon />
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function LineChart({
@@ -912,6 +1294,9 @@ function LineChart({
   emptyMessage = "History is unavailable.",
   interactive = false,
   compressGaps = false,
+  referenceCents = null,
+  expanded = false,
+  chartStyle = "line",
 }: {
   points: ChartPoint[];
   label: string;
@@ -923,14 +1308,23 @@ function LineChart({
   emptyMessage?: string;
   interactive?: boolean;
   compressGaps?: boolean;
+  /** Dashed baseline, such as the previous close on a 1D chart. */
+  referenceCents?: number | null;
+  /** Full-screen detail view: denser axes, gridlines, and an OHLCV readout. */
+  expanded?: boolean;
+  chartStyle?: ChartStyle;
 }) {
-  const width = compact ? 440 : 640;
-  const height = compact ? 156 : 250;
+  const width = expanded ? 1200 : compact ? 440 : 640;
+  const height = expanded ? 560 : compact ? 156 : 250;
   const svgRef = useRef<SVGSVGElement>(null);
+  const gradientId = `chart-fill-${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
   const [activeAt, setActiveAt] = useState<string | null>(null);
   // Rendered chart width in CSS pixels, captured on interaction, so the
   // hover box can pick a side that has room for it.
   const [renderedWidth, setRenderedWidth] = useState(0);
+  // The hover box may spill over the price axis, so that strip counts as room.
+  const [axisWidth, setAxisWidth] = useState(0);
+  const [volumeOpen, setVolumeOpen] = useState(true);
   const [interactionMethod, setInteractionMethod] = useState<
     "keyboard" | "mouse" | "touch" | null
   >(null);
@@ -938,7 +1332,7 @@ function LineChart({
   if (loading || points.length < 2) {
     return (
       <div
-        className={`chart chart--empty ${compact ? "chart--compact" : ""}`}
+        className={`chart chart--empty ${compact ? "chart--compact" : ""} ${expanded ? "chart--expanded" : ""}`}
         aria-busy={loading}
         role="status"
       >
@@ -947,11 +1341,23 @@ function LineChart({
     );
   }
 
-  const geometry = chartGeometry(points, width, height, compressGaps);
-  const positive = points.at(-1)!.valueCents >= points[0].valueCents;
+  const geometry = chartGeometry(points, width, height, {
+    compressGaps,
+    referenceCents,
+    tickCount: expanded ? 8 : compact ? 3 : 4,
+    includeVolume: !expanded || volumeOpen,
+    ohlc: chartStyle !== "line",
+  });
+  const lastPoint = points.at(-1)!;
+  const lastCoordinate = geometry.coordinates.at(-1)!;
+  const positive = lastPoint.valueCents >= (referenceCents ?? points[0].valueCents);
   const formatValue = (value: number) => formatNativeMoney(value, currency);
-  const firstLabel = formatChartTime(points[0].at, range, timeZone);
-  const lastLabel = formatChartTime(points.at(-1)!.at, range, timeZone);
+  const timeTicks = chartTimeTicks(
+    points,
+    geometry.coordinates.map((coordinate) => coordinate.x / width),
+    timeZone,
+    expanded ? 12 : compact ? 3 : 6,
+  );
   const requestedActivePointIndex = activeAt === null
     ? -1
     : points.findIndex((point) => point.at === activeAt);
@@ -965,11 +1371,39 @@ function LineChart({
     ? null
     : geometry.coordinates[activePointIndex];
 
+  const toTopPercent = (y: number) => `${(y / height) * 100}%`;
+  const toLeftPercent = (x: number) => `${(x / width) * 100}%`;
+
+  // Price badges on the right axis; plain tick labels make way for them.
+  const badges = [
+    referenceCents === null
+      ? null
+      : { key: "reference", tone: "reference", value: referenceCents },
+    { key: "last", tone: positive ? "up" : "down", value: lastPoint.valueCents },
+    activePoint ? { key: "active", tone: "active", value: activePoint.valueCents } : null,
+  ].filter((badge) => badge !== null);
+  const badgeYs = badges.map((badge) => geometry.toY(badge.value));
+  const tickClearance = height * 0.07;
+  // An invisible copy of the widest label sizes the axis column to fit.
+  const widestAxisLabel = [
+    ...geometry.yTicks.map((tick) => tick.value),
+    ...badges.map((badge) => badge.value),
+  ]
+    .map(formatChartAxisValue)
+    .reduce((widest, text) => (text.length > widest.length ? text : widest), "");
+  const visibleYTicks = geometry.yTicks.filter((tick) =>
+    badgeYs.every((y) => Math.abs(y - tick.y) > tickClearance),
+  );
+
   const selectPoint = (index: number, method: "keyboard" | "mouse" | "touch") => {
     const boundedIndex = Math.max(0, Math.min(points.length - 1, index));
     setActiveAt(points[boundedIndex].at);
     setInteractionMethod(method);
-    setRenderedWidth(svgRef.current?.getBoundingClientRect().width ?? 0);
+    const svgWidth = svgRef.current?.getBoundingClientRect().width ?? 0;
+    const bodyWidth =
+      svgRef.current?.closest(".chart__body")?.getBoundingClientRect().width ?? svgWidth;
+    setRenderedWidth(svgWidth);
+    setAxisWidth(Math.max(bodyWidth - svgWidth, 0));
   };
 
   // The box sits beside the hovered line, never on it: to the right on the
@@ -980,7 +1414,7 @@ function LineChart({
     if (!activeCoordinate) return "after";
     const chartWidth = renderedWidth > 0 ? renderedWidth : width;
     const lineX = (activeCoordinate.x / width) * chartWidth;
-    const fitsAfter = chartWidth - lineX >= CHART_TOOLTIP_SPACE_PX;
+    const fitsAfter = chartWidth + axisWidth - lineX >= CHART_TOOLTIP_SPACE_PX;
     const fitsBefore = lineX >= CHART_TOOLTIP_SPACE_PX;
     const preferAfter = lineX < chartWidth / 2;
     if (preferAfter ? fitsAfter : fitsBefore) return preferAfter ? "after" : "before";
@@ -1019,7 +1453,9 @@ function LineChart({
     } else if (event.key === "End") {
       event.preventDefault();
       selectPoint(points.length - 1, "keyboard");
-    } else if (event.key === "Escape") {
+    } else if (event.key === "Escape" && activeAt !== null) {
+      // Only swallow Escape when it clears a selection, so a second press
+      // still reaches an enclosing dialog.
       event.preventDefault();
       setActiveAt(null);
       setInteractionMethod(null);
@@ -1028,7 +1464,7 @@ function LineChart({
 
   return (
     <div
-      className={`chart ${compact ? "chart--compact" : ""} ${interactive ? "chart--interactive" : ""}`}
+      className={`chart chart--style-${chartStyle} ${compact ? "chart--compact" : ""} ${expanded ? "chart--expanded" : ""} ${interactive ? "chart--interactive" : ""}`}
       data-chart-mode={interactive ? "market" : undefined}
       data-gap-scale={compressGaps ? "compressed" : "elapsed-time"}
       role={interactive ? "group" : undefined}
@@ -1052,151 +1488,308 @@ function LineChart({
       } : undefined}
       onKeyDown={interactive ? handleChartKeyDown : undefined}
     >
-      <svg
-        ref={svgRef}
-        viewBox={`0 0 ${width} ${height}`}
-        preserveAspectRatio="none"
-        aria-hidden={interactive ? "true" : undefined}
-        focusable="false"
-        role={interactive ? undefined : "img"}
-        aria-label={
-          interactive
-            ? undefined
-            : `${label}. Low ${formatValue(geometry.min)}, high ${formatValue(
-                geometry.max,
-              )}.`
-        }
-        onPointerMove={interactive ? selectNearestPointerPoint : undefined}
-        onPointerDown={interactive ? selectNearestPointerPoint : undefined}
-        onPointerLeave={
-          interactive
-            ? (event) => {
-                if (event.pointerType === "mouse") {
-                  setActiveAt(null);
-                  setInteractionMethod(null);
-                }
-              }
-            : undefined
-        }
-      >
-        {[0.15, 0.4, 0.65, 0.9].map((position) => (
-          <line
-            key={position}
-            x1="8"
-            x2={width - 8}
-            y1={position * height}
-            y2={position * height}
-            className="chart__grid"
-          />
-        ))}
-        <path
-          d={geometry.path}
-          className={`chart__line ${positive ? "chart__line--positive" : "chart__line--negative"}`}
-          vectorEffect="non-scaling-stroke"
-        />
-        <circle
-          cx={geometry.coordinates.at(-1)?.x}
-          cy={geometry.coordinates.at(-1)?.y}
-          r="4"
-          className="chart__last-point"
-          vectorEffect="non-scaling-stroke"
-        />
-        {activeCoordinate ? (
-          <>
+      <div className="chart__body">
+        <div className="chart__plot">
+          <svg
+            ref={svgRef}
+            viewBox={`0 0 ${width} ${height}`}
+            preserveAspectRatio="none"
+            aria-hidden={interactive ? "true" : undefined}
+            focusable="false"
+            role={interactive ? undefined : "img"}
+            aria-label={
+              interactive
+                ? undefined
+                : `${label}. Low ${formatValue(geometry.dataMin)}, high ${formatValue(
+                    geometry.dataMax,
+                  )}.`
+            }
+            onPointerMove={interactive ? selectNearestPointerPoint : undefined}
+            onPointerDown={interactive ? selectNearestPointerPoint : undefined}
+            onPointerLeave={
+              interactive
+                ? (event) => {
+                    if (event.pointerType === "mouse") {
+                      setActiveAt(null);
+                      setInteractionMethod(null);
+                    }
+                  }
+                : undefined
+            }
+          >
+            <defs>
+              <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" className="chart__fill-stop chart__fill-stop--top" />
+                <stop offset="100%" className="chart__fill-stop chart__fill-stop--bottom" />
+              </linearGradient>
+            </defs>
+            {geometry.yTicks.map((tick) => (
+              <line
+                key={tick.value}
+                x1={geometry.left}
+                x2={width}
+                y1={tick.y}
+                y2={tick.y}
+                className="chart__grid"
+                vectorEffect="non-scaling-stroke"
+              />
+            ))}
+            {expanded
+              ? timeTicks.map((tick) => (
+                  <line
+                    key={tick.at}
+                    x1={tick.x * width}
+                    x2={tick.x * width}
+                    y1={0}
+                    y2={geometry.plotBottom}
+                    className="chart__grid"
+                    vectorEffect="non-scaling-stroke"
+                  />
+                ))
+              : null}
+            {chartStyle === "line" ? (
+              <path d={geometry.areaPath} className="chart__area" fill={`url(#${gradientId})`} />
+            ) : null}
+            {geometry.volumeBars.map((bar) => (
+              <rect
+                key={bar.at}
+                x={bar.x}
+                y={bar.y}
+                width={bar.width}
+                height={bar.height}
+                className={`chart__volume${
+                  expanded ? ` chart__volume--${bar.up ? "up" : "down"}` : ""
+                }`}
+              />
+            ))}
+            {referenceCents !== null ? (
+              <line
+                x1={geometry.left}
+                x2={width}
+                y1={geometry.toY(referenceCents)}
+                y2={geometry.toY(referenceCents)}
+                className="chart__reference"
+                vectorEffect="non-scaling-stroke"
+              />
+            ) : null}
             <line
-              x1={activeCoordinate.x}
-              x2={activeCoordinate.x}
-              y1="14"
-              y2={height - 24}
-              className="chart__crosshair"
+              x1={geometry.left}
+              x2={width}
+              y1={lastCoordinate.y}
+              y2={lastCoordinate.y}
+              className={`chart__price-line chart__price-line--${positive ? "up" : "down"}`}
               vectorEffect="non-scaling-stroke"
             />
+            {chartStyle === "line" ? (
+              <path
+                d={geometry.path}
+                className="chart__line"
+                vectorEffect="non-scaling-stroke"
+              />
+            ) : (
+              <g className={`chart__price-bars chart__price-bars--${chartStyle}`}>
+                {geometry.priceBars.map((bar) => {
+                  const tone = bar.up ? "up" : "down";
+                  if (chartStyle === "candle") {
+                    const top = Math.min(bar.openY, bar.closeY);
+                    return (
+                      <g key={bar.at} className={`chart__candle chart__candle--${tone}`}>
+                        <line
+                          x1={bar.x}
+                          x2={bar.x}
+                          y1={bar.highY}
+                          y2={bar.lowY}
+                          vectorEffect="non-scaling-stroke"
+                        />
+                        <rect
+                          x={bar.x - bar.width / 2}
+                          y={top}
+                          width={bar.width}
+                          // A flat bar still shows as a thin line.
+                          height={Math.max(Math.abs(bar.closeY - bar.openY), 0.6)}
+                        />
+                      </g>
+                    );
+                  }
+                  return (
+                    <g key={bar.at} className={`chart__ohlc chart__ohlc--${tone}`}>
+                      <line
+                        x1={bar.x}
+                        x2={bar.x}
+                        y1={bar.highY}
+                        y2={bar.lowY}
+                        vectorEffect="non-scaling-stroke"
+                      />
+                      <line
+                        x1={bar.x - bar.width / 2}
+                        x2={bar.x}
+                        y1={bar.openY}
+                        y2={bar.openY}
+                        vectorEffect="non-scaling-stroke"
+                      />
+                      <line
+                        x1={bar.x}
+                        x2={bar.x + bar.width / 2}
+                        y1={bar.closeY}
+                        y2={bar.closeY}
+                        vectorEffect="non-scaling-stroke"
+                      />
+                    </g>
+                  );
+                })}
+              </g>
+            )}
             <circle
-              cx={activeCoordinate.x}
-              cy={activeCoordinate.y}
-              r="5"
-              className="chart__active-point"
+              cx={lastCoordinate.x}
+              cy={lastCoordinate.y}
+              r="3.5"
+              className="chart__last-point"
               vectorEffect="non-scaling-stroke"
             />
-          </>
-        ) : null}
-        {geometry.coordinates.map((coordinate, index) => (
-          <circle
-            key={points[index].at}
-            cx={coordinate.x}
-            cy={coordinate.y}
-            r="6"
-            className="chart__hit-point"
-            data-chart-point
-            data-at={points[index].at}
-          />
-        ))}
-        {interactive ? (
-          <rect
-            x="8"
-            y="14"
-            width={width - 16}
-            height={height - 38}
-            className="chart__interaction-surface"
-          />
-        ) : null}
-      </svg>
-      {activePoint && activeCoordinate ? (
-        <div
-          className={`chart__tooltip chart__tooltip--${tooltipPlacement}`}
-          style={
-            tooltipPlacement.startsWith("pin")
-              ? undefined
-              : { left: `${(activeCoordinate.x / width) * 100}%` }
-          }
-          data-placement={tooltipPlacement}
-          data-chart-tooltip
-          role="status"
-          aria-live={interactionMethod === "mouse" ? "off" : "polite"}
-          aria-atomic="true"
-        >
-          <time dateTime={activePoint.at}>
-            {formatChartTooltipTime(activePoint.at, timeZone)}
-          </time>
-          <dl>
-            <div>
-              <dt>Close</dt>
-              <dd>{formatValue(activePoint.valueCents)}</dd>
+            {activeCoordinate ? (
+              <>
+                <line
+                  x1={activeCoordinate.x}
+                  x2={activeCoordinate.x}
+                  y1={geometry.top}
+                  y2={geometry.plotBottom}
+                  className="chart__crosshair"
+                  vectorEffect="non-scaling-stroke"
+                />
+                <line
+                  x1={geometry.left}
+                  x2={width}
+                  y1={activeCoordinate.y}
+                  y2={activeCoordinate.y}
+                  className="chart__crosshair chart__crosshair--level"
+                  vectorEffect="non-scaling-stroke"
+                />
+                <circle
+                  cx={activeCoordinate.x}
+                  cy={activeCoordinate.y}
+                  r="5"
+                  className="chart__active-point"
+                  vectorEffect="non-scaling-stroke"
+                />
+              </>
+            ) : null}
+            {geometry.coordinates.map((coordinate, index) => (
+              <circle
+                key={points[index].at}
+                cx={coordinate.x}
+                cy={coordinate.y}
+                r="6"
+                className="chart__hit-point"
+                data-chart-point
+                data-at={points[index].at}
+              />
+            ))}
+            {interactive ? (
+              <rect
+                x={geometry.left}
+                y={geometry.top}
+                width={geometry.right - geometry.left}
+                height={geometry.plotBottom - geometry.top}
+                className="chart__interaction-surface"
+              />
+            ) : null}
+          </svg>
+          {expanded ? (
+            <ChartReadout
+              point={activePoint ?? lastPoint}
+              currency={currency}
+              announce={activePoint !== null && interactionMethod !== "mouse"}
+              hasVolume={points.some((point) => (point.volume ?? 0) > 0)}
+              volumeOpen={volumeOpen}
+              onToggleVolume={() => setVolumeOpen((open) => !open)}
+            />
+          ) : null}
+          {activePoint && activeCoordinate && !expanded ? (
+            <div
+              className={`chart__tooltip chart__tooltip--${tooltipPlacement}`}
+              style={
+                tooltipPlacement.startsWith("pin")
+                  ? undefined
+                  : { left: toLeftPercent(activeCoordinate.x) }
+              }
+              data-placement={tooltipPlacement}
+              data-chart-tooltip
+              role="status"
+              aria-live={interactionMethod === "mouse" ? "off" : "polite"}
+              aria-atomic="true"
+            >
+              <time dateTime={activePoint.at}>
+                {formatChartTooltipTime(activePoint.at, timeZone)}
+              </time>
+              <dl>
+                <div>
+                  <dt>Close</dt>
+                  <dd>{formatValue(activePoint.valueCents)}</dd>
+                </div>
+                {activePoint.openCents != null ? (
+                  <div>
+                    <dt>Open</dt>
+                    <dd>{formatValue(activePoint.openCents)}</dd>
+                  </div>
+                ) : null}
+                {activePoint.highCents != null ? (
+                  <div>
+                    <dt>High</dt>
+                    <dd>{formatValue(activePoint.highCents)}</dd>
+                  </div>
+                ) : null}
+                {activePoint.lowCents != null ? (
+                  <div>
+                    <dt>Low</dt>
+                    <dd>{formatValue(activePoint.lowCents)}</dd>
+                  </div>
+                ) : null}
+                {activePoint.volume != null ? (
+                  <div>
+                    <dt>Volume</dt>
+                    <dd>{formatChartVolume(activePoint.volume)}</dd>
+                  </div>
+                ) : null}
+              </dl>
             </div>
-            {activePoint.openCents != null ? (
-              <div>
-                <dt>Open</dt>
-                <dd>{formatValue(activePoint.openCents)}</dd>
-              </div>
-            ) : null}
-            {activePoint.highCents != null ? (
-              <div>
-                <dt>High</dt>
-                <dd>{formatValue(activePoint.highCents)}</dd>
-              </div>
-            ) : null}
-            {activePoint.lowCents != null ? (
-              <div>
-                <dt>Low</dt>
-                <dd>{formatValue(activePoint.lowCents)}</dd>
-              </div>
-            ) : null}
-            {activePoint.volume != null ? (
-              <div>
-                <dt>Volume</dt>
-                <dd>{formatChartVolume(activePoint.volume)}</dd>
-              </div>
-            ) : null}
-          </dl>
+          ) : null}
         </div>
-      ) : null}
-      <div className="chart__value-axis" aria-hidden="true">
-        <span>{formatValue(geometry.max)}</span>
-        <span>{formatValue(geometry.min)}</span>
-      </div>
-      <div className="chart__axis" aria-hidden="true">
-        <span>{firstLabel}</span>
-        <span>{lastLabel}</span>
+        <div className="chart__y-axis" aria-hidden="true">
+          <span className="chart__y-sizer">{widestAxisLabel}</span>
+          {visibleYTicks.map((tick) => (
+            <span key={tick.value} className="chart__y-tick" style={{ top: toTopPercent(tick.y) }}>
+              {formatChartAxisValue(tick.value)}
+            </span>
+          ))}
+          {badges.map((badge) => (
+            <span
+              key={badge.key}
+              className={`chart__badge chart__badge--${badge.tone}`}
+              style={{ top: toTopPercent(geometry.toY(badge.value)) }}
+            >
+              {formatChartAxisValue(badge.value)}
+            </span>
+          ))}
+        </div>
+        <div className="chart__x-axis" aria-hidden="true">
+          {timeTicks.map((tick) => (
+            <span
+              key={tick.at}
+              className="chart__x-tick"
+              style={{ left: `${tick.x * 100}%` }}
+            >
+              {tick.label}
+            </span>
+          ))}
+          {activePoint && activeCoordinate ? (
+            <span
+              className="chart__x-badge"
+              style={{ left: toLeftPercent(activeCoordinate.x) }}
+            >
+              {formatChartCrosshairTime(activePoint.at, range, timeZone)}
+            </span>
+          ) : null}
+        </div>
       </div>
     </div>
   );
@@ -1412,6 +2005,25 @@ export function SimulatorApp({
   });
   const [portfolioRange, setPortfolioRange] = useState("7D");
   const [quoteRange, setQuoteRange] = useState<QuoteRange>("1D");
+  // Null means the range's own default bar size.
+  const [quoteInterval, setQuoteInterval] = useState<QuoteInterval | null>(null);
+  // A custom from/to window replaces the preset range while it is set.
+  const [customWindow, setCustomWindow] = useState<{ from: string; to: string } | null>(
+    null,
+  );
+  const [datePicker, setDatePicker] = useState<{
+    from: string;
+    to: string;
+    error: string;
+  } | null>(null);
+  const [chartStyle, setChartStyle] = useState<ChartStyle>("line");
+  const chartDialogRef = useRef<HTMLDialogElement>(null);
+  const maxConfirmRef = useRef<HTMLDialogElement>(null);
+  // The portfolio map renders only while its dialog is open (view not null).
+  const mapDialogRef = useRef<HTMLDialogElement>(null);
+  const [mapView, setMapView] = useState<MapDialogView | null>(null);
+  const mapRequest = useRef<AbortController | null>(null);
+  const [chartExpanded, setChartExpanded] = useState(false);
   const [quoteHistory, setQuoteHistory] = useState<QuoteHistory | null>(null);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [historyError, setHistoryError] = useState("");
@@ -1632,8 +2244,16 @@ export function SimulatorApp({
       setHistoryError("");
       setQuoteHistory(null);
       try {
+        const params = new URLSearchParams({ symbol: selectedSymbol });
+        if (customWindow) {
+          params.set("from", customWindow.from);
+          params.set("to", customWindow.to);
+        } else {
+          params.set("range", quoteRange);
+        }
+        if (quoteInterval) params.set("interval", quoteInterval);
         const response = await fetch(
-          `/api/quotes/history?symbol=${encodeURIComponent(selectedSymbol)}&range=${quoteRange}`,
+          `/api/quotes/history?${params.toString()}`,
           {
             cache: "no-store",
             credentials: "same-origin",
@@ -1666,7 +2286,15 @@ export function SimulatorApp({
 
     void loadQuoteHistory();
     return () => controller.abort();
-  }, [connection, historyRefreshKey, quoteRange, selectedSymbol, sessionReady]);
+  }, [
+    connection,
+    customWindow,
+    historyRefreshKey,
+    quoteInterval,
+    quoteRange,
+    selectedSymbol,
+    sessionReady,
+  ]);
 
   const fetchAdminOverview = useCallback(async () => {
     try {
@@ -1717,7 +2345,62 @@ export function SimulatorApp({
       })) ?? [],
     [quoteHistory],
   );
-  // 1W and 1M show only that window, starting from the last value before it
+  const historyWindow = useMemo(() => {
+    if (customWindow) {
+      const custom = customHistoryWindow(customWindow.from, customWindow.to);
+      if (custom.ok) return custom.window;
+    }
+    return presetHistoryWindow(quoteRange);
+  }, [customWindow, quoteRange]);
+  const availableIntervals = useMemo(() => allowedIntervals(historyWindow), [historyWindow]);
+  const activeInterval =
+    resolveInterval(
+      historyWindow,
+      quoteInterval ?? (customWindow ? null : DEFAULT_QUOTE_INTERVAL[quoteRange]),
+    ) ?? DEFAULT_QUOTE_INTERVAL[quoteRange];
+  // Time formats follow the bar size: clock times for one day of intraday
+  // bars, date and time across days, dates for daily and weekly bars.
+  const chartFormatRange: QuoteRange = isIntradayInterval(activeInterval)
+    ? historyWindow.spanDays <= 1
+      ? "1D"
+      : "5D"
+    : "3M";
+  const selectQuoteRange = (range: QuoteRange) => {
+    setCustomWindow(null);
+    setDatePicker(null);
+    setQuoteRange(range);
+    // Keep a chosen bar size when the new range can still serve it.
+    if (quoteInterval && !allowedIntervals(presetHistoryWindow(range)).includes(quoteInterval)) {
+      setQuoteInterval(null);
+    }
+  };
+  const applyDatePicker = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!datePicker) return;
+    const custom = customHistoryWindow(datePicker.from, datePicker.to);
+    if (!custom.ok) {
+      setDatePicker({ ...datePicker, error: custom.message });
+      return;
+    }
+    if (quoteInterval && !allowedIntervals(custom.window).includes(quoteInterval)) {
+      setQuoteInterval(null);
+    }
+    setCustomWindow({ from: datePicker.from, to: datePicker.to });
+    setDatePicker(null);
+  };
+  const openDatePicker = () => {
+    const today = torontoToday();
+    const firstPoint = quotePoints[0]?.at;
+    setDatePicker({
+      from:
+        customWindow?.from ??
+        (firstPoint ? torontoToday(new Date(firstPoint)) : today),
+      to: customWindow?.to ?? today,
+      error: "",
+    });
+  };
+
+  // 7D and 1M show only that window, starting from the last value before it
   // so the line spans the whole range. ALL shows everything.
   const portfolioRangePoints = useMemo(() => {
     const history = dashboard.portfolioHistory;
@@ -2325,6 +3008,79 @@ export function SimulatorApp({
       kind: "idle",
       message: `${quote.symbol} loaded from ${marketSourceLabel(quote.source)}.`,
     });
+  };
+
+  // A holding's symbol (in the table or on the map) loads it into the quote
+  // workbench, from the known prices when possible.
+  const openHoldingInWorkbench = (symbol: string) => {
+    const quote = dashboard.availableSymbols.find(
+      (candidate) => candidate.symbol === symbol,
+    );
+    if (quote) selectQuote(quote);
+    else void loadSearchResult({ symbol });
+  };
+
+  const openOwnPortfolioMap = () => {
+    mapRequest.current?.abort();
+    setMapView({ kind: "own" });
+    // Retry reopens from inside the dialog, which is already showing.
+    if (!mapDialogRef.current?.open) mapDialogRef.current?.showModal();
+  };
+
+  // Hosts and platform admins can open any team's map from the leaderboard.
+  const openTeamPortfolioMap = async (teamId: string, teamName: string) => {
+    mapRequest.current?.abort();
+    const controller = new AbortController();
+    mapRequest.current = controller;
+    setMapView({
+      kind: "team",
+      teamId,
+      teamName,
+      status: "loading",
+      holdings: null,
+      error: "",
+    });
+    // Retry reopens from inside the dialog, which is already showing.
+    if (!mapDialogRef.current?.open) mapDialogRef.current?.showModal();
+    try {
+      const response = await fetch(
+        `/api/teams/${encodeURIComponent(teamId)}/holdings`,
+        { cache: "no-store", credentials: "same-origin", signal: controller.signal },
+      );
+      const payload = await readJson(response);
+      if (controller.signal.aborted) return;
+      if (!response.ok) {
+        throw new Error(extractError(payload, "That team's holdings could not be loaded."));
+      }
+      setMapView({
+        kind: "team",
+        teamId,
+        teamName,
+        status: "ready",
+        holdings: payload as TeamHoldingsView,
+        error: "",
+      });
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      setMapView({
+        kind: "team",
+        teamId,
+        teamName,
+        status: "error",
+        holdings: null,
+        error:
+          error instanceof Error && error.message
+            ? error.message
+            : "That team's holdings could not be loaded.",
+      });
+    } finally {
+      if (mapRequest.current === controller) mapRequest.current = null;
+    }
+  };
+
+  const selectMapSymbol = (symbol: string) => {
+    openHoldingInWorkbench(symbol);
+    mapDialogRef.current?.close();
   };
 
   // Editing the ticket retires the last result message, so a disabled
@@ -3257,6 +4013,17 @@ export function SimulatorApp({
               <div className="subheading-row">
                 <h3 id="holdings-heading">Holdings</h3>
                 <span>Ranked by market value</span>
+                {dashboard.portfolio !== null ? (
+                  <button
+                    type="button"
+                    className="chart-expand portfolio-map-open"
+                    aria-haspopup="dialog"
+                    onClick={openOwnPortfolioMap}
+                  >
+                    <TreemapIcon />
+                    Map
+                  </button>
+                ) : null}
               </div>
               {dashboard.holdings.length > 0 ? (
                 <div className="table-scroll">
@@ -3282,13 +4049,7 @@ export function SimulatorApp({
                               <button
                                 type="button"
                                 className="symbol-button"
-                                onClick={() => {
-                                  const quote = dashboard.availableSymbols.find(
-                                    (candidate) => candidate.symbol === holding.symbol,
-                                  );
-                                  if (quote) selectQuote(quote);
-                                  else void loadSearchResult(holding);
-                                }}
+                                onClick={() => openHoldingInWorkbench(holding.symbol)}
                               >
                                 <strong>
                                   {holding.symbol}
@@ -3684,28 +4445,41 @@ export function SimulatorApp({
                     <button
                       key={range}
                       type="button"
-                      aria-pressed={quoteRange === range}
-                      onClick={() => setQuoteRange(range)}
+                      aria-pressed={!customWindow && quoteRange === range}
+                      onClick={() => selectQuoteRange(range)}
                     >
                       {range}
                     </button>
                   ))}
                 </div>
-                <span className="chart-kind">
-                  Raw close{selectedIsCrypto ? " per lot" : ""} · trading gaps compressed ·{" "}
-                  {selectedQuote.listingCurrency}
-                </span>
+                <button
+                  className="chart-expand"
+                  type="button"
+                  aria-haspopup="dialog"
+                  onClick={() => {
+                    chartDialogRef.current?.showModal();
+                    setChartExpanded(true);
+                  }}
+                >
+                  <ExpandIcon />
+                  Advanced view
+                </button>
               </div>
               <LineChart
                 points={quotePoints}
-                label={`${quoteRange} ${selectedQuote.symbol} price`}
+                label={`${customWindow ? "Custom" : quoteRange} ${selectedQuote.symbol} price`}
                 currency={selectedQuote.listingCurrency}
-                range={quoteRange}
+                range={chartFormatRange}
                 timeZone={quoteHistory?.exchangeTimeZone}
                 loading={historyLoading}
                 emptyMessage={historyError || "Not enough market bars are available yet."}
                 interactive
                 compressGaps
+                referenceCents={
+                  !customWindow && quoteRange === "1D" && quoteLoaded
+                    ? selectedQuote.previousCloseCents
+                    : null
+                }
               />
               <div className="market-data-note" role="status">
                 {quoteHistory ? (
@@ -3731,6 +4505,293 @@ export function SimulatorApp({
                 ) : null}
               </div>
             </section>
+
+            <dialog
+              ref={chartDialogRef}
+              className="chart-dialog"
+              aria-labelledby="chart-dialog-title"
+              onClose={() => setChartExpanded(false)}
+              onClick={(event) => {
+                // A click on the backdrop lands on the dialog element itself.
+                if (event.target === event.currentTarget) event.currentTarget.close();
+              }}
+            >
+              {chartExpanded ? (
+                <div className="chart-dialog__frame">
+                  <header className="chart-dialog__header">
+                    <div className="chart-dialog__identity">
+                      <h2 id="chart-dialog-title">
+                        {selectedQuote.name} ({selectedQuote.symbol})
+                      </h2>
+                      <span>
+                        {selectedQuote.exchange} · {selectedQuote.listingCurrency}
+                        {selectedIsCrypto ? " per lot" : ""}
+                      </span>
+                    </div>
+                    {quoteLoaded ? (
+                      <div className="chart-dialog__price">
+                        <strong>
+                          {formatNativeMoney(
+                            selectedQuote.priceCents,
+                            selectedQuote.listingCurrency,
+                          )}
+                        </strong>
+                        <ChangeValue percent={selectedQuote.changePercent} />
+                        <small>
+                          As of{" "}
+                          {formatChartTooltipTime(
+                            selectedQuote.asOf,
+                            quoteHistory?.exchangeTimeZone ?? "America/Toronto",
+                          )}
+                        </small>
+                      </div>
+                    ) : null}
+                    <div
+                      className="chart-style"
+                      role="group"
+                      aria-label="Chart style"
+                    >
+                      {CHART_STYLES.map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          aria-pressed={chartStyle === option.value}
+                          onClick={() => setChartStyle(option.value)}
+                        >
+                          <ChartStyleIcon style={option.value} />
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                    <button
+                      className="chart-dialog__close"
+                      type="button"
+                      aria-label="Close expanded chart"
+                      onClick={() => chartDialogRef.current?.close()}
+                    >
+                      <CloseIcon />
+                    </button>
+                  </header>
+                  <div className="chart-dialog__body">
+                    <LineChart
+                      points={quotePoints}
+                      label={`${customWindow ? "Custom" : quoteRange} ${selectedQuote.symbol} price, expanded`}
+                      currency={selectedQuote.listingCurrency}
+                      range={chartFormatRange}
+                      timeZone={quoteHistory?.exchangeTimeZone}
+                      loading={historyLoading}
+                      emptyMessage={historyError || "Not enough market bars are available yet."}
+                      interactive
+                      compressGaps
+                      expanded
+                      chartStyle={chartStyle}
+                      referenceCents={
+                        !customWindow && quoteRange === "1D" && quoteLoaded
+                          ? selectedQuote.previousCloseCents
+                          : null
+                      }
+                    />
+                  </div>
+                  <footer className="chart-dialog__footer">
+                    <div className="chart-dialog__controls">
+                    <div className="range-tabs" aria-label="Expanded chart range">
+                      {(["1D", "5D", "1M", "3M"] as QuoteRange[]).map((range) => (
+                        <button
+                          key={range}
+                          type="button"
+                          aria-pressed={!customWindow && quoteRange === range}
+                          onClick={() => selectQuoteRange(range)}
+                        >
+                          {range}
+                        </button>
+                      ))}
+                    </div>
+                    <span className="chart-dialog__divider" aria-hidden="true" />
+                    {datePicker ? (
+                      <form
+                        className="chart-dates"
+                        aria-label="Custom chart dates"
+                        onSubmit={applyDatePicker}
+                        noValidate
+                      >
+                        <label>
+                          <span className="sr-only">From</span>
+                          <input
+                            type="date"
+                            value={datePicker.from}
+                            min={EARLIEST_HISTORY_DATE}
+                            max={datePicker.to || torontoToday()}
+                            onChange={(event) =>
+                              setDatePicker({
+                                ...datePicker,
+                                from: event.target.value,
+                                error: "",
+                              })
+                            }
+                            aria-invalid={datePicker.error ? true : undefined}
+                            aria-describedby={
+                              datePicker.error ? "chart-dates-error" : undefined
+                            }
+                          />
+                        </label>
+                        <label>
+                          <span className="sr-only">To</span>
+                          <input
+                            type="date"
+                            value={datePicker.to}
+                            min={datePicker.from || EARLIEST_HISTORY_DATE}
+                            max={torontoToday()}
+                            onChange={(event) =>
+                              setDatePicker({
+                                ...datePicker,
+                                to: event.target.value,
+                                error: "",
+                              })
+                            }
+                            aria-invalid={datePicker.error ? true : undefined}
+                            aria-describedby={
+                              datePicker.error ? "chart-dates-error" : undefined
+                            }
+                          />
+                        </label>
+                        <button type="submit" className="chart-dates__action">
+                          Apply
+                        </button>
+                        <button
+                          type="button"
+                          className="chart-dates__action"
+                          onClick={() => setDatePicker(null)}
+                        >
+                          Cancel
+                        </button>
+                        {datePicker.error ? (
+                          <span className="chart-dates__error" id="chart-dates-error" role="alert">
+                            {datePicker.error}
+                          </span>
+                        ) : null}
+                      </form>
+                    ) : (
+                      <button
+                        type="button"
+                        className="chart-dates__toggle"
+                        aria-pressed={customWindow !== null}
+                        onClick={openDatePicker}
+                      >
+                        <CalendarIcon />
+                        {customWindow ? `${customWindow.from} – ${customWindow.to}` : "Dates"}
+                      </button>
+                    )}
+                    <span className="chart-dialog__divider" aria-hidden="true" />
+                    <label className="chart-interval">
+                      <span>Interval:</span>
+                      <select
+                        value={activeInterval}
+                        onChange={(event) =>
+                          setQuoteInterval(event.target.value as QuoteInterval)
+                        }
+                      >
+                        {QUOTE_INTERVALS.map((interval) => (
+                          <option
+                            key={interval}
+                            value={interval}
+                            disabled={!availableIntervals.includes(interval)}
+                          >
+                            {QUOTE_INTERVAL_LABELS[interval]}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    </div>
+                    <span className="chart-kind">
+                      {quoteHistory
+                        ? `${marketSourceLabel(quoteHistory.source)} · ${quoteHistory.interval} bars · trading gaps compressed`
+                        : historyError || "Requesting timestamped market bars…"}
+                    </span>
+                  </footer>
+                </div>
+              ) : null}
+            </dialog>
+
+            <dialog
+              ref={mapDialogRef}
+              className="chart-dialog portfolio-map-dialog"
+              aria-labelledby="portfolio-map-title"
+              onClose={() => {
+                mapRequest.current?.abort();
+                mapRequest.current = null;
+                setMapView(null);
+              }}
+              onClick={(event) => {
+                // A click on the backdrop lands on the dialog element itself.
+                if (event.target === event.currentTarget) event.currentTarget.close();
+              }}
+            >
+              {mapView ? (
+                <div className="chart-dialog__frame">
+                  <header className="chart-dialog__header">
+                    <div className="chart-dialog__identity">
+                      <h2 id="portfolio-map-title">
+                        {mapView.kind === "team"
+                          ? mapView.teamName
+                          : dashboard.team?.name ??
+                            (isPlatformAdmin ? "Admin test portfolio" : "Portfolio")}{" "}
+                        · Portfolio map
+                      </h2>
+                      <span>
+                        {mapView.kind === "team"
+                          ? mapView.holdings
+                            ? `${formatMoney(mapView.holdings.totalValueCents)} total · as of ${formatTime(mapView.holdings.asOf)}`
+                            : "Read-only view of this team's holdings"
+                          : `${formatMoney(portfolio.totalValueCents)} total · as of ${formatTime(portfolio.asOf)}`}
+                      </span>
+                    </div>
+                    <button
+                      className="chart-dialog__close"
+                      type="button"
+                      aria-label="Close portfolio map"
+                      onClick={() => mapDialogRef.current?.close()}
+                    >
+                      <CloseIcon />
+                    </button>
+                  </header>
+                  <div className="portfolio-map-dialog__body">
+                    {mapView.kind === "own" ? (
+                      <PortfolioMap
+                        holdings={dashboard.holdings}
+                        cashCents={portfolio.cashCents}
+                        label={`${dashboard.team?.name ?? "Your"} portfolio map`}
+                        onSelectSymbol={selectMapSymbol}
+                      />
+                    ) : mapView.status === "ready" && mapView.holdings ? (
+                      <PortfolioMap
+                        holdings={mapView.holdings.holdings}
+                        cashCents={mapView.holdings.cashCents}
+                        label={`${mapView.teamName} portfolio map`}
+                        onSelectSymbol={selectMapSymbol}
+                      />
+                    ) : mapView.status === "error" ? (
+                      <div className="portfolio-map-dialog__status" role="alert">
+                        <p>{mapView.error}</p>
+                        <button
+                          type="button"
+                          className="chart-expand"
+                          onClick={() =>
+                            void openTeamPortfolioMap(mapView.teamId, mapView.teamName)
+                          }
+                        >
+                          <RefreshIcon />
+                          Retry
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="portfolio-map-dialog__status" role="status">
+                        <p>Loading {mapView.teamName}&apos;s holdings…</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+            </dialog>
 
             <form className="order-ticket" id="order-ticket" onSubmit={placeOrder}>
               <div className="ticket-topline">
@@ -3992,10 +5053,8 @@ export function SimulatorApp({
                     type="button"
                     className="ticket-max"
                     disabled={!quoteLoaded || maxOrderQuantity < 1}
-                    onClick={() => {
-                      setQuantity(String(maxOrderQuantity));
-                      editTicket();
-                    }}
+                    aria-haspopup="dialog"
+                    onClick={() => maxConfirmRef.current?.showModal()}
                     title={
                       side === "BUY"
                         ? `Buy as many ${unitWord(selectedAssetClass, 2)} as the cash allows`
@@ -4007,6 +5066,77 @@ export function SimulatorApp({
                       ? ` · ${number.format(maxOrderQuantity)}`
                       : ""}
                   </button>
+                  <dialog
+                    ref={maxConfirmRef}
+                    className="confirm-dialog"
+                    role="alertdialog"
+                    aria-labelledby="max-confirm-title"
+                    aria-describedby="max-confirm-body"
+                    onClick={(event) => {
+                      if (event.target === event.currentTarget) event.currentTarget.close();
+                    }}
+                  >
+                    <h2 id="max-confirm-title">
+                      {side === "BUY" ? "Buy the maximum?" : "Sell everything?"}
+                    </h2>
+                    <div id="max-confirm-body">
+                      <p>
+                        {side === "BUY" ? (
+                          <>
+                            This sets the quantity to{" "}
+                            <strong>
+                              {number.format(maxOrderQuantity)}{" "}
+                              {unitWord(selectedAssetClass, maxOrderQuantity)} of{" "}
+                              {selectedQuote.symbol}
+                            </strong>
+                            , about{" "}
+                            <strong>{formatMoney(maxOrderQuantity * ticketUnitCadCents)}</strong>.
+                            That uses nearly all of the{" "}
+                            {formatMoney(portfolio.buyingPowerCents)} in buying power.
+                          </>
+                        ) : (
+                          <>
+                            This sets the quantity to all{" "}
+                            <strong>
+                              {number.format(maxOrderQuantity)}{" "}
+                              {unitWord(selectedAssetClass, maxOrderQuantity)} of{" "}
+                              {selectedQuote.symbol}
+                            </strong>{" "}
+                            that can be sold, about{" "}
+                            <strong>{formatMoney(maxOrderQuantity * ticketUnitCadCents)}</strong>.
+                            The whole position would be closed.
+                          </>
+                        )}
+                      </p>
+                      <p className="confirm-dialog__note">
+                        Nothing is {side === "BUY" ? "bought" : "sold"} until you place the
+                        order.
+                      </p>
+                    </div>
+                    <div className="confirm-dialog__actions">
+                      <button
+                        type="button"
+                        className="button button--secondary"
+                        autoFocus
+                        onClick={() => maxConfirmRef.current?.close()}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        className="button button--primary"
+                        onClick={() => {
+                          setQuantity(String(maxOrderQuantity));
+                          editTicket();
+                          maxConfirmRef.current?.close();
+                          document.getElementById("order-quantity")?.focus();
+                        }}
+                      >
+                        Use {number.format(maxOrderQuantity)}{" "}
+                        {unitWord(selectedAssetClass, maxOrderQuantity)}
+                      </button>
+                    </div>
+                  </dialog>
                   <input
                     id="order-quantity"
                     inputMode="numeric"
@@ -4261,8 +5391,26 @@ export function SimulatorApp({
                       <tr key={row.teamId} className={row.isCurrentTeam ? "is-current" : ""}>
                         <td data-label="Rank">{row.rank}</td>
                         <th scope="row" data-label="Team">
-                          {row.teamName}
-                          {row.isCurrentTeam ? <small> Your team</small> : null}
+                          <span className="leaderboard-team">
+                            <span>
+                              {row.teamName}
+                              {row.isCurrentTeam ? <small> Your team</small> : null}
+                            </span>
+                            {canManageCompetition ? (
+                              <button
+                                type="button"
+                                className="leaderboard-map-button"
+                                aria-haspopup="dialog"
+                                aria-label={`Open ${row.teamName} portfolio map`}
+                                onClick={() =>
+                                  void openTeamPortfolioMap(row.teamId, row.teamName)
+                                }
+                              >
+                                <TreemapIcon />
+                                Map
+                              </button>
+                            ) : null}
+                          </span>
                         </th>
                         <td data-label="Value">{formatMoney(row.totalValueCents)}</td>
                         <td data-label="Return">

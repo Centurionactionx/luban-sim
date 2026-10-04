@@ -2,6 +2,7 @@ import {
   QUOTE_RANGES,
   assertRequestAllowed,
   getQuoteHistory,
+  isQuoteInterval,
   MARKET_SYMBOL_PATTERN,
   normalizeMarketSymbol,
   refreshQuote,
@@ -29,6 +30,11 @@ export async function GET(request: Request): Promise<Response> {
     const rawSymbol = searchParams.get("symbol")?.trim();
     const symbol = rawSymbol ? normalizeMarketSymbol(rawSymbol) : undefined;
     const rangeValue = searchParams.get("range")?.trim().toUpperCase() ?? "1D";
+    const intervalValue = searchParams.get("interval")?.trim() || null;
+    const from = searchParams.get("from")?.trim() || null;
+    const to = searchParams.get("to")?.trim() || null;
+    // A from/to pair asks for a custom window and overrides any range.
+    const custom = from !== null || to !== null;
 
     if (!symbol || !MARKET_SYMBOL_PATTERN.test(symbol)) {
       throw new ApiError(
@@ -38,12 +44,29 @@ export async function GET(request: Request): Promise<Response> {
         "symbol",
       );
     }
-    if (!QUOTE_RANGES.includes(rangeValue as QuoteRange)) {
+    if (!custom && !QUOTE_RANGES.includes(rangeValue as QuoteRange)) {
       throw new ApiError(
         400,
         "INVALID_QUOTE_RANGE",
         "range must be 1D, 5D, 1M, or 3M.",
         "range",
+      );
+    }
+
+    if (intervalValue !== null && !isQuoteInterval(intervalValue)) {
+      throw new ApiError(
+        400,
+        "INVALID_QUOTE_INTERVAL",
+        "interval must be 1m, 2m, 5m, 15m, 30m, 60m, 1d, or 1wk.",
+        "interval",
+      );
+    }
+    if (custom && (from === null || to === null)) {
+      throw new ApiError(
+        400,
+        "INVALID_QUOTE_WINDOW",
+        "A custom window needs both from and to dates.",
+        from === null ? "from" : "to",
       );
     }
 
@@ -56,7 +79,12 @@ export async function GET(request: Request): Promise<Response> {
         "symbol",
       );
     }
-    const history = await getQuoteHistory(symbol, rangeValue as QuoteRange);
+    const history = await getQuoteHistory(
+      symbol,
+      custom ? "CUSTOM" : (rangeValue as QuoteRange),
+      undefined,
+      { interval: intervalValue, from, to },
+    );
     return json({ quote, history });
   } catch (error) {
     return handleRouteError(error);

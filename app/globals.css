@@ -764,7 +764,7 @@ a {
 .portfolio-chart,
 .quote-chart {
   margin: 0 18px 16px;
-  padding: 10px 12px 8px;
+  padding: 10px 8px 8px 12px;
   border: 1.5px solid var(--rule);
   border-radius: 4px;
 }
@@ -784,14 +784,14 @@ a {
 .range-tabs {
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 5px;
 }
 
 .range-tabs button {
   min-width: 37px;
   min-height: 32px;
   padding: 4px 8px;
-  border: 1px solid transparent;
+  border: 1px solid var(--hairline);
   border-radius: 3px;
   background: transparent;
   font-family: var(--font-data);
@@ -836,38 +836,81 @@ a {
   min-height: 142px;
 }
 
-.chart svg {
+.chart__plot > svg {
   display: block;
   width: 100%;
   height: 235px;
   overflow: visible;
 }
 
-.chart--compact svg {
+.chart--compact .chart__plot > svg {
   height: 142px;
 }
 
+.chart__body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.chart__plot {
+  position: relative;
+  min-width: 0;
+}
+
 .chart__grid {
-  stroke: #d9dce3;
+  stroke: #e3e1f3;
   stroke-width: 1;
-  stroke-dasharray: 3 4;
+}
+
+.chart__fill-stop--top {
+  stop-color: var(--purple);
+  stop-opacity: 0.34;
+}
+
+.chart__fill-stop--bottom {
+  stop-color: var(--purple);
+  stop-opacity: 0.02;
+}
+
+.chart__area {
+  stroke: none;
+}
+
+.chart__volume {
+  fill: var(--purple-deep);
+  opacity: 0.28;
 }
 
 .chart__line {
   fill: none;
   stroke: var(--purple);
-  stroke-width: 2;
+  stroke-width: 1.75;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 
-.chart__line--negative {
-  stroke: var(--pink);
+.chart__reference {
+  stroke: var(--muted);
+  stroke-width: 1;
+  stroke-dasharray: 5 4;
+}
+
+.chart__price-line {
+  stroke-width: 1;
+  stroke-dasharray: 5 4;
+}
+
+.chart__price-line--up {
+  stroke: var(--green);
+}
+
+.chart__price-line--down {
+  stroke: var(--red);
 }
 
 .chart__last-point {
-  fill: var(--lime);
-  stroke: var(--ink);
+  fill: var(--purple);
+  stroke: var(--paper);
   stroke-width: 1.5;
 }
 
@@ -884,14 +927,18 @@ a {
 
 .chart__crosshair {
   stroke: var(--ink);
-  stroke-width: 1.25;
+  stroke-width: 1;
   stroke-dasharray: 3 3;
   pointer-events: none;
 }
 
+.chart__crosshair--level {
+  stroke-dasharray: 1 3;
+}
+
 .chart__active-point {
-  fill: var(--lime);
-  stroke: var(--ink);
+  fill: var(--paper);
+  stroke: var(--purple-deep);
   stroke-width: 2;
   pointer-events: none;
 }
@@ -900,7 +947,7 @@ a {
   position: absolute;
   top: 10px;
   z-index: 4;
-  width: min(176px, calc(100% - 16px));
+  width: min(156px, calc(100% - 16px));
   padding: 8px 10px;
   border: 1.5px solid var(--ink);
   border-radius: 4px;
@@ -959,30 +1006,98 @@ a {
   text-align: right;
 }
 
-.chart__value-axis {
+.chart__y-axis {
+  position: relative;
+  min-width: 40px;
+  pointer-events: none;
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+}
+
+.chart__y-tick,
+.chart__badge {
   position: absolute;
-  inset: 9px 3px 24px auto;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  align-items: flex-end;
+  left: 6px;
+  transform: translateY(-50%);
+  white-space: nowrap;
+  line-height: 1;
+}
+
+.chart__y-tick {
+  color: var(--muted);
+  font-size: 8.5px;
+}
+
+.chart__y-sizer {
+  display: block;
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+  margin-left: 4px;
+  padding: 0 5px;
+  font-size: 8.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.chart__badge {
+  left: 2px;
+  padding: 3px 4px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  font-size: 8.5px;
+  font-weight: 600;
+}
+
+.chart__badge--up {
+  background: var(--green);
+  color: var(--paper);
+}
+
+.chart__badge--down {
+  background: var(--red);
+  color: var(--paper);
+}
+
+.chart__badge--reference {
+  border-color: var(--muted);
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.chart__badge--active {
+  z-index: 1;
+  border-color: var(--ink);
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.chart__x-axis {
+  position: relative;
+  height: 20px;
+  border-top: 1px solid var(--hairline);
   pointer-events: none;
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 8px;
-}
-
-.chart__value-axis span {
-  padding-inline: 3px;
-  background: color-mix(in srgb, var(--paper) 88%, transparent);
-}
-
-.chart__axis {
-  display: flex;
-  justify-content: space-between;
-  color: var(--muted);
-  font-family: var(--font-data);
   font-size: 8.5px;
+}
+
+.chart__x-tick,
+.chart__x-badge {
+  position: absolute;
+  top: 5px;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  line-height: 1;
+}
+
+.chart__x-badge {
+  top: 2px;
+  z-index: 1;
+  padding: 3px 6px;
+  border-radius: 3px;
+  background: var(--ink);
+  color: var(--paper);
 }
 
 .market-data-note {
@@ -2487,7 +2602,7 @@ a {
     padding-block: 6px;
   }
 
-  .chart--compact svg {
+  .chart--compact .chart__plot > svg {
     height: 104px;
   }
 
@@ -2525,7 +2640,7 @@ a {
     padding-bottom: 4px;
   }
 
-  .chart:not(.chart--compact) svg {
+  .chart:not(.chart--compact) .chart__plot > svg {
     height: 174px;
   }
 
@@ -2941,11 +3056,11 @@ a {
     flex-wrap: wrap;
   }
 
-  .chart svg {
+  .chart__plot > svg {
     height: 190px;
   }
 
-  .chart--compact svg {
+  .chart--compact .chart__plot > svg {
     height: 135px;
   }
 
@@ -4111,5 +4226,974 @@ a {
 @media (min-width: 1261px) {
   .trading-grid {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr) minmax(0, 1fr);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Expanded chart: a full-screen dialog with denser axes and an OHLCV readout.
+   ------------------------------------------------------------------------- */
+
+.chart-header .chart-expand {
+  margin-left: auto;
+}
+
+.chart-expand {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border: 1px solid var(--purple);
+  border-radius: 3px;
+  background: var(--paper);
+  color: var(--purple-deep);
+  font-family: var(--font-data);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.chart-expand:hover,
+.chart-expand:focus-visible {
+  background: var(--quiet-purple);
+}
+
+.chart-expand svg {
+  width: 14px;
+  height: 14px;
+}
+
+html:has(dialog[open]) {
+  overflow: hidden;
+}
+
+.chart-dialog {
+  width: calc(100vw - 32px);
+  max-width: 1800px;
+  height: calc(100dvh - 32px);
+  max-height: none;
+  margin: auto;
+  padding: 0;
+  border: 2px solid var(--rule);
+  border-radius: var(--tile-radius);
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.chart-dialog::backdrop {
+  background: rgba(30, 22, 74, 0.55);
+}
+
+.chart-dialog__frame {
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.chart-dialog__header {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.chart-dialog__identity {
+  display: grid;
+  gap: 3px;
+}
+
+.chart-dialog__identity h2 {
+  font-size: var(--type-section-title);
+  font-weight: 600;
+}
+
+.chart-dialog__identity span,
+.chart-dialog__price small {
+  color: var(--muted);
+  font-family: var(--font-data);
+  font-size: var(--type-meta);
+}
+
+.chart-dialog__price {
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: baseline;
+  column-gap: 10px;
+  row-gap: 3px;
+  font-family: var(--font-data);
+}
+
+.chart-dialog__price strong {
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.chart-dialog__price small {
+  grid-column: 1 / -1;
+}
+
+.chart-dialog__close {
+  width: 40px;
+  height: 40px;
+  display: inline-grid;
+  place-items: center;
+  margin-left: auto;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.chart-dialog__close:hover,
+.chart-dialog__close:focus-visible {
+  background: var(--quiet-purple);
+}
+
+.chart-dialog__body {
+  min-height: 0;
+  padding: 10px 6px 0 18px;
+}
+
+.chart-dialog__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 18px;
+  border-top: 1px solid var(--hairline);
+}
+
+.chart.chart--expanded,
+.chart.chart--expanded.chart--empty {
+  height: 100%;
+  min-height: 0;
+}
+
+.chart--expanded .chart__body {
+  height: 100%;
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.chart--expanded .chart__plot {
+  min-height: 0;
+}
+
+.chart.chart--expanded .chart__plot > svg {
+  position: absolute;
+  inset: 0;
+  height: 100%;
+}
+
+.chart--expanded .chart__y-tick,
+.chart--expanded .chart__badge,
+.chart--expanded .chart__y-sizer,
+.chart--expanded .chart__x-axis {
+  font-size: 10.5px;
+}
+
+.chart--expanded .chart__x-axis {
+  height: 26px;
+}
+
+.chart--expanded .chart__x-tick {
+  top: 7px;
+}
+
+.chart__volume--up {
+  fill: var(--green);
+  opacity: 0.55;
+}
+
+.chart__volume--down {
+  fill: var(--red);
+  opacity: 0.55;
+}
+
+.chart__legend {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.chart__readout,
+.chart__study {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  padding: 5px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--paper) 92%, transparent);
+  font-family: var(--font-data);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.chart__readout div {
+  display: flex;
+}
+
+.chart__readout dt {
+  color: var(--muted);
+}
+
+.chart__readout dt::after {
+  content: ":";
+}
+
+.chart__readout dd {
+  font-weight: 600;
+}
+
+.chart__readout .chart__readout-currency dt {
+  color: var(--purple-deep);
+  font-size: 11px;
+}
+
+.chart__readout .chart__readout-currency dt::after {
+  content: none;
+}
+
+.chart__study {
+  gap: 10px;
+  padding-right: 4px;
+  font-size: 13px;
+}
+
+.chart__study span {
+  display: inline-flex;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.chart__study strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.chart__study-toggle {
+  width: 26px;
+  height: 26px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--hairline);
+  border-radius: 3px;
+  background: var(--paper);
+  color: var(--ink);
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.chart__study-toggle:hover,
+.chart__study-toggle:focus-visible {
+  background: var(--quiet-purple);
+}
+
+.chart__study-toggle svg {
+  width: 15px;
+  height: 15px;
+  transition: transform 120ms ease-out;
+}
+
+/* Open points up ("collapse"), closed points down ("expand"). */
+.chart__study-toggle[data-open="true"] svg {
+  transform: rotate(180deg);
+}
+
+.chart-dialog__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+}
+
+.chart-dialog__divider {
+  width: 1px;
+  height: 24px;
+  background: var(--hairline);
+}
+
+.chart-dates {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.chart-dates input,
+.chart-interval select {
+  min-height: 34px;
+  padding: 4px 8px;
+  border: 1.5px solid var(--rule);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-data);
+  font-size: 12px;
+}
+
+.chart-dates input[aria-invalid="true"] {
+  border-color: var(--red);
+}
+
+.chart-dates__action {
+  min-height: 34px;
+  padding: 4px 6px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.chart-dates__action:hover,
+.chart-dates__action:focus-visible {
+  color: var(--purple-deep);
+}
+
+.chart-dates__error {
+  flex-basis: 100%;
+  color: var(--red);
+  font-size: var(--type-meta);
+}
+
+.chart-dates__toggle {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-data);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.chart-dates__toggle[aria-pressed="true"] {
+  border-color: var(--purple);
+  background: var(--quiet-purple);
+  color: var(--purple-deep);
+}
+
+.chart-dates__toggle:hover,
+.chart-dates__toggle:focus-visible {
+  background: var(--quiet-purple);
+}
+
+.chart-dates__toggle svg {
+  width: 16px;
+  height: 16px;
+}
+
+.chart-interval {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-family: var(--font-data);
+  font-size: 11px;
+}
+
+/* Confirmation before filling the ticket with the whole buying power. */
+.confirm-dialog {
+  width: min(400px, calc(100vw - 32px));
+  margin: auto;
+  padding: 20px 22px 18px;
+  border: 2px solid var(--rule);
+  border-radius: var(--tile-radius);
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.confirm-dialog::backdrop {
+  background: rgba(30, 22, 74, 0.45);
+}
+
+.confirm-dialog h2 {
+  margin-bottom: 10px;
+  font-size: var(--type-section-title);
+  font-weight: 600;
+}
+
+.confirm-dialog p {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.confirm-dialog p strong {
+  font-family: var(--font-data);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.confirm-dialog__note {
+  margin-top: 8px;
+  color: var(--muted);
+}
+
+.confirm-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.confirm-dialog__actions .button {
+  min-height: 40px;
+  padding-inline: 16px;
+}
+
+/* Line, candle, and bar (OHLC) chart styles in the expanded view. */
+.chart-style {
+  display: inline-flex;
+  margin-left: auto;
+  padding: 2px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+}
+
+.chart-style button {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-data);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.chart-style button:hover,
+.chart-style button:focus-visible {
+  background: var(--quiet-purple-2);
+  color: var(--ink);
+}
+
+.chart-style button[aria-pressed="true"] {
+  background: var(--quiet-purple);
+  color: var(--purple-deep);
+}
+
+.chart-style + .chart-dialog__close {
+  margin-left: 0;
+}
+
+.chart__candle line,
+.chart__ohlc line {
+  stroke-width: 1;
+}
+
+.chart__candle--up line,
+.chart__ohlc--up line {
+  stroke: var(--green);
+}
+
+.chart__candle--up rect {
+  fill: var(--green);
+}
+
+.chart__candle--down line,
+.chart__ohlc--down line {
+  stroke: var(--red);
+}
+
+.chart__candle--down rect {
+  fill: var(--red);
+}
+
+.chart__ohlc line {
+  stroke-width: 1.25;
+}
+
+/* The last-price dot belongs to the line; candles and bars mark it with the
+   dashed price line and badge alone. */
+.chart:not(.chart--style-line) .chart__last-point {
+  display: none;
+}
+
+/* ---------------------------------------------------------------------------
+   Portfolio map: a Finviz-style treemap of one portfolio in the full-screen
+   dialog. Sector and industry boxes and their tiles are placed absolutely
+   in pixels by lib/portfolio-map.ts; the dark canvas shows through the gaps
+   as the borders between them.
+   ------------------------------------------------------------------------- */
+
+/* Holdings header: title left, then the ranking note and Map button right. */
+.holdings-section .subheading-row > span {
+  margin-left: auto;
+}
+
+.leaderboard-team {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.leaderboard-map-button {
+  min-height: 24px;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border: 1px solid var(--purple);
+  border-radius: 3px;
+  background: var(--paper);
+  color: var(--purple-deep);
+  font-family: var(--font-data);
+  font-size: 8.5px;
+  font-weight: 600;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.leaderboard-map-button:hover,
+.leaderboard-map-button:focus-visible {
+  background: var(--quiet-purple);
+}
+
+.leaderboard-map-button svg,
+.portfolio-map-open svg {
+  width: 13px;
+  height: 13px;
+}
+
+.portfolio-map-dialog__body {
+  min-height: 0;
+  padding: 12px 18px 14px;
+}
+
+.portfolio-map-dialog__status {
+  height: 100%;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 12px;
+  color: var(--muted);
+  font-size: var(--type-item-title);
+}
+
+.portfolio-map {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 188px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) auto;
+  column-gap: 16px;
+  row-gap: 10px;
+  font-family: var(--font-ui);
+}
+
+/* Finviz keeps its options in a left panel; so does the map. */
+.portfolio-map__controls {
+  grid-row: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 16px;
+}
+
+.portfolio-map__control {
+  display: grid;
+  gap: 6px;
+}
+
+.portfolio-map__control-label {
+  color: var(--muted);
+  font-family: var(--font-data);
+  font-size: var(--type-meta);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.portfolio-map__segments {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.portfolio-map__segments button {
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.portfolio-map__segments button + button {
+  border-left: 1px solid var(--rule);
+}
+
+.portfolio-map__segments button:hover {
+  background: var(--quiet-purple);
+}
+
+.portfolio-map__segments button[aria-pressed="true"] {
+  background: var(--purple-deep);
+  color: var(--paper);
+}
+
+.portfolio-map__segments button:focus-visible,
+.portfolio-map__view-toggle:focus-visible {
+  outline: 2px solid var(--purple);
+  outline-offset: 2px;
+}
+
+.portfolio-map__toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.portfolio-map__toggle input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--purple-deep);
+}
+
+.portfolio-map__view-toggle {
+  min-height: 32px;
+  padding: 4px 10px;
+  border: 1px solid var(--purple);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--purple-deep);
+  font-family: var(--font-data);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.portfolio-map__view-toggle:hover,
+.portfolio-map__view-toggle[aria-pressed="true"] {
+  background: var(--quiet-purple);
+}
+
+.portfolio-map__stage {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* The map stands for the whole portfolio; space the holdings don't use
+   stays open (or shows cash, when cash is on). */
+.portfolio-map__canvas {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border: 1px dashed var(--hairline);
+  border-radius: 4px;
+  background: var(--quiet-purple-2);
+}
+
+/* Dark behind the holdings so the gaps between tiles read as borders. */
+.portfolio-map__holdings-area {
+  position: absolute;
+  background: var(--ink);
+  transition:
+    width 220ms ease,
+    height 220ms ease;
+}
+
+.portfolio-map__cash-label {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.15em;
+  line-height: 1.05;
+}
+
+.portfolio-map__canvas[hidden] {
+  display: none;
+}
+
+.portfolio-map__sector,
+.portfolio-map__industry,
+.portfolio-map__tile {
+  position: absolute;
+  box-sizing: border-box;
+  /* Boxes glide to their new places when the size or cash option changes. */
+  transition:
+    left 220ms ease,
+    top 220ms ease,
+    width 220ms ease,
+    height 220ms ease,
+    background-color 220ms ease;
+}
+
+.portfolio-map__sector > span,
+.portfolio-map__industry {
+  display: block;
+  overflow: hidden;
+  padding-inline: 5px;
+  font-family: var(--font-data);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.portfolio-map__sector > span {
+  color: var(--paper);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* Industry strips: a step lighter than the canvas, like Finviz's. */
+.portfolio-map__industry {
+  background: color-mix(in oklab, var(--muted) 45%, var(--ink));
+  color: var(--paper);
+  font-size: 9px;
+}
+
+.portfolio-map__tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.15em;
+  overflow: hidden;
+  padding: 2px;
+  border: 0;
+  border-radius: 0;
+  font-family: var(--font-data);
+  line-height: 1.05;
+  text-align: center;
+  cursor: pointer;
+}
+
+.portfolio-map__tile strong {
+  max-width: 100%;
+  overflow: hidden;
+  font-weight: 700;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.portfolio-map__tile span {
+  font-size: 0.62em;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* An inset ring, since an outline would be clipped by the canvas edge. */
+.portfolio-map__tile:hover,
+.portfolio-map__tile:focus-visible {
+  z-index: 1;
+  outline: 0;
+  box-shadow:
+    inset 0 0 0 2px var(--paper),
+    inset 0 0 0 4px var(--purple-deep);
+}
+
+.portfolio-map__tile--cash {
+  cursor: default;
+}
+
+.portfolio-map__card {
+  position: absolute;
+  z-index: 2;
+  width: 248px;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1.5px solid var(--rule);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: 0 8px 24px rgba(0, 23, 31, 0.28);
+  pointer-events: none;
+}
+
+.portfolio-map__card-head {
+  display: grid;
+  gap: 2px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.portfolio-map__card-head strong {
+  font-family: var(--font-data);
+  font-size: 15px;
+}
+
+.portfolio-map__card-head span {
+  font-size: var(--type-description);
+}
+
+.portfolio-map__card-head small {
+  color: var(--muted);
+  font-family: var(--font-data);
+  font-size: var(--type-meta);
+}
+
+.portfolio-map__card dl {
+  display: grid;
+  gap: 4px;
+  margin: 7px 0 0;
+}
+
+.portfolio-map__card dl > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 10px;
+}
+
+.portfolio-map__card dt {
+  color: var(--muted);
+}
+
+.portfolio-map__card dd {
+  margin: 0;
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+}
+
+.portfolio-map__empty {
+  height: 100%;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 6px;
+  border: 1px dashed var(--hairline);
+  border-radius: 4px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.portfolio-map__empty p {
+  color: var(--ink);
+  font-size: var(--type-section-title);
+  font-weight: 600;
+}
+
+.portfolio-map__empty span {
+  font-size: var(--type-description);
+}
+
+.portfolio-map__list {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+}
+
+.portfolio-map__table th,
+.portfolio-map__table td {
+  padding: 8px 10px;
+  font-size: 10.5px;
+}
+
+.portfolio-map__legend {
+  grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  color: var(--muted);
+  font-family: var(--font-data);
+  font-size: var(--type-meta);
+}
+
+.portfolio-map__legend ol {
+  display: flex;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.portfolio-map__legend li {
+  min-width: 42px;
+  padding: 4px 6px;
+  font-size: 9.5px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.portfolio-map__legend li.portfolio-map__legend-cash {
+  margin-left: 8px;
+  border-radius: 2px;
+}
+
+@media (max-width: 760px) {
+  .portfolio-map-dialog__body {
+    padding: 10px;
+  }
+
+  .portfolio-map {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(320px, 1fr) auto;
+  }
+
+  .portfolio-map__controls {
+    grid-row: auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: 10px 14px;
+  }
+
+  .portfolio-map__legend {
+    grid-column: 1;
+  }
+
+  .portfolio-map__legend li {
+    min-width: 34px;
+    padding-inline: 3px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .portfolio-map__holdings-area,
+  .portfolio-map__sector,
+  .portfolio-map__industry,
+  .portfolio-map__tile {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .portfolio-map__tile {
+    border: 1px solid CanvasText;
   }
 }
