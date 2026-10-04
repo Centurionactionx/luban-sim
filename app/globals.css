@@ -2323,6 +2323,38 @@ a {
   text-transform: none;
 }
 
+.status-footer__maker,
+.status-footer__social {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.status-footer__social {
+  margin-left: 4px;
+}
+
+.status-footer__social a {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 3px;
+  color: var(--ink);
+}
+
+.status-footer__social a:hover,
+.status-footer__social a:focus-visible {
+  background: var(--quiet-purple);
+  color: var(--purple-deep);
+}
+
+.status-footer .status-footer__social svg {
+  width: 15px;
+  height: 15px;
+  color: inherit;
+}
+
 .status-footer > div:nth-child(3) {
   justify-content: flex-end;
 }

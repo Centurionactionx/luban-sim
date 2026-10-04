@@ -3,8 +3,8 @@ import type { NextConfig } from "next";
 import packageJson from "./package.json";
 
 const nextConfig: NextConfig = {
-  // Shown in the footer. The release number is package.json's minor version
-  // (1.28.0 is release 28): bump it with every production release. The
+  // Shown in the footer as the version (e.g. v1.29.0); its minor number counts
+  // production releases, so bump it with every production release. The
   // commit is filled in by Vercel at build time, so the footer always names
   // exactly what is deployed.
   env: {

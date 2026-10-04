@@ -27,7 +27,7 @@ Production is served at `https://sim.lubancanada.com`, a subdomain of the public
 
 ## Release numbers
 
-The footer shows "Release N", where N is the minor version in `package.json` (`1.28.0` is release 28), followed by the short commit ID Vercel built. Bump the minor version in the same commit as each production release; the commit ID keeps the footer exact even if a bump is missed.
+The footer shows the version from `package.json` (for example `v1.29.0`), followed by the short commit ID Vercel built. The minor number counts production releases: version 1.29.0 is release 29. Bump it in the same commit as each production release; the commit ID keeps the footer exact even if a bump is missed.
 
 ## Keeping the database active
 
