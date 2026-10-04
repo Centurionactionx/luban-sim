@@ -24,6 +24,7 @@ import { getAdminTradingTeamId } from "./admin-trading";
 import { getSessionUser } from "./auth";
 import { getDb, withReadTransaction } from "./db";
 import { getQuote, listQuotes, quoteCacheGeneration } from "./quotes";
+import { readReservations } from "./working-order-book";
 
 interface CompetitionRow {
   id: string;
@@ -290,6 +291,7 @@ export async function calculatePortfolio(
     });
   }
 
+  const reservedCashCents = (await readReservations(database, teamId)).cashCents;
   const holdingsValueCents = interim.reduce(
     (total, holding) => total + holding.marketValueCents,
     0,
@@ -354,7 +356,8 @@ export async function calculatePortfolio(
           : 0,
       dayChangeCents,
       dayChangePercent: roundPercent(dayChangeCents, priorValueCents),
-      buyingPowerCents: cashCents,
+      // Cash set aside for waiting buy orders can't be spent twice.
+      buyingPowerCents: cashCents - reservedCashCents,
       asOf: at.toISOString(),
     },
     holdings,

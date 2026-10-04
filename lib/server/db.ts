@@ -21,7 +21,7 @@ import {
 import { postgresConnectionOptions } from "./postgres-config";
 
 const DEFAULT_DATABASE_PATH = join(process.cwd(), "data", "luban.sqlite");
-const SCHEMA_VERSION = 11;
+const SCHEMA_VERSION = 12;
 
 const globalDatabase = globalThis as typeof globalThis & {
   __lubanSqliteHandle?: DatabaseSync;
@@ -367,6 +367,33 @@ const SHARED_TABLE_BODIES = {
       source_url TEXT,
       created_at TEXT NOT NULL,
       UNIQUE (admin_user_id, idempotency_key)`,
+  // Limit, stop-loss, and take-profit orders waiting for their price. They
+  // never move money themselves: when one triggers it is filled through the
+  // same code as a market order, which writes the normal order and ledger
+  // rows. Buys set cash aside (reserved_cash_cents) and sells set shares
+  // aside, by subtraction at check time; the ledger is untouched until a fill.
+  working_orders: (big: string) => `
+      id TEXT PRIMARY KEY,
+      team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+      actor_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      idempotency_key TEXT NOT NULL,
+      symbol TEXT NOT NULL REFERENCES instruments(symbol),
+      side TEXT NOT NULL CHECK (side IN ('BUY', 'SELL')),
+      order_type TEXT NOT NULL CHECK (order_type IN ('LIMIT', 'STOP_LOSS', 'TAKE_PROFIT')),
+      quantity ${big} NOT NULL CHECK (quantity > 0),
+      trigger_price_cents ${big} NOT NULL CHECK (trigger_price_cents > 0),
+      reserved_cash_cents ${big} NOT NULL DEFAULT 0 CHECK (reserved_cash_cents >= 0),
+      time_in_force TEXT NOT NULL CHECK (time_in_force IN ('DAY', 'GTC')),
+      expires_at TEXT,
+      status TEXT NOT NULL
+        CHECK (status IN ('PENDING_PARENT', 'WORKING', 'FILLED', 'CANCELLED', 'EXPIRED')),
+      status_reason TEXT,
+      parent_id TEXT REFERENCES working_orders(id) ON DELETE SET NULL,
+      oco_group_id TEXT,
+      filled_order_id TEXT REFERENCES orders(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (actor_user_id, idempotency_key)`,
 } as const;
 
 const SCHEMA_INDEXES = [
@@ -381,6 +408,8 @@ const SCHEMA_INDEXES = [
   "CREATE INDEX IF NOT EXISTS idx_auth_audit_created ON auth_audit_events (created_at DESC)",
   "CREATE INDEX IF NOT EXISTS idx_admin_valuation_owner_created ON admin_valuation_positions (admin_user_id, created_at DESC)",
   "CREATE INDEX IF NOT EXISTS idx_instruments_auto_refresh ON instruments (auto_refresh, is_active)",
+  "CREATE INDEX IF NOT EXISTS idx_working_orders_status_symbol ON working_orders (status, symbol)",
+  "CREATE INDEX IF NOT EXISTS idx_working_orders_team_status ON working_orders (team_id, status)",
 ];
 
 function schemaStatements(engine: DatabaseEngine): string[] {
@@ -584,6 +613,39 @@ function instrumentAssetColumns(big: string): string {
  * schema on cold start (fresh databases get the current DDL directly).
  */
 export async function runPostgresMigrations(tx: DbExecutor): Promise<void> {
+  // v12: limit, stop-loss, and take-profit orders. A new table only; nothing
+  // existing changes.
+  await tx.run(`CREATE TABLE IF NOT EXISTS working_orders (
+      id TEXT PRIMARY KEY,
+      team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+      actor_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      idempotency_key TEXT NOT NULL,
+      symbol TEXT NOT NULL REFERENCES instruments(symbol),
+      side TEXT NOT NULL CHECK (side IN ('BUY', 'SELL')),
+      order_type TEXT NOT NULL CHECK (order_type IN ('LIMIT', 'STOP_LOSS', 'TAKE_PROFIT')),
+      quantity BIGINT NOT NULL CHECK (quantity > 0),
+      trigger_price_cents BIGINT NOT NULL CHECK (trigger_price_cents > 0),
+      reserved_cash_cents BIGINT NOT NULL DEFAULT 0 CHECK (reserved_cash_cents >= 0),
+      time_in_force TEXT NOT NULL CHECK (time_in_force IN ('DAY', 'GTC')),
+      expires_at TEXT,
+      status TEXT NOT NULL
+        CHECK (status IN ('PENDING_PARENT', 'WORKING', 'FILLED', 'CANCELLED', 'EXPIRED')),
+      status_reason TEXT,
+      parent_id TEXT REFERENCES working_orders(id) ON DELETE SET NULL,
+      oco_group_id TEXT,
+      filled_order_id TEXT REFERENCES orders(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (actor_user_id, idempotency_key)
+  )`);
+  await tx.run(
+    "CREATE INDEX IF NOT EXISTS idx_working_orders_status_symbol ON working_orders (status, symbol)",
+  );
+  await tx.run(
+    "CREATE INDEX IF NOT EXISTS idx_working_orders_team_status ON working_orders (team_id, status)",
+  );
+  await tx.run("ALTER TABLE working_orders ENABLE ROW LEVEL SECURITY");
+
   // v11: ETFs and lot-based crypto. Every existing instrument is a stock
   // priced per share, which is exactly what the defaults describe.
   for (const column of instrumentAssetColumnList("BIGINT")) {
@@ -750,6 +812,7 @@ async function clearDomainData(
   }
 
   const tables = [
+    "working_orders",
     "admin_valuation_positions",
     "admin_valuation_accounts",
     "portfolio_snapshots",

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type {
+  BracketInput,
   CompetitionStatus,
   OrderView,
   PlaceOrderInput,
@@ -10,9 +11,17 @@ import type {
   TradeSide,
 } from "../contracts";
 import { AppError } from "../errors";
-import { acquireAccountReadLock } from "./database";
+import { acquireAccountReadLock, type DbExecutor } from "./database";
 import { cryptoTokenSymbol, formatTokenQuantity, unitWord } from "../lots";
 import { assertTeamLedgerReconciles, getDb } from "./db";
+import {
+  assertBracketPrices,
+  insertBracketExits,
+  optionalPriceCents,
+  readReservations,
+  workingOrderExpiresAt,
+  workingOrdersAvailableTo,
+} from "./working-order-book";
 import {
   isAssetClassEnabled,
   isSymbolBlocked,
@@ -91,6 +100,12 @@ interface HoldingRow {
   average_cost_cents: number;
 }
 
+interface NormalizedBracket {
+  takeProfitCents: number | null;
+  stopLossCents: number | null;
+  timeInForce: "DAY" | "GTC";
+}
+
 interface NormalizedOrderInput {
   actorUserId: string;
   symbol: string;
@@ -98,6 +113,7 @@ interface NormalizedOrderInput {
   quantity: number;
   idempotencyKey: string;
   fingerprint: string;
+  bracket: NormalizedBracket | null;
 }
 
 function normalizeOrderInput(input: PlaceOrderInput): NormalizedOrderInput {
@@ -135,14 +151,64 @@ function normalizeOrderInput(input: PlaceOrderInput): NormalizedOrderInput {
   }
 
   const normalizedSide: TradeSide = side;
+  const bracket = normalizeBracket(input.bracket, normalizedSide);
   return {
     actorUserId,
     symbol,
     side: normalizedSide,
     quantity: input.quantity,
     idempotencyKey,
-    fingerprint: `${actorUserId}|${symbol}|${normalizedSide}|${input.quantity}`,
+    fingerprint:
+      `${actorUserId}|${symbol}|${normalizedSide}|${input.quantity}` +
+      (bracket
+        ? `|tp:${bracket.takeProfitCents ?? "-"}|sl:${bracket.stopLossCents ?? "-"}|${bracket.timeInForce}`
+        : ""),
+    bracket,
   };
+}
+
+/** A bracket with at least one exit set, or null. Only buys can carry one. */
+function normalizeBracket(
+  bracket: BracketInput | undefined,
+  side: TradeSide,
+): NormalizedBracket | null {
+  if (!bracket) return null;
+  const takeProfitCents = optionalPriceCents(bracket.takeProfitCents, "take profit");
+  const stopLossCents = optionalPriceCents(bracket.stopLossCents, "stop loss");
+  if (takeProfitCents === null && stopLossCents === null) return null;
+  if (side !== "BUY") {
+    throw new AppError(
+      "INVALID_BRACKET",
+      "Take profit and stop loss exits can only be attached to a buy.",
+      400,
+    );
+  }
+  const timeInForce = bracket.timeInForce ?? "GTC";
+  if (timeInForce !== "DAY" && timeInForce !== "GTC") {
+    throw new AppError("INVALID_TIME_IN_FORCE", "Choose Day or Good until cancelled.", 400);
+  }
+  return { takeProfitCents, stopLossCents, timeInForce };
+}
+
+/**
+ * Internal options for fills that are not a plain market order from the
+ * order form. Never exposed through the API.
+ */
+export interface FillOptions {
+  /**
+   * Waiting orders this fill carries out. Their own set-aside cash and
+   * shares (and their bracket partner's) are released for it.
+   */
+  releaseWorkingOrderIds?: readonly string[];
+  /** System-triggered fills don't count toward the per-minute order limit. */
+  systemTriggered?: boolean;
+  /** The fill must land in this team's portfolio, or it is refused. */
+  expectTeamId?: string;
+  /** Runs inside the fill's transaction, after the order is recorded. */
+  afterFill?: (
+    tx: DbExecutor,
+    filled: { orderId: string; teamId: string; competitionId: string; actorName: string },
+  ) => Promise<void>;
 }
 
 function parseStoredReceipt(value: string | null): TradeReceipt {
@@ -237,7 +303,10 @@ type PlaceOrderOutcome =
   | { kind: "receipt"; receipt: TradeReceipt }
   | { kind: "replayed-error"; error: AppError };
 
-export async function placeOrder(input: PlaceOrderInput): Promise<TradeReceipt> {
+export async function placeOrder(
+  input: PlaceOrderInput,
+  options: FillOptions = {},
+): Promise<TradeReceipt> {
   const normalized = normalizeOrderInput(input);
   const db = await getDb();
 
@@ -336,6 +405,9 @@ export async function placeOrder(input: PlaceOrderInput): Promise<TradeReceipt> 
       );
     }
   }
+  if (normalized.bracket) {
+    assertBracketPrices(quote.priceCents, normalized.bracket, "current price");
+  }
   const grossCents = quote.priceCadCents * normalized.quantity;
   if (!Number.isSafeInteger(grossCents)) {
     throw new AppError(
@@ -375,7 +447,9 @@ export async function placeOrder(input: PlaceOrderInput): Promise<TradeReceipt> 
           : { kind: "receipt", receipt: stored.receipt as TradeReceipt };
       }
 
-      const rateLimit = maxOrdersPerMinute();
+      const rateLimit = options.systemTriggered
+        ? Number.POSITIVE_INFINITY
+        : maxOrdersPerMinute();
       const windowStartIso = new Date(
         Date.now() - ORDER_RATE_WINDOW_MS,
       ).toISOString();
@@ -525,6 +599,21 @@ export async function placeOrder(input: PlaceOrderInput): Promise<TradeReceipt> 
         );
       }
 
+      if (normalized.bracket && !workingOrdersAvailableTo(account.role)) {
+        throw new AppError(
+          "WORKING_ORDERS_DISABLED",
+          "Take profit and stop loss orders aren't open in this competition yet.",
+          409,
+        );
+      }
+      if (options.expectTeamId && account.team_id !== options.expectTeamId) {
+        throw new AppError(
+          "WORKING_ORDER_TEAM_CHANGED",
+          "The person who placed this order is no longer on the team.",
+          409,
+        );
+      }
+
       const holding = await tx.get<HoldingRow>(
         `SELECT quantity, average_cost_cents
          FROM holdings
@@ -532,6 +621,16 @@ export async function placeOrder(input: PlaceOrderInput): Promise<TradeReceipt> 
         [account.team_id, normalized.symbol],
       );
       const currentQuantity = Number(holding?.quantity ?? 0);
+      // Cash and shares set aside for the team's waiting orders aren't
+      // available to this order, unless this fill is one of those orders.
+      const reservations = await readReservations(
+        tx,
+        account.team_id,
+        options.releaseWorkingOrderIds,
+      );
+      const reservedShares = reservations.sharesBySymbol.get(normalized.symbol) ?? 0;
+      const spendableCashCents = Number(account.cash_cents) - reservations.cashCents;
+      const sellableQuantity = currentQuantity - reservedShares;
       const currentAverageCostCents = Number(holding?.average_cost_cents ?? 0);
       const shareWord = unitWord(quote.assetClass, normalized.quantity);
       // Crypto notes also give the token amount, e.g. "3 lots (0.0003 BTC)".
@@ -544,16 +643,20 @@ export async function placeOrder(input: PlaceOrderInput): Promise<TradeReceipt> 
       let averageCostAfterCents: number;
 
       if (normalized.side === "BUY") {
-        if (grossCents > Number(account.cash_cents)) {
+        if (grossCents > spendableCashCents) {
           throw new AppError(
             "INSUFFICIENT_CASH",
-            isAdminSandbox
+            (isAdminSandbox
               ? "The test account does not have enough buying power for this order."
-              : "The team does not have enough buying power for this order.",
+              : "The team does not have enough buying power for this order.") +
+              (reservations.cashCents > 0
+                ? " Some cash is set aside for waiting orders."
+                : ""),
             409,
             {
-              availableCents: Number(account.cash_cents),
+              availableCents: spendableCashCents,
               requiredCents: grossCents,
+              reservedCents: reservations.cashCents,
             },
           );
         }
@@ -564,14 +667,17 @@ export async function placeOrder(input: PlaceOrderInput): Promise<TradeReceipt> 
             holdingQuantityAfter,
         );
       } else {
-        if (normalized.quantity > currentQuantity) {
+        if (normalized.quantity > sellableQuantity) {
           throw new AppError(
             "INSUFFICIENT_SHARES",
-            `${isAdminSandbox ? "The test account" : "The team"} only owns ${currentQuantity} ${unitWord(quote.assetClass, currentQuantity)} of ${normalized.symbol}.`,
+            reservedShares > 0 && normalized.quantity <= currentQuantity
+              ? `${reservedShares} ${unitWord(quote.assetClass, reservedShares)} of ${normalized.symbol} ${reservedShares === 1 ? "is" : "are"} held for waiting sell orders. Cancel those first, or sell at most ${Math.max(0, sellableQuantity)}.`
+              : `${isAdminSandbox ? "The test account" : "The team"} only owns ${currentQuantity} ${unitWord(quote.assetClass, currentQuantity)} of ${normalized.symbol}.`,
             409,
             {
-              availableShares: currentQuantity,
+              availableShares: Math.max(0, sellableQuantity),
               requestedShares: normalized.quantity,
+              reservedShares,
             },
           );
         }
@@ -727,6 +833,36 @@ export async function placeOrder(input: PlaceOrderInput): Promise<TradeReceipt> 
           createdAt,
         ],
       );
+
+      // A bracket's exits start watching the price as soon as the buy fills.
+      if (normalized.bracket) {
+        await insertBracketExits(tx, {
+          teamId: account.team_id,
+          actorUserId: normalized.actorUserId,
+          idempotencyKey: `bracket:${orderId}`,
+          symbol: normalized.symbol,
+          quantity: normalized.quantity,
+          takeProfitCents: normalized.bracket.takeProfitCents,
+          stopLossCents: normalized.bracket.stopLossCents,
+          timeInForce: normalized.bracket.timeInForce,
+          expiresAt: workingOrderExpiresAt(
+            normalized.bracket.timeInForce,
+            quote.assetClass,
+            new Date(createdAt),
+          ),
+          status: "WORKING",
+          parentId: null,
+          now: createdAt,
+        });
+      }
+      if (options.afterFill) {
+        await options.afterFill(tx, {
+          orderId,
+          teamId: account.team_id,
+          competitionId: account.competition_id,
+          actorName: account.actor_name,
+        });
+      }
 
       await assertTeamLedgerReconciles([account.team_id], tx);
       return { kind: "receipt", receipt };

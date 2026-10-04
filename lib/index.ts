@@ -145,6 +145,23 @@ export type {
 } from "./server/quotes";
 
 export { placeOrder, replayOrder } from "./server/trading";
+export type { FillOptions } from "./server/trading";
+
+export {
+  cancelWorkingOrder,
+  getTeamReservations,
+  listWorkingOrders,
+  placeWorkingOrder,
+  workingOrderLabel,
+} from "./server/working-orders";
+
+export {
+  MAX_OPEN_WORKING_ORDERS_PER_TEAM,
+  readReservations,
+  workingOrderExpiresAt,
+  workingOrderTriggered,
+  workingOrdersAvailableTo,
+} from "./server/working-order-book";
 
 export {
   assertLedgerReconciles,

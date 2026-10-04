@@ -289,7 +289,10 @@ export interface ActivityItem {
     | "TEAM_STATUS_CHANGED"
     | "TEAM_CASH_ADJUSTED"
     | "TEAM_CREATED"
-    | "MEMBER_JOINED";
+    | "MEMBER_JOINED"
+    | "WORKING_ORDER_PLACED"
+    | "WORKING_ORDER_CANCELLED"
+    | "WORKING_ORDER_EXPIRED";
   title: string;
   detail: string;
   actorUserId: string | null;
@@ -337,6 +340,77 @@ export interface PlaceOrderInput {
   side: TradeSide;
   quantity: number;
   idempotencyKey: string;
+  /** Optional exits attached to a market buy (a bracket). */
+  bracket?: BracketInput;
+}
+
+/**
+ * Orders that wait for a price. Take profit is a limit sell with a clearer
+ * name; a stop loss becomes a market sell once the price falls to it, so it
+ * can fill below the stop when the price gaps down, as it would in real life.
+ */
+export type WorkingOrderType = "LIMIT" | "STOP_LOSS" | "TAKE_PROFIT";
+
+/**
+ * PENDING_PARENT: a bracket exit waiting for its buy to fill.
+ * WORKING: watching the price. The rest are final.
+ */
+export type WorkingOrderStatus =
+  | "PENDING_PARENT"
+  | "WORKING"
+  | "FILLED"
+  | "CANCELLED"
+  | "EXPIRED";
+
+/** DAY ends at the next market close; GTC lasts until cancelled or the competition ends. */
+export type TimeInForce = "DAY" | "GTC";
+
+/**
+ * Optional exits for a buy. Each is a price per share (per lot for crypto)
+ * in the listing's currency; either or both may be left out. When one fills,
+ * the other is cancelled.
+ */
+export interface BracketInput {
+  takeProfitCents?: number | null;
+  stopLossCents?: number | null;
+  timeInForce?: TimeInForce;
+}
+
+export interface PlaceWorkingOrderInput {
+  actorUserId: string;
+  symbol: string;
+  side: TradeSide;
+  orderType: WorkingOrderType;
+  quantity: number;
+  /** Price per share (per lot for crypto) in the listing's currency. */
+  triggerPriceCents: number;
+  timeInForce: TimeInForce;
+  idempotencyKey: string;
+  /** Only for a limit buy. */
+  bracket?: BracketInput;
+}
+
+export interface WorkingOrderView {
+  id: string;
+  teamId: string;
+  actorUserId: string;
+  actorName: string;
+  symbol: string;
+  side: TradeSide;
+  orderType: WorkingOrderType;
+  quantity: number;
+  triggerPriceCents: number;
+  listingCurrency: "CAD" | "USD";
+  reservedCashCents: number;
+  timeInForce: TimeInForce;
+  expiresAt: string | null;
+  status: WorkingOrderStatus;
+  statusReason: string | null;
+  parentId: string | null;
+  ocoGroupId: string | null;
+  filledOrderId: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface TradeReceipt {
