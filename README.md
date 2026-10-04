@@ -141,7 +141,11 @@ pnpm test:e2e
 | `GET /api/quotes?symbol=DAKT` | Resolve one supported symbol and return its current quote |
 | `GET /api/quotes/history?symbol=SHOP.TO&range=1D` | Real timestamped OHLCV history and matching quote |
 | `GET /api/orders` | Read visible order history |
-| `POST /api/orders` | Commit an idempotent market order |
+| `POST /api/orders` | Commit an idempotent market order, optionally with take profit/stop loss exits on a buy |
+| `GET /api/working-orders` | The team's waiting orders (`?closed=1` adds filled, cancelled, and expired ones) |
+| `POST /api/working-orders` | Place an idempotent limit, stop loss, or take profit order |
+| `DELETE /api/working-orders/:id` | Cancel a waiting order (any teammate) |
+| `POST /api/cron/working-orders` | Price checker, called every minute by Supabase pg_cron with `CRON_SECRET` |
 | `GET /api/activity` | Read attributed team/competition activity |
 | `GET /api/admin/overview` | Host-only team and competition state |
 | `PATCH /api/admin/competition` | Pause/resume, set the schedule window, or set starting cash |

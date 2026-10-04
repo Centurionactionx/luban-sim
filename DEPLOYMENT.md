@@ -90,6 +90,31 @@ Crypto has two further pauses that need no action from a host:
 
 All prices, including crypto and the USD to CAD rate, come from Yahoo Finance's unofficial API, which has no uptime guarantee. When it's unavailable, trading pauses for the affected symbols.
 
+## Limit, stop loss, and take profit orders
+
+Waiting orders are off for students until `LUBAN_ENABLE_WORKING_ORDERS=true`. Platform admins can always use them in their private sandbox, which is the way to try them on production before opening them up.
+
+A buy can be a market or limit order; a sell can be market, limit, stop loss, or take profit. Buys can carry an optional take profit and stop loss (a bracket); with both, whichever fills first cancels the other. A waiting buy sets aside its cost at the limit (plus 2% on USD listings) and a waiting sell sets aside its shares, so nothing can be spent twice. Each team can have 20 waiting orders. Day orders end at the 4:00 p.m. ET close (midnight ET for crypto); Good until cancelled orders last until they fill, a teammate cancels them, or the competition ends.
+
+The price checker (`lib/server/working-order-engine.ts`) runs from two places:
+
+- Every minute, Supabase `pg_cron` calls `POST /api/cron/working-orders` with `Authorization: Bearer <CRON_SECRET>`, but only while an order is waiting. Set up once with `scripts/working-orders-cron.sql`.
+- As a backup, after dashboard loads and new placements, at most once every 30 seconds per server instance.
+
+Runs may overlap; each order fills at most once. A fill re-checks under the team lock that the order is still waiting, and uses the exact quote that triggered it.
+
+### Turning them on
+
+1. Back up the production database with `pnpm backup:db`.
+2. Deploy the code with `LUBAN_ENABLE_WORKING_ORDERS` unset. Nothing changes for students.
+3. Generate a long random secret, set it as `CRON_SECRET` in Vercel Production, and redeploy.
+4. In the Supabase SQL editor (pg_cron and pg_net enabled), run `scripts/working-orders-cron.sql` with `<CRON_SECRET>` replaced by the same value.
+5. Try the orders from an admin sandbox: a limit buy far below the market stays waiting and can be cancelled; one above the market fills within a minute. `cron.job_run_details` should show calls while it waits.
+6. Publish the updated contest rules and email participants with the start time.
+7. At that time, set `LUBAN_ENABLE_WORKING_ORDERS=true` in Vercel Production and redeploy.
+
+Switching it off again cancels students' waiting orders on the next check ("Waiting orders were switched off.") and frees their cash and shares. Cancelling always works, even while it's off.
+
 ## Schema and transactions
 
 The application creates and seeds its schema on first use, with an advisory lock coordinating PostgreSQL initialization. Incremental schema changes are implemented in `lib/server/db.ts`. Row-level security is enabled without anonymous policies; browser clients do not access the database directly. Formal versioned migration tooling, scheduled backups, and operational monitoring remain deployment work; `pnpm backup:db` covers manual exports.
