@@ -156,6 +156,13 @@ export {
 } from "./server/working-orders";
 
 export {
+  hasOpenWorkingOrders,
+  runWorkingOrders,
+  runWorkingOrdersIfDue,
+} from "./server/working-order-engine";
+export type { WorkingOrderRunReport } from "./server/working-order-engine";
+
+export {
   MAX_OPEN_WORKING_ORDERS_PER_TEAM,
   readReservations,
   workingOrderExpiresAt,

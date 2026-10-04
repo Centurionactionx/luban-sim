@@ -1,7 +1,10 @@
+import { after } from "next/server";
+
 import {
   assertRequestAllowed,
   getDashboard,
   recordPortfolioSnapshot,
+  runWorkingOrdersIfDue,
   isDemoLoginAllowed,
   listDemoUsers,
   refreshAllQuotes,
@@ -29,6 +32,8 @@ export async function GET(request: Request): Promise<Response> {
     if (refreshMarket) await refreshAllQuotes();
     else await refreshMissingQuotes();
     const dashboard = await getDashboard(user.id);
+    // Backup price check for waiting orders, after the response is sent.
+    after(runWorkingOrdersIfDue);
     // Feeds the portfolio history chart; at most one row per team every two
     // hours. A failed write must never cost the person their dashboard.
     if (dashboard.team && dashboard.portfolio) {

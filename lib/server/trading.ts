@@ -204,6 +204,18 @@ export interface FillOptions {
   systemTriggered?: boolean;
   /** The fill must land in this team's portfolio, or it is refused. */
   expectTeamId?: string;
+  /**
+   * Runs inside the fill's transaction, under the team lock and before any
+   * money moves. Throwing here refuses the fill with nothing written; the
+   * working-order engine uses it to confirm the order is still waiting, which
+   * makes triggered fills exactly-once even when two checkers race.
+   */
+  beforeFill?: (tx: DbExecutor) => Promise<void>;
+  /**
+   * Labels the activity entry, e.g. "Stop loss" turns "SELL SHOP.TO" into
+   * "Stop loss: SELL SHOP.TO" and says it was triggered.
+   */
+  activityLabel?: string;
   /** Runs inside the fill's transaction, after the order is recorded. */
   afterFill?: (
     tx: DbExecutor,
@@ -431,6 +443,10 @@ export async function placeOrder(
         [normalized.actorUserId, normalized.actorUserId],
       );
     }
+    // Set once money has moved in this transaction. After that point any error,
+    // even a business rejection, must roll everything back: recording it as a
+    // rejection would commit a half-finished fill.
+    let moneyMoved = false;
     try {
       const existing = await tx.get<IdempotencyRecordRow>(
         `SELECT request_fingerprint, outcome_type, result_json, error_json
@@ -453,10 +469,13 @@ export async function placeOrder(
       const windowStartIso = new Date(
         Date.now() - ORDER_RATE_WINDOW_MS,
       ).toISOString();
+      // Fills triggered by waiting orders (keys starting "working:") are the
+      // system acting, so they never use up a trader's own allowance.
       const recentAttempts = await tx.get<{ count: number }>(
         `SELECT COUNT(*) AS count
          FROM idempotency_records
-         WHERE actor_user_id = ? AND created_at > ?`,
+         WHERE actor_user_id = ? AND created_at > ?
+           AND idempotency_key NOT LIKE 'working:%'`,
         [normalized.actorUserId, windowStartIso],
       );
 
@@ -465,6 +484,7 @@ export async function placeOrder(
           `SELECT created_at
            FROM idempotency_records
            WHERE actor_user_id = ? AND created_at > ?
+             AND idempotency_key NOT LIKE 'working:%'
            ORDER BY created_at ASC
            LIMIT 1`,
           [normalized.actorUserId, windowStartIso],
@@ -613,6 +633,9 @@ export async function placeOrder(
           409,
         );
       }
+      if (options.beforeFill) {
+        await options.beforeFill(tx);
+      }
 
       const holding = await tx.get<HoldingRow>(
         `SELECT quantity, average_cost_cents
@@ -687,6 +710,7 @@ export async function placeOrder(
       }
 
       const portfolioVersion = Number(account.version) + 1;
+      moneyMoved = true;
       const teamUpdate = await tx.run(
         `UPDATE teams SET cash_cents = ?, version = version + 1
          WHERE id = ? AND version = ?`,
@@ -789,8 +813,12 @@ export async function placeOrder(
           account.competition_id,
           account.team_id,
           normalized.actorUserId,
-          `${normalized.side} ${normalized.symbol}`,
-          `${account.actor_name} ${verb.toLowerCase()} ${amountText} of ${normalized.symbol}.`,
+          options.activityLabel
+            ? `${options.activityLabel}: ${normalized.side} ${normalized.symbol}`
+            : `${normalized.side} ${normalized.symbol}`,
+          options.activityLabel
+            ? `${options.activityLabel} triggered: ${account.actor_name}'s order ${verb.toLowerCase()} ${amountText} of ${normalized.symbol}.`
+            : `${account.actor_name} ${verb.toLowerCase()} ${amountText} of ${normalized.symbol}.`,
           createdAt,
         ],
       );
@@ -869,7 +897,7 @@ export async function placeOrder(
     } catch (error) {
       // Persist business rejections while still holding the trader's lock,
       // so a simultaneous retry cannot commit a contradictory outcome.
-      if (shouldPersistRejection(error)) {
+      if (!moneyMoved && shouldPersistRejection(error)) {
         await tx.run(
           `INSERT INTO idempotency_records (
              actor_user_id, idempotency_key, request_fingerprint, outcome_type,
