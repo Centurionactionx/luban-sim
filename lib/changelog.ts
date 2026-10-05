@@ -33,6 +33,14 @@ export const CHANGE_KIND_LABELS: Record<ChangeKind, string> = {
 
 export const CHANGELOG: readonly ChangelogRelease[] = [
   {
+    version: "1.37.1",
+    date: "2026-10-05",
+    title: "Flat buttons in the dark theme",
+    changes: [
+      { kind: "changed", text: "Purple buttons and the stock badge in the dark theme are a flat lavender instead of a gradient." },
+    ],
+  },
+  {
     version: "1.37.0",
     date: "2026-10-05",
     title: "A compact order ticket and display names",

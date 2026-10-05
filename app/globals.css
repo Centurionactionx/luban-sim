@@ -6305,20 +6305,20 @@ html:has(dialog[open]) {
 
 :root[data-theme="dark"] .quote-symbol-block {
   border-color: transparent;
-  background: linear-gradient(140deg, #c3b8ff, #8a74f6);
+  background: var(--purple);
   color: #0d0a1a;
 }
 
-/* Lavender buttons lit from above, with dark labels. */
+/* Flat lavender buttons with dark labels. */
 :root[data-theme="dark"] .button--primary:not(.button--sell),
 :root[data-theme="dark"] .side-control button.is-active:not(.is-active--sell) {
   border-color: transparent;
-  background: linear-gradient(180deg, #b9adff, #9886fb);
+  background: var(--purple);
   color: #0d0a1a;
 }
 
 :root[data-theme="dark"] .button--primary:not(.button--sell):hover:not(:disabled) {
-  background: linear-gradient(180deg, #cdc4ff, #ab9cff);
+  background: #bcb2f6;
   color: #0d0a1a;
 }
 

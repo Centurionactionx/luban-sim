@@ -5,6 +5,12 @@ Releases before v1.28.0 didn't have numbers, so they're listed by date.
 
 <!-- Generated from lib/changelog.ts by `pnpm changelog`. Edit that file, not this one. -->
 
+## v1.37.1: Flat buttons in the dark theme (2026-10-05)
+
+### Improved
+
+- Purple buttons and the stock badge in the dark theme are a flat lavender instead of a gradient.
+
 ## v1.37.0: A compact order ticket and display names (2026-10-05)
 
 ### New
