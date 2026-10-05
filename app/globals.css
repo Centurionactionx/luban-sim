@@ -34,62 +34,42 @@
 }
 
 /*
- * Dark theme. It follows the system setting unless someone picks a theme
- * with the header toggle, which sets data-theme on <html>. Text on lime and
- * the portfolio map's tiles keep their light-theme colours on purpose.
+ * Dark theme, only when someone picks it with the header toggle, which sets
+ * data-theme on <html>. Everyone starts in light, whatever their device
+ * prefers. Text on lime and the portfolio map's tiles keep their
+ * light-theme colours on purpose.
  */
 :root[data-theme="dark"] {
-  --canvas: #120f24;
-  --paper: #1d1a33;
-  --ink: #ebe8fa;
-  --purple: #a194f2;
-  --purple-deep: #c4baff;
-  --quiet-purple: #2b2650;
-  --quiet-purple-2: #24203f;
-  --green: #74dc88;
-  --pink: #ff8fa3;
-  --red: #ff8494;
-  --muted: #a5aac2;
-  --rule: #7c74aa;
-  --hairline: #3b355f;
-  --placeholder: #8c92ad;
-  --positive-wash: #1b3524;
-  --positive-wash-2: #1b3524;
-  --negative-wash: #3d1d27;
-  --neutral-wash: #2a2c3a;
-  --chart-grid: #2f2a52;
-  --callout-text: #d3cdf7;
-  --purple-hover: #c4baff;
-  --offline: #6b7080;
+  /* Neutral graphite surfaces; purple is kept for accents only. */
+  --canvas: #09090b;
+  --paper: #131316;
+  /* Panels inside a tile sit one step above it. */
+  --raised: #1a1a1e;
+  --ink: #ececf0;
+  --purple: #a99df2;
+  --purple-deep: #c6bff5;
+  --quiet-purple: #25232d;
+  --quiet-purple-2: #1b1a20;
+  --green: #6fe08a;
+  --pink: #ff8fa8;
+  --red: #ff7f92;
+  --muted: #a1a1aa;
+  --rule: #2e2e35;
+  --hairline: #222227;
+  --placeholder: #8b8b94;
+  --positive-wash: #14281b;
+  --positive-wash-2: #14281b;
+  --negative-wash: #2f171d;
+  --neutral-wash: #212126;
+  --chart-grid: #1f1f24;
+  --callout-text: #d4d4dc;
+  --purple-hover: #c6bff5;
+  --offline: #5c5c66;
+  /* Tile edges: a faint light line with a lit top edge and a deep drop. */
+  --tile-edge: rgba(255, 255, 255, 0.08);
+  --tile-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0) 160px);
+  --tile-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045), 0 22px 44px -22px rgba(0, 0, 0, 0.9);
   color-scheme: dark;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --canvas: #120f24;
-    --paper: #1d1a33;
-    --ink: #ebe8fa;
-    --purple: #a194f2;
-    --purple-deep: #c4baff;
-    --quiet-purple: #2b2650;
-    --quiet-purple-2: #24203f;
-    --green: #74dc88;
-    --pink: #ff8fa3;
-    --red: #ff8494;
-    --muted: #a5aac2;
-    --rule: #7c74aa;
-    --hairline: #3b355f;
-    --placeholder: #8c92ad;
-    --positive-wash: #1b3524;
-    --positive-wash-2: #1b3524;
-    --negative-wash: #3d1d27;
-    --neutral-wash: #2a2c3a;
-    --chart-grid: #2f2a52;
-    --callout-text: #d3cdf7;
-    --purple-hover: #c4baff;
-    --offline: #6b7080;
-    color-scheme: dark;
-  }
 }
 
 /* Map tiles carry white text, so they keep the light theme's deep colours. */
@@ -97,14 +77,6 @@
   --green: #287337;
   --red: #a92f40;
   --muted: #59666b;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .portfolio-map {
-    --green: #287337;
-    --red: #a92f40;
-    --muted: #59666b;
-  }
 }
 
 * {
@@ -290,7 +262,7 @@ a {
 .chart-header h3,
 .subheading-row,
 .quote-facts dt,
-.ticket-fields span,
+.ticket-quantity label,
 .order-type span,
 .status-footer,
 .route-state__brand {
@@ -1650,7 +1622,7 @@ a {
   font-size: var(--type-meta);
 }
 
-.ticket-fields .quantity-tokens {
+.ticket-quantity .quantity-tokens {
   color: var(--ink);
   font-family: var(--font-data);
 }
@@ -1714,12 +1686,6 @@ a {
   padding: 16px 18px 18px;
 }
 
-.ticket-topline {
-  display: grid;
-  grid-template-columns: minmax(220px, 1fr) 160px;
-  align-items: center;
-  gap: 16px;
-}
 
 .side-control {
   display: grid;
@@ -1778,49 +1744,11 @@ a {
   text-transform: uppercase;
 }
 
-.ticket-fields {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 14px 28px;
-  margin-top: 17px;
-}
 
-.ticket-fields > label,
-.ticket-fields > div {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: center;
-  gap: 4px 12px;
-}
 
-.ticket-fields span {
-  color: var(--muted);
-  font-size: var(--type-meta);
-}
 
-.ticket-fields strong,
-.ticket-fields input {
-  grid-column: 1 / -1;
-  font-family: var(--font-data);
-  font-size: 15px;
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-}
 
-.ticket-fields input {
-  width: 100%;
-  min-height: 46px;
-  padding: 8px 11px;
-  border: 1.5px solid var(--rule);
-  border-radius: 4px;
-  background: var(--quiet-purple-2);
-}
 
-.ticket-fields small {
-  grid-column: 1 / -1;
-  color: var(--muted);
-  font-size: var(--type-description);
-}
 
 .ticket-actions,
 .host-actions {
@@ -2216,26 +2144,8 @@ a {
   font-size: var(--type-description);
 }
 
-.host-locked {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px 14px;
-}
 
-.host-locked p {
-  max-width: 34ch;
-  color: var(--muted);
-  font-size: var(--type-description);
-}
 
-.host-locked .button {
-  min-height: 44px;
-  flex: 0 0 auto;
-  padding: 8px 10px;
-  font-size: 8.5px;
-}
 
 .host-actions {
   grid-template-columns: 1fr 1fr;
@@ -2748,14 +2658,7 @@ a {
     padding-bottom: 12px;
   }
 
-  .ticket-fields {
-    gap: 8px 24px;
-    margin-top: 11px;
-  }
 
-  .ticket-fields input {
-    min-height: 44px;
-  }
 
   .ticket-actions {
     margin-top: 11px;
@@ -2990,13 +2893,7 @@ a {
     grid-column: 1 / -1;
   }
 
-  .ticket-topline {
-    grid-template-columns: 1fr;
-  }
 
-  .ticket-fields {
-    gap: 16px;
-  }
 
   .room-column--team {
     display: block;
@@ -3163,20 +3060,12 @@ a {
     padding-inline: 12px;
   }
 
-  .ticket-fields,
   .ticket-actions,
   .host-actions {
     grid-template-columns: 1fr;
   }
 
-  .host-locked {
-    align-items: stretch;
-    flex-direction: column;
-  }
 
-  .host-locked .button {
-    width: 100%;
-  }
 
   .presence-list,
   .activity-list,
@@ -3641,9 +3530,25 @@ a {
 }
 
 .account-controls {
+  position: relative;
+}
+
+.account-controls__trigger {
+  min-height: 40px;
   display: flex;
   align-items: center;
   gap: 10px;
+  padding: 3px 8px 3px 4px;
+  border: 1.5px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+}
+
+.account-controls__trigger:hover,
+.account-controls[data-open="true"] .account-controls__trigger {
+  border-color: var(--rule);
+  background: var(--quiet-purple-2);
 }
 
 .account-controls__chip {
@@ -3666,24 +3571,83 @@ a {
   white-space: nowrap;
 }
 
-.account-controls__link {
-  min-height: 34px;
-  display: inline-flex;
-  align-items: center;
-  padding: 5px 10px;
+.account-controls__chevron {
+  width: 15px;
+  height: 15px;
+  color: var(--muted);
+  transition: transform 160ms ease;
+}
+
+.account-controls[data-open="true"] .account-controls__chevron {
+  transform: rotate(180deg);
+}
+
+/* The top padding bridges the gap, so moving down onto the menu keeps it open. */
+.account-controls__menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 60;
+  min-width: 100%;
+  padding-top: 6px;
+}
+
+.account-controls__menu[hidden] {
+  display: none;
+}
+
+.account-controls__menu ul {
+  width: max-content;
+  min-width: 220px;
+  margin-left: auto;
+  padding: 6px;
   border: 1.5px solid var(--rule);
-  border-radius: 4px;
+  border-radius: 6px;
   background: var(--paper);
+  box-shadow: 0 10px 24px rgba(0, 23, 31, 0.16);
+  list-style: none;
+}
+
+.account-controls__item {
+  width: 100%;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
   color: var(--ink);
   font-family: var(--font-data);
   font-size: var(--type-meta);
   font-weight: 600;
+  letter-spacing: 0.02em;
+  text-align: left;
   text-decoration: none;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
-.account-controls__link:hover:not(:disabled) {
+.account-controls__item svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.account-controls__item:hover:not(:disabled),
+.account-controls__item:focus-visible {
   background: var(--quiet-purple);
+}
+
+.account-controls__divider {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--hairline);
+}
+
+.account-controls__item--sign-out {
+  color: var(--red);
 }
 
 /* ── Host competition schedule ────────────────────────────────────────── */
@@ -6277,4 +6241,383 @@ html:has(dialog[open]) {
 
 .changelog-release__group li::marker {
   color: var(--purple);
+}
+
+/* -------------------------------------------------------------------------
+   Dark theme surfaces. Near-black canvas lit by a lavender glow, tiles that
+   lift off it on soft shadows instead of drawn outlines, and panels inside
+   them one step brighter. Light theme rules above are untouched.
+   ------------------------------------------------------------------------- */
+
+:root[data-theme="dark"],
+:root[data-theme="dark"] body {
+  background:
+    radial-gradient(1100px 520px at 16% -10%, rgba(140, 120, 255, 0.09), transparent 62%),
+    var(--canvas);
+  background-attachment: fixed;
+}
+
+:root[data-theme="dark"] :focus-visible {
+  box-shadow: 0 0 0 5px var(--canvas);
+}
+
+/* Tiles */
+:root[data-theme="dark"] .app-header,
+:root[data-theme="dark"] .simulation-strip,
+:root[data-theme="dark"] .connection-banner,
+:root[data-theme="dark"] .room-column,
+:root[data-theme="dark"] .room-column + .room-column,
+:root[data-theme="dark"] .status-footer,
+:root[data-theme="dark"] .accounts-sheet,
+:root[data-theme="dark"] .route-state__sheet,
+:root[data-theme="dark"] .chart-dialog,
+:root[data-theme="dark"] .confirm-dialog,
+:root[data-theme="dark"] .activity-bell__panel,
+:root[data-theme="dark"] .account-controls__menu ul {
+  border-color: var(--tile-edge);
+  background: var(--tile-sheen), var(--paper);
+  box-shadow: var(--tile-shadow);
+}
+
+:root[data-theme="dark"] .simulation-strip {
+  border-top: 1px solid var(--hairline);
+  background: var(--tile-sheen), var(--quiet-purple-2);
+}
+
+/* Inner panels: a step brighter than the tile, edged by a hairline. */
+:root[data-theme="dark"] .metric-grid,
+:root[data-theme="dark"] .quote-chart,
+:root[data-theme="dark"] .portfolio-chart,
+:root[data-theme="dark"] .presence-list,
+:root[data-theme="dark"] .leaderboard-section .table-scroll,
+:root[data-theme="dark"] .empty-state {
+  border-color: var(--rule);
+  background-color: var(--raised);
+}
+
+/* The headline value glows from its corner, like a balance card. */
+:root[data-theme="dark"] .portfolio-total {
+  border-color: rgba(255, 255, 255, 0.1);
+  background:
+    radial-gradient(120% 150% at 100% 100%, rgba(150, 128, 255, 0.12), transparent 58%),
+    var(--raised);
+}
+
+:root[data-theme="dark"] .quote-symbol-block {
+  border-color: transparent;
+  background: linear-gradient(140deg, #c3b8ff, #8a74f6);
+  color: #0d0a1a;
+}
+
+/* Lavender buttons lit from above, with dark labels. */
+:root[data-theme="dark"] .button--primary:not(.button--sell),
+:root[data-theme="dark"] .side-control button.is-active:not(.is-active--sell) {
+  border-color: transparent;
+  background: linear-gradient(180deg, #b9adff, #9886fb);
+  color: #0d0a1a;
+}
+
+:root[data-theme="dark"] .button--primary:not(.button--sell):hover:not(:disabled) {
+  background: linear-gradient(180deg, #cdc4ff, #ab9cff);
+  color: #0d0a1a;
+}
+
+/* Charts: a deeper fill fading to nothing, and a lit line. */
+:root[data-theme="dark"] .chart__fill-stop--top {
+  stop-opacity: 0.5;
+}
+
+:root[data-theme="dark"] .chart__fill-stop--bottom {
+  stop-opacity: 0;
+}
+
+:root[data-theme="dark"] .chart__line {
+  filter: drop-shadow(0 2px 6px rgba(169, 157, 242, 0.3));
+}
+
+/* The map's gaps and sector strips were ink, which turns light here. */
+:root[data-theme="dark"] .portfolio-map__holdings-area {
+  background: var(--canvas);
+}
+
+:root[data-theme="dark"] .portfolio-map__sector > span {
+  background: var(--quiet-purple);
+  color: var(--ink);
+}
+
+:root[data-theme="dark"] .portfolio-map__industry {
+  background: #2a2a31;
+  color: var(--ink);
+}
+
+/* Credit for the map's design, at the foot of its controls column. */
+.portfolio-map__credit {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+
+.portfolio-map__credit a {
+  color: var(--purple-deep);
+}
+
+/* The account page's display-name form. */
+.display-name-form {
+  display: grid;
+  gap: 8px;
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--hairline);
+}
+
+.display-name-form label {
+  font-family: var(--font-data);
+  font-size: var(--type-meta);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.display-name-form__row {
+  display: flex;
+  gap: 8px;
+}
+
+.display-name-form__row input {
+  min-width: 0;
+  min-height: 42px;
+  flex: 1;
+  padding: 8px 11px;
+  border: 1.5px solid var(--rule);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.display-name-form__row .button {
+  margin-top: 0;
+}
+
+.display-name-form__status {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.display-name-form__status--saved {
+  color: var(--green);
+}
+
+.display-name-form__status--error {
+  color: var(--red);
+}
+
+/* -------------------------------------------------------------------------
+   Order ticket: choices on the left, a receipt on the right that adds up to
+   the total, with the button under it. Stacks when the column is narrow.
+   ------------------------------------------------------------------------- */
+
+.order-ticket {
+  container-type: inline-size;
+}
+
+.ticket-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.ticket-inputs {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+}
+
+.ticket-inputs .ticket-conditions,
+.ticket-inputs .ticket-bracket {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  margin-top: 0;
+}
+
+.ticket-quantity {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 4px 10px;
+}
+
+.ticket-quantity input {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 11px;
+  border: 1.5px solid var(--rule);
+  border-radius: 4px;
+  background: var(--quiet-purple-2);
+  font-family: var(--font-data);
+  font-size: 15px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.ticket-quantity small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: var(--type-description);
+}
+
+.ticket-exits__add {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  border: 1px dashed var(--purple);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--purple-deep);
+  font-size: 11.5px;
+  font-weight: 500;
+  text-align: left;
+}
+
+.ticket-exits__add:hover {
+  background: var(--quiet-purple-2);
+}
+
+.ticket-exits__add svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+
+.ticket-exits__remove {
+  margin-left: auto;
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  letter-spacing: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-transform: none;
+}
+
+.ticket-exits__remove:hover {
+  color: var(--red);
+}
+
+.ticket-receipt {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 12px 14px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background: var(--quiet-purple-2);
+}
+
+.ticket-receipt dl > div {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  gap: 2px 10px;
+  padding: 4px 0;
+}
+
+.ticket-receipt dt {
+  color: var(--muted);
+  font-size: var(--type-description);
+}
+
+.ticket-receipt dd {
+  font-family: var(--font-data);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.ticket-receipt .ticket-receipt__total {
+  margin-top: 4px;
+  padding-top: 9px;
+  border-top: 1px solid var(--rule);
+}
+
+.ticket-receipt__total dt {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.ticket-receipt__total dd {
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.ticket-receipt dd.ticket-receipt__note {
+  grid-column: 1 / -1;
+  font-weight: 400;
+  color: var(--muted);
+  font-family: var(--font-ui);
+  text-align: left;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.ticket-receipt .ticket-receipt__after {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--rule);
+}
+
+.ticket-receipt dd.ticket-receipt__sub {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: 10px;
+  text-align: left;
+}
+
+.ticket-receipt__after.is-short dd:not(.ticket-receipt__sub) {
+  color: var(--red);
+}
+
+.ticket-receipt > .button {
+  width: 100%;
+}
+
+.ticket-receipt dl {
+  margin-bottom: 12px;
+}
+
+.ticket-receipt__clear {
+  align-self: center;
+  margin-top: 6px;
+  padding: 4px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.ticket-receipt__clear:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+.order-ticket > .ticket-message {
+  margin-top: 12px;
+}
+
+@container (max-width: 400px) {
+  .ticket-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }

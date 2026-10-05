@@ -310,6 +310,14 @@ export function PortfolioMap({
         >
           View as list
         </button>
+        <p className="portfolio-map__credit">
+          Inspired by the{" "}
+          <a href="https://finviz.com/map.ashx" target="_blank" rel="noopener noreferrer">
+            Finviz stock market map
+            <span className="sr-only"> (opens in a new tab)</span>
+          </a>
+          .
+        </p>
       </div>
 
       <div className="portfolio-map__stage">

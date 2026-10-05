@@ -5,6 +5,21 @@ Releases before v1.28.0 didn't have numbers, so they're listed by date.
 
 <!-- Generated from lib/changelog.ts by `pnpm changelog`. Edit that file, not this one. -->
 
+## v1.37.0: A compact order ticket and display names (2026-10-05)
+
+### New
+
+- Change the name your team sees from the Account page. It updates the header, your team's member list and every trade you've placed.
+- The portfolio map credits the Finviz stock market map that inspired it, with a link.
+
+### Improved
+
+- A more compact order ticket. Your choices sit on the left and a receipt on the right adds up the total and shows the cash or shares you'll have left. Take profit and stop loss fold away until you add them.
+- Students no longer see the Host controls panel at all.
+- Account and Sign out moved into a menu that opens when you hover over your name (or tap it). Platform admins also find the valuation lab and user feedback there.
+- A refreshed dark theme: neutral near-black panels that float on soft shadows instead of bright outlines, with purple kept for buttons, charts and highlights.
+- The app always opens in the light theme, even if your device is set to dark. Switch to dark with the sun/moon button in the header and it'll stay that way.
+
 ## v1.36.0: Team watchlists and trade history (2026-10-05)
 
 ### New

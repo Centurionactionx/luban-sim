@@ -33,6 +33,20 @@ export const CHANGE_KIND_LABELS: Record<ChangeKind, string> = {
 
 export const CHANGELOG: readonly ChangelogRelease[] = [
   {
+    version: "1.37.0",
+    date: "2026-10-05",
+    title: "A compact order ticket and display names",
+    changes: [
+      { kind: "added", text: "Change the name your team sees from the Account page. It updates the header, your team's member list and every trade you've placed." },
+      { kind: "added", text: "The portfolio map credits the Finviz stock market map that inspired it, with a link." },
+      { kind: "changed", text: "A more compact order ticket. Your choices sit on the left and a receipt on the right adds up the total and shows the cash or shares you'll have left. Take profit and stop loss fold away until you add them." },
+      { kind: "changed", text: "Students no longer see the Host controls panel at all." },
+      { kind: "changed", text: "Account and Sign out moved into a menu that opens when you hover over your name (or tap it). Platform admins also find the valuation lab and user feedback there." },
+      { kind: "changed", text: "A refreshed dark theme: neutral near-black panels that float on soft shadows instead of bright outlines, with purple kept for buttons, charts and highlights." },
+      { kind: "changed", text: "The app always opens in the light theme, even if your device is set to dark. Switch to dark with the sun/moon button in the header and it'll stay that way." },
+    ],
+  },
+  {
     version: "1.36.0",
     date: "2026-10-05",
     title: "Team watchlists and trade history",

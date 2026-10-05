@@ -7,25 +7,19 @@ import { THEME_STORAGE_KEY, type ThemeChoice } from "@/lib/theme";
 import { MoonIcon, SunIcon } from "./simulator-icons";
 
 const THEME_EVENT = "luban:theme";
-const DARK_QUERY = "(prefers-color-scheme: dark)";
 
 function subscribe(onChange: () => void): () => void {
-  const media = window.matchMedia(DARK_QUERY);
-  media.addEventListener("change", onChange);
   window.addEventListener(THEME_EVENT, onChange);
   window.addEventListener("storage", onChange);
   return () => {
-    media.removeEventListener("change", onChange);
     window.removeEventListener(THEME_EVENT, onChange);
     window.removeEventListener("storage", onChange);
   };
 }
 
-/** The theme on screen: the saved choice, or else the system's. */
+/** The theme on screen: dark only when someone chose it. */
 function currentTheme(): ThemeChoice {
-  const chosen = document.documentElement.dataset.theme;
-  if (chosen === "light" || chosen === "dark") return chosen;
-  return window.matchMedia(DARK_QUERY).matches ? "dark" : "light";
+  return document.documentElement.dataset.theme === "dark" ? "dark" : "light";
 }
 
 function applyTheme(theme: ThemeChoice): void {

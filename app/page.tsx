@@ -66,6 +66,7 @@ export default async function Home() {
         <AccountControls
           name={state.user.name}
           initials={state.user.initials}
+          isPlatformAdmin={state.user.role === "platform_admin"}
         />
       }
     />

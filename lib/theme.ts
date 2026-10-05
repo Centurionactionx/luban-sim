@@ -1,7 +1,7 @@
 /**
- * The light/dark choice. "system" (nothing saved) follows the operating
- * system; picking a theme saves it in this browser and sets data-theme on
- * <html>, which globals.css reads.
+ * The light/dark choice. With nothing saved the app is light, whatever the
+ * device prefers; picking a theme saves it in this browser and sets
+ * data-theme on <html>, which globals.css reads.
  */
 export type ThemeChoice = "light" | "dark";
 

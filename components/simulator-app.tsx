@@ -82,6 +82,7 @@ import {
   ChatIcon,
   ChevronDownIcon,
   DownloadIcon,
+  PlusIcon,
   HistoryIcon,
   StarIcon,
   CalendarIcon,
@@ -580,6 +581,11 @@ function parseCashDraft(value: string): number | null {
 
 function formatSignedMoney(cents: number): string {
   return `${cents >= 0 ? "+" : "−"}${formatMoney(Math.abs(cents))}`;
+}
+
+/** Cash that can go below zero: shows a minus sign instead of a plus. */
+function formatSignedCash(cents: number): string {
+  return cents < 0 ? `−${formatMoney(-cents)}` : formatMoney(cents);
 }
 
 function formatPercent(value: number): string {
@@ -2536,6 +2542,8 @@ export function SimulatorApp({
   // Bracket exits start blank: they are optional.
   const [takeProfitPrice, setTakeProfitPrice] = useState("");
   const [stopLossPrice, setStopLossPrice] = useState("");
+  // Exits stay folded until someone asks for them or has typed one.
+  const [exitsOpen, setExitsOpen] = useState(false);
   const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(null);
   const [workingOrdersFeedback, setWorkingOrdersFeedback] = useState<TicketStatus | null>(
     null,
@@ -3066,6 +3074,7 @@ export function SimulatorApp({
         )
       : selectedQuote.priceCadCents;
   const estimatedValue = quantityIsValid ? ticketUnitCadCents * wholeQuantity : 0;
+  const exitsShown = exitsOpen || takeProfitPrice.trim() !== "" || stopLossPrice.trim() !== "";
   // The price an exit is judged against: the limit for a limit buy, or the
   // current price for a market buy.
   const bracketEntryCents =
@@ -3145,6 +3154,11 @@ export function SimulatorApp({
   const quoteLoaded =
     connection === "connected" &&
     !(selectedQuote.source === "LUBAN_SIMULATED" && selectedQuote.isStale);
+  // What a buy leaves to spend; null until there's a total to subtract.
+  const receiptCashLeft =
+    side === "BUY" && quoteLoaded && quantityIsValid && (!isWaitingOrder || triggerPriceCents !== null)
+      ? portfolio.buyingPowerCents - estimatedValue
+      : null;
   // Students can only trade while the listing's exchange is open; the server
   // enforces this too. The admin sandbox ignores market hours.
   const marketOpenForTrader = isPlatformAdmin || selectedQuote.marketOpen;
@@ -5655,242 +5669,136 @@ export function SimulatorApp({
             </dialog>
 
             <form className="order-ticket" id="order-ticket" onSubmit={placeOrder}>
-              <div className="ticket-topline">
-                <fieldset className="side-control">
-                  <legend className="sr-only">Order side</legend>
-                  <button
-                    type="button"
-                    className={side === "BUY" ? "is-active" : ""}
-                    aria-pressed={side === "BUY"}
-                    onClick={() => {
-                      setSide("BUY");
-                      editTicket();
-                      // Stop loss and take profit only sell.
-                      if (orderType === "STOP_LOSS" || orderType === "TAKE_PROFIT") {
-                        setOrderType("MARKET");
-                      }
-                    }}
-                  >
-                    Buy
-                  </button>
-                  <button
-                    type="button"
-                    className={side === "SELL" ? "is-active is-active--sell" : ""}
-                    aria-pressed={side === "SELL"}
-                    onClick={() => {
-                      setSide("SELL");
-                      editTicket();
-                    }}
-                  >
-                    Sell
-                  </button>
-                </fieldset>
-                {workingOrdersEnabled ? (
-                  <div className="order-type order-type--select">
-                    <span className="ticket-label-row">
-                      <label htmlFor="order-type-select">Order type</label>
-                      <HelpTip id="order-type-help" label="What do the order types mean?">
-                        <span className="help-tip__line">
-                          <strong>Market</strong> buys or sells right away at the current price.
-                        </span>
-                        <span className="help-tip__line">
-                          <strong>Limit</strong> waits for your price or better: a limit buy fills
-                          at or below it, a limit sell at or above it.
-                        </span>
-                        <span className="help-tip__line">
-                          <strong>Stop loss</strong> sells if the price falls to your stop, to cap
-                          a loss. It sells at the next price available, which can be lower if the
-                          price drops quickly.
-                        </span>
-                        <span className="help-tip__line">
-                          <strong>Take profit</strong> sells once the price rises to your target,
-                          to lock in a gain.
-                        </span>
-                      </HelpTip>
-                    </span>
-                    <select
-                      id="order-type-select"
-                      value={ticketOrderType}
-                      onChange={(event) => {
-                        setOrderType(event.target.value as TicketOrderType);
+              <div className="ticket-layout">
+                <div className="ticket-inputs">
+                  <fieldset className="side-control">
+                    <legend className="sr-only">Order side</legend>
+                    <button
+                      type="button"
+                      className={side === "BUY" ? "is-active" : ""}
+                      aria-pressed={side === "BUY"}
+                      onClick={() => {
+                        setSide("BUY");
+                        editTicket();
+                        // Stop loss and take profit only sell.
+                        if (orderType === "STOP_LOSS" || orderType === "TAKE_PROFIT") {
+                          setOrderType("MARKET");
+                        }
+                      }}
+                    >
+                      Buy
+                    </button>
+                    <button
+                      type="button"
+                      className={side === "SELL" ? "is-active is-active--sell" : ""}
+                      aria-pressed={side === "SELL"}
+                      onClick={() => {
+                        setSide("SELL");
                         editTicket();
                       }}
                     >
-                      {(side === "BUY" ? BUY_ORDER_TYPES : SELL_ORDER_TYPES).map((type) => (
-                        <option key={type} value={type}>
-                          {ORDER_TYPE_LABELS[type]}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                ) : (
-                  <div className="order-type">
-                    <span>Order type</span>
-                    <strong>Market</strong>
-                  </div>
-                )}
-              </div>
-
-              {isWaitingOrder ? (
-                <div className="ticket-conditions">
-                  <div className="ticket-condition">
-                    <label htmlFor="order-trigger-price">
-                      {triggerPriceLabel} · {priceInputUnit}
-                    </label>
-                    <input
-                      id="order-trigger-price"
-                      inputMode="decimal"
-                      autoComplete="off"
-                      type="text"
-                      value={triggerPrice}
-                      onChange={(event) => {
-                        setTriggerPrice(event.target.value);
-                        editTicket();
-                      }}
-                      aria-describedby="order-trigger-help"
-                    />
-                    <small id="order-trigger-help">
-                      {ticketOrderType === "STOP_LOSS"
-                        ? "Sells if the price falls to this"
-                        : ticketOrderType === "TAKE_PROFIT"
-                          ? "Sells if the price rises to this"
-                          : side === "BUY"
-                            ? "Buys at this price or lower"
-                            : "Sells at this price or higher"}
-                      {quoteLoaded
-                        ? ` · now ${currentPriceText}${selectedIsCrypto ? ` per ${selectedToken}` : ""}`
-                        : ""}
-                      {selectedIsCrypto && triggerPriceCents !== null
-                        ? ` · ${formatNativeMoney(triggerPriceCents, selectedQuote.listingCurrency)} per lot`
-                        : ""}
-                      {triggerParsed.rounded && triggerPriceCents !== null
-                        ? ` · rounds to ${ticketPriceText(triggerPriceCents)} (steps of ${priceStepText})`
-                        : ""}
-                    </small>
-                  </div>
-                  <div className="ticket-condition">
-                    <span className="ticket-label-row">
-                      <label htmlFor="order-time-in-force">Time in force</label>
-                      <HelpTip id="time-in-force-help" label="What do Day and Good until cancelled mean?">
-                        <span className="help-tip__line">
-                          <strong>Day</strong> cancels the order at the end of the trading day
-                          ({selectedIsCrypto ? "midnight ET for crypto" : "4:00 p.m. ET"}) if it
-                          hasn&apos;t filled. Placed after the close, it lasts through the next
-                          trading day.
-                        </span>
-                        <span className="help-tip__line">
-                          <strong>Good until cancelled</strong> keeps it waiting until it fills,
-                          someone on your team cancels it, or the competition ends.
-                        </span>
-                      </HelpTip>
-                    </span>
-                    <select
-                      id="order-time-in-force"
-                      value={timeInForce}
-                      onChange={(event) => {
-                        setTimeInForce(event.target.value as TimeInForce);
-                        editTicket();
-                      }}
-                    >
-                      <option value="DAY">Day</option>
-                      <option value="GTC">Good until cancelled</option>
-                    </select>
-                    <small>
-                      {timeInForce === "DAY"
-                        ? `Ends ${selectedIsCrypto ? "at midnight ET" : "at 4:00 p.m. ET"} if not filled`
-                        : "Waits until it fills or is cancelled"}
-                    </small>
-                  </div>
-                </div>
-              ) : null}
-
-              {bracketAllowed ? (
-                <div
-                  className="ticket-bracket"
-                  role="group"
-                  aria-labelledby="bracket-heading"
-                >
-                  <div className="ticket-label-row ticket-bracket__title">
-                    <span id="bracket-heading">Exits for this buy</span>
-                    <HelpTip id="bracket-help" label="What are take profit and stop loss?">
-                      <span className="help-tip__line">
-                        <strong>Take profit</strong> sells these {unitWord(selectedAssetClass, 2)}{" "}
-                        automatically if the price rises to the level you set, locking in a gain.
-                      </span>
-                      <span className="help-tip__line">
-                        <strong>Stop loss</strong> sells them automatically if the price falls to
-                        the level you set, capping a loss.
-                      </span>
-                      <span className="help-tip__line">
-                        Set either, both, or neither. With both, whichever fills first cancels the
-                        other.
-                        {ticketOrderType === "LIMIT"
-                          ? " They start watching once the limit buy fills."
-                          : " They start watching as soon as the buy fills."}
-                      </span>
-                    </HelpTip>
-                  </div>
-                  <div className="ticket-condition">
-                    <label htmlFor="bracket-take-profit">
-                      Take profit <em className="optional-note">(optional)</em>
-                    </label>
-                    <input
-                      id="bracket-take-profit"
-                      inputMode="decimal"
-                      autoComplete="off"
-                      type="text"
-                      placeholder={priceInputUnit}
-                      value={takeProfitPrice}
-                      onChange={(event) => {
-                        setTakeProfitPrice(event.target.value);
-                        editTicket();
-                      }}
-                    />
-                    {takeProfitParsed.rounded && takeProfitCents !== null ? (
-                      <small>Rounds up to {ticketPriceText(takeProfitCents)}</small>
-                    ) : null}
-                  </div>
-                  <div className="ticket-condition">
-                    <label htmlFor="bracket-stop-loss">
-                      Stop loss <em className="optional-note">(optional)</em>
-                    </label>
-                    <input
-                      id="bracket-stop-loss"
-                      inputMode="decimal"
-                      autoComplete="off"
-                      type="text"
-                      placeholder={priceInputUnit}
-                      value={stopLossPrice}
-                      onChange={(event) => {
-                        setStopLossPrice(event.target.value);
-                        editTicket();
-                      }}
-                    />
-                    {stopLossParsed.rounded && stopLossCents !== null ? (
-                      <small>Rounds down to {ticketPriceText(stopLossCents)}</small>
-                    ) : null}
-                  </div>
-                  {ticketOrderType === "MARKET" && (takeProfitEntered || stopLossEntered) ? (
-                    <div className="ticket-condition ticket-condition--wide">
+                      Sell
+                    </button>
+                  </fieldset>
+                  {workingOrdersEnabled ? (
+                    <div className="order-type order-type--select">
                       <span className="ticket-label-row">
-                        <label htmlFor="bracket-time-in-force">Exits last</label>
-                        <HelpTip
-                          id="bracket-time-in-force-help"
-                          label="What do Day and Good until cancelled mean?"
-                        >
+                        <label htmlFor="order-type-select">Order type</label>
+                        <HelpTip id="order-type-help" label="What do the order types mean?">
                           <span className="help-tip__line">
-                            <strong>Day</strong> cancels the exits at the end of the trading day
-                            ({selectedIsCrypto ? "midnight ET for crypto" : "4:00 p.m. ET"}) if
-                            they haven&apos;t filled.
+                            <strong>Market</strong> buys or sells right away at the current price.
                           </span>
                           <span className="help-tip__line">
-                            <strong>Good until cancelled</strong> keeps them waiting until one
-                            fills, someone on your team cancels them, or the competition ends.
+                            <strong>Limit</strong> waits for your price or better: a limit buy fills
+                            at or below it, a limit sell at or above it.
+                          </span>
+                          <span className="help-tip__line">
+                            <strong>Stop loss</strong> sells if the price falls to your stop, to cap
+                            a loss. It sells at the next price available, which can be lower if the
+                            price drops quickly.
+                          </span>
+                          <span className="help-tip__line">
+                            <strong>Take profit</strong> sells once the price rises to your target,
+                            to lock in a gain.
                           </span>
                         </HelpTip>
                       </span>
                       <select
-                        id="bracket-time-in-force"
+                        id="order-type-select"
+                        value={ticketOrderType}
+                        onChange={(event) => {
+                          setOrderType(event.target.value as TicketOrderType);
+                          editTicket();
+                        }}
+                      >
+                        {(side === "BUY" ? BUY_ORDER_TYPES : SELL_ORDER_TYPES).map((type) => (
+                          <option key={type} value={type}>
+                            {ORDER_TYPE_LABELS[type]}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : (
+                    <div className="order-type">
+                      <span>Order type</span>
+                      <strong>Market</strong>
+                    </div>
+                  )}
+                {isWaitingOrder ? (
+                  <div className="ticket-conditions">
+                    <div className="ticket-condition">
+                      <label htmlFor="order-trigger-price">
+                        {triggerPriceLabel} · {priceInputUnit}
+                      </label>
+                      <input
+                        id="order-trigger-price"
+                        inputMode="decimal"
+                        autoComplete="off"
+                        type="text"
+                        value={triggerPrice}
+                        onChange={(event) => {
+                          setTriggerPrice(event.target.value);
+                          editTicket();
+                        }}
+                        aria-describedby="order-trigger-help"
+                      />
+                      <small id="order-trigger-help">
+                        {ticketOrderType === "STOP_LOSS"
+                          ? "Sells if the price falls to this"
+                          : ticketOrderType === "TAKE_PROFIT"
+                            ? "Sells if the price rises to this"
+                            : side === "BUY"
+                              ? "Buys at this price or lower"
+                              : "Sells at this price or higher"}
+                        {quoteLoaded
+                          ? ` · now ${currentPriceText}${selectedIsCrypto ? ` per ${selectedToken}` : ""}`
+                          : ""}
+                        {selectedIsCrypto && triggerPriceCents !== null
+                          ? ` · ${formatNativeMoney(triggerPriceCents, selectedQuote.listingCurrency)} per lot`
+                          : ""}
+                        {triggerParsed.rounded && triggerPriceCents !== null
+                          ? ` · rounds to ${ticketPriceText(triggerPriceCents)} (steps of ${priceStepText})`
+                          : ""}
+                      </small>
+                    </div>
+                    <div className="ticket-condition">
+                      <span className="ticket-label-row">
+                        <label htmlFor="order-time-in-force">Time in force</label>
+                        <HelpTip id="time-in-force-help" label="What do Day and Good until cancelled mean?">
+                          <span className="help-tip__line">
+                            <strong>Day</strong> cancels the order at the end of the trading day
+                            ({selectedIsCrypto ? "midnight ET for crypto" : "4:00 p.m. ET"}) if it
+                            hasn&apos;t filled. Placed after the close, it lasts through the next
+                            trading day.
+                          </span>
+                          <span className="help-tip__line">
+                            <strong>Good until cancelled</strong> keeps it waiting until it fills,
+                            someone on your team cancels it, or the competition ends.
+                          </span>
+                        </HelpTip>
+                      </span>
+                      <select
+                        id="order-time-in-force"
                         value={timeInForce}
                         onChange={(event) => {
                           setTimeInForce(event.target.value as TimeInForce);
@@ -5900,231 +5808,399 @@ export function SimulatorApp({
                         <option value="DAY">Day</option>
                         <option value="GTC">Good until cancelled</option>
                       </select>
+                      <small>
+                        {timeInForce === "DAY"
+                          ? `Ends ${selectedIsCrypto ? "at midnight ET" : "at 4:00 p.m. ET"} if not filled`
+                          : "Waits until it fills or is cancelled"}
+                      </small>
                     </div>
-                  ) : null}
-                </div>
-              ) : null}
+                  </div>
+                ) : null}
+                  <div className="ticket-quantity">
+                    <label htmlFor="order-quantity">
+                      <span>Quantity · {selectedIsCrypto ? "Lots" : "Shares"}</span>
+                    </label>
+                    <button
+                      type="button"
+                      className="ticket-max"
+                      disabled={!quoteLoaded || maxOrderQuantity < 1}
+                      aria-haspopup="dialog"
+                      onClick={() => maxConfirmRef.current?.showModal()}
+                      title={
+                        side === "BUY"
+                          ? `Buy as many ${unitWord(selectedAssetClass, 2)} as the cash allows`
+                          : `Sell every ${unitWord(selectedAssetClass, 1)} held`
+                      }
+                    >
+                      {side === "BUY" ? "Max" : "All"}
+                      {quoteLoaded && maxOrderQuantity > 0
+                        ? ` · ${number.format(maxOrderQuantity)}`
+                        : ""}
+                    </button>
+                    <dialog
+                      ref={maxConfirmRef}
+                      className="confirm-dialog"
+                      role="alertdialog"
+                      aria-labelledby="max-confirm-title"
+                      aria-describedby="max-confirm-body"
+                      onClick={(event) => {
+                        if (event.target === event.currentTarget) event.currentTarget.close();
+                      }}
+                    >
+                      <h2 id="max-confirm-title">
+                        {side === "BUY" ? "Buy the maximum?" : "Sell everything?"}
+                      </h2>
+                      <div id="max-confirm-body">
+                        <p>
+                          {side === "BUY" ? (
+                            <>
+                              This sets the quantity to{" "}
+                              <strong>
+                                {number.format(maxOrderQuantity)}{" "}
+                                {unitWord(selectedAssetClass, maxOrderQuantity)} of{" "}
+                                {selectedQuote.symbol}
+                              </strong>
+                              , about{" "}
+                              <strong>{formatMoney(maxOrderQuantity * ticketUnitCadCents)}</strong>.
+                              That uses nearly all of the{" "}
+                              {formatMoney(portfolio.buyingPowerCents)} in buying power.
+                            </>
+                          ) : (
+                            <>
+                              This sets the quantity to all{" "}
+                              <strong>
+                                {number.format(maxOrderQuantity)}{" "}
+                                {unitWord(selectedAssetClass, maxOrderQuantity)} of{" "}
+                                {selectedQuote.symbol}
+                              </strong>{" "}
+                              that can be sold, about{" "}
+                              <strong>{formatMoney(maxOrderQuantity * ticketUnitCadCents)}</strong>.
+                              The whole position would be closed.
+                            </>
+                          )}
+                        </p>
+                        <p className="confirm-dialog__note">
+                          Nothing is {side === "BUY" ? "bought" : "sold"} until you place the
+                          order.
+                        </p>
+                      </div>
+                      <div className="confirm-dialog__actions">
+                        <button
+                          type="button"
+                          className="button button--secondary"
+                          autoFocus
+                          onClick={() => maxConfirmRef.current?.close()}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          className="button button--primary"
+                          onClick={() => {
+                            setQuantity(String(maxOrderQuantity));
+                            editTicket();
+                            maxConfirmRef.current?.close();
+                            document.getElementById("order-quantity")?.focus();
+                          }}
+                        >
+                          Use {number.format(maxOrderQuantity)}{" "}
+                          {unitWord(selectedAssetClass, maxOrderQuantity)}
+                        </button>
+                      </div>
+                    </dialog>
+                    <input
+                      id="order-quantity"
+                      inputMode="numeric"
+                      min="1"
+                      max="100000"
+                      step="1"
+                      type="number"
+                      value={quantity}
+                      onChange={(event) => {
+                        setQuantity(event.target.value);
+                        editTicket();
+                      }}
+                      aria-describedby={
+                        selectedIsCrypto
+                          ? `quantity-help quantity-tokens${tradingHaltReason ? " quote-halt" : ""}`
+                          : `quantity-help${tradingHaltReason ? " quote-halt" : ""}`
+                      }
+                    />
+                    <small id="quantity-help">
+                      {selectedIsCrypto
+                        ? `Whole lots only · 1 lot = ${tokenAmountLabel(1, selectedLotSize, selectedQuote.symbol)}`
+                        : "Whole shares only"}
+                    </small>
+                    {selectedIsCrypto ? (
+                      <small id="quantity-tokens" className="quantity-tokens">
+                        {quantityIsValid
+                          ? `= ${tokenAmountLabel(wholeQuantity, selectedLotSize, selectedQuote.symbol)}`
+                          : `Enter lots to see the ${selectedToken} amount`}
+                      </small>
+                    ) : null}
+                  </div>
 
-              <div className="ticket-fields">
-                <div className="ticket-quantity">
-                  <label htmlFor="order-quantity">
-                    <span>Quantity · {selectedIsCrypto ? "Lots" : "Shares"}</span>
-                  </label>
-                  <button
-                    type="button"
-                    className="ticket-max"
-                    disabled={!quoteLoaded || maxOrderQuantity < 1}
-                    aria-haspopup="dialog"
-                    onClick={() => maxConfirmRef.current?.showModal()}
-                    title={
-                      side === "BUY"
-                        ? `Buy as many ${unitWord(selectedAssetClass, 2)} as the cash allows`
-                        : `Sell every ${unitWord(selectedAssetClass, 1)} held`
-                    }
-                  >
-                    {side === "BUY" ? "Max" : "All"}
-                    {quoteLoaded && maxOrderQuantity > 0
-                      ? ` · ${number.format(maxOrderQuantity)}`
-                      : ""}
-                  </button>
-                  <dialog
-                    ref={maxConfirmRef}
-                    className="confirm-dialog"
-                    role="alertdialog"
-                    aria-labelledby="max-confirm-title"
-                    aria-describedby="max-confirm-body"
-                    onClick={(event) => {
-                      if (event.target === event.currentTarget) event.currentTarget.close();
-                    }}
-                  >
-                    <h2 id="max-confirm-title">
-                      {side === "BUY" ? "Buy the maximum?" : "Sell everything?"}
-                    </h2>
-                    <div id="max-confirm-body">
-                      <p>
-                        {side === "BUY" ? (
-                          <>
-                            This sets the quantity to{" "}
-                            <strong>
-                              {number.format(maxOrderQuantity)}{" "}
-                              {unitWord(selectedAssetClass, maxOrderQuantity)} of{" "}
-                              {selectedQuote.symbol}
-                            </strong>
-                            , about{" "}
-                            <strong>{formatMoney(maxOrderQuantity * ticketUnitCadCents)}</strong>.
-                            That uses nearly all of the{" "}
-                            {formatMoney(portfolio.buyingPowerCents)} in buying power.
-                          </>
-                        ) : (
-                          <>
-                            This sets the quantity to all{" "}
-                            <strong>
-                              {number.format(maxOrderQuantity)}{" "}
-                              {unitWord(selectedAssetClass, maxOrderQuantity)} of{" "}
-                              {selectedQuote.symbol}
-                            </strong>{" "}
-                            that can be sold, about{" "}
-                            <strong>{formatMoney(maxOrderQuantity * ticketUnitCadCents)}</strong>.
-                            The whole position would be closed.
-                          </>
-                        )}
-                      </p>
-                      <p className="confirm-dialog__note">
-                        Nothing is {side === "BUY" ? "bought" : "sold"} until you place the
-                        order.
-                      </p>
-                    </div>
-                    <div className="confirm-dialog__actions">
-                      <button
-                        type="button"
-                        className="button button--secondary"
-                        autoFocus
-                        onClick={() => maxConfirmRef.current?.close()}
+                  {bracketAllowed ? (
+                    exitsShown ? (
+                      <div
+                        className="ticket-bracket"
+                        id="ticket-exits"
+                        role="group"
+                        aria-labelledby="bracket-heading"
                       >
-                        Cancel
-                      </button>
+                        <div className="ticket-label-row ticket-bracket__title">
+                          <span id="bracket-heading">Exits for this buy</span>
+                          <HelpTip id="bracket-help" label="What are take profit and stop loss?">
+                            <span className="help-tip__line">
+                              <strong>Take profit</strong> sells these {unitWord(selectedAssetClass, 2)}{" "}
+                              automatically if the price rises to the level you set, locking in a gain.
+                            </span>
+                            <span className="help-tip__line">
+                              <strong>Stop loss</strong> sells them automatically if the price falls to
+                              the level you set, capping a loss.
+                            </span>
+                            <span className="help-tip__line">
+                              Set either, both, or neither. With both, whichever fills first cancels the
+                              other.
+                              {ticketOrderType === "LIMIT"
+                                ? " They start watching once the limit buy fills."
+                                : " They start watching as soon as the buy fills."}
+                            </span>
+                          </HelpTip>
+                          <button
+                            type="button"
+                            className="ticket-exits__remove"
+                            onClick={() => {
+                              setTakeProfitPrice("");
+                              setStopLossPrice("");
+                              setExitsOpen(false);
+                              editTicket();
+                              window.requestAnimationFrame(() =>
+                                document.getElementById("ticket-exits-add")?.focus(),
+                              );
+                            }}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                        <div className="ticket-condition">
+                          <label htmlFor="bracket-take-profit">
+                            Take profit <em className="optional-note">(optional)</em>
+                          </label>
+                          <input
+                            id="bracket-take-profit"
+                            inputMode="decimal"
+                            autoComplete="off"
+                            type="text"
+                            placeholder={priceInputUnit}
+                            value={takeProfitPrice}
+                            onChange={(event) => {
+                              setTakeProfitPrice(event.target.value);
+                              editTicket();
+                            }}
+                          />
+                          {takeProfitParsed.rounded && takeProfitCents !== null ? (
+                            <small>Rounds up to {ticketPriceText(takeProfitCents)}</small>
+                          ) : null}
+                        </div>
+                        <div className="ticket-condition">
+                          <label htmlFor="bracket-stop-loss">
+                            Stop loss <em className="optional-note">(optional)</em>
+                          </label>
+                          <input
+                            id="bracket-stop-loss"
+                            inputMode="decimal"
+                            autoComplete="off"
+                            type="text"
+                            placeholder={priceInputUnit}
+                            value={stopLossPrice}
+                            onChange={(event) => {
+                              setStopLossPrice(event.target.value);
+                              editTicket();
+                            }}
+                          />
+                          {stopLossParsed.rounded && stopLossCents !== null ? (
+                            <small>Rounds down to {ticketPriceText(stopLossCents)}</small>
+                          ) : null}
+                        </div>
+                        {ticketOrderType === "MARKET" && (takeProfitEntered || stopLossEntered) ? (
+                          <div className="ticket-condition ticket-condition--wide">
+                            <span className="ticket-label-row">
+                              <label htmlFor="bracket-time-in-force">Exits last</label>
+                              <HelpTip
+                                id="bracket-time-in-force-help"
+                                label="What do Day and Good until cancelled mean?"
+                              >
+                                <span className="help-tip__line">
+                                  <strong>Day</strong> cancels the exits at the end of the trading day
+                                  ({selectedIsCrypto ? "midnight ET for crypto" : "4:00 p.m. ET"}) if
+                                  they haven&apos;t filled.
+                                </span>
+                                <span className="help-tip__line">
+                                  <strong>Good until cancelled</strong> keeps them waiting until one
+                                  fills, someone on your team cancels them, or the competition ends.
+                                </span>
+                              </HelpTip>
+                            </span>
+                            <select
+                              id="bracket-time-in-force"
+                              value={timeInForce}
+                              onChange={(event) => {
+                                setTimeInForce(event.target.value as TimeInForce);
+                                editTicket();
+                              }}
+                            >
+                              <option value="DAY">Day</option>
+                              <option value="GTC">Good until cancelled</option>
+                            </select>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : (
                       <button
                         type="button"
-                        className="button button--primary"
+                        className="ticket-exits__add"
+                        id="ticket-exits-add"
                         onClick={() => {
-                          setQuantity(String(maxOrderQuantity));
-                          editTicket();
-                          maxConfirmRef.current?.close();
-                          document.getElementById("order-quantity")?.focus();
+                          setExitsOpen(true);
+                          window.requestAnimationFrame(() =>
+                            document.getElementById("bracket-take-profit")?.focus(),
+                          );
                         }}
                       >
-                        Use {number.format(maxOrderQuantity)}{" "}
-                        {unitWord(selectedAssetClass, maxOrderQuantity)}
+                        <PlusIcon />
+                        Add take profit or stop loss
                       </button>
-                    </div>
-                  </dialog>
-                  <input
-                    id="order-quantity"
-                    inputMode="numeric"
-                    min="1"
-                    max="100000"
-                    step="1"
-                    type="number"
-                    value={quantity}
-                    onChange={(event) => {
-                      setQuantity(event.target.value);
-                      editTicket();
-                    }}
-                    aria-describedby={
-                      selectedIsCrypto
-                        ? `quantity-help quantity-tokens${tradingHaltReason ? " quote-halt" : ""}`
-                        : `quantity-help${tradingHaltReason ? " quote-halt" : ""}`
-                    }
-                  />
-                  <small id="quantity-help">
-                    {selectedIsCrypto
-                      ? `Whole lots only · 1 lot = ${tokenAmountLabel(1, selectedLotSize, selectedQuote.symbol)}`
-                      : "Whole shares only"}
-                  </small>
-                  {selectedIsCrypto ? (
-                    <small id="quantity-tokens" className="quantity-tokens">
-                      {quantityIsValid
-                        ? `= ${tokenAmountLabel(wholeQuantity, selectedLotSize, selectedQuote.symbol)}`
-                        : `Enter lots to see the ${selectedToken} amount`}
-                    </small>
+                    )
                   ) : null}
                 </div>
-                <div>
-                  <span>
-                    {isWaitingOrder
-                      ? selectedIsCrypto
-                        ? "Current price per lot"
-                        : "Current price"
-                      : selectedIsCrypto
-                        ? "Estimated fill per lot"
-                        : "Estimated fill"}
-                  </span>
-                  <strong>
-                    {quoteLoaded ? formatMoney(selectedQuote.priceCadCents) : "—"}
-                  </strong>
-                  <small>
-                    {quoteLoaded
-                      ? `${marketSourceLabel(selectedQuote.source)} snapshot`
-                      : "Waiting for market data"}
-                  </small>
-                </div>
-                <div>
-                  <span>
-                    {side === "BUY"
-                      ? "Available cash"
-                      : reservedQuantity > 0
-                        ? "Free to sell"
-                        : selectedIsCrypto
-                          ? "Lots held"
-                          : "Shares held"}
-                  </span>
-                  <strong>
-                    {side === "BUY"
-                      ? formatMoney(portfolio.buyingPowerCents)
-                      : number.format(freeQuantity)}
-                  </strong>
-                  <small>
-                    {side === "BUY"
-                      ? portfolio.reservedCashCents > 0
-                        ? `${formatMoney(portfolio.reservedCashCents)} set aside for waiting buys`
-                        : isPlatformAdmin
-                          ? "Admin test account"
-                          : "Team account"
-                      : reservedQuantity > 0
-                        ? `${number.format(heldQuantity)} held · ${number.format(reservedQuantity)} held back for waiting sells`
-                        : selectedIsCrypto
-                          ? `${selectedQuote.symbol} · ${tokenAmountLabel(heldQuantity, selectedLotSize, selectedQuote.symbol)}`
-                          : selectedQuote.symbol}
-                  </small>
-                </div>
-                <div>
-                  <span>
-                    {setsAsideCash
-                      ? "Cash set aside"
-                      : isWaitingOrder
-                        ? "Value at your price"
-                        : "Estimated order value"}
-                  </span>
-                  <strong>
-                    {quoteLoaded && (!isWaitingOrder || triggerPriceCents !== null)
-                      ? formatMoney(estimatedValue)
-                      : "—"}
-                  </strong>
-                  <small>
-                    {setsAsideCash && selectedQuote.listingCurrency === "USD"
-                      ? "Includes a 2% cushion for USD/CAD moves"
-                      : "$0.00 simulated commission"}
-                  </small>
-                </div>
-              </div>
 
-              <div className="ticket-actions">
-                <button
-                  className={`button button--primary ${side === "SELL" ? "button--sell" : ""}`}
-                  type="submit"
-                  disabled={!canTrade || ticketStatus.kind === "working"}
-                  aria-describedby="ticket-status"
-                >
-                  {ticketStatus.kind === "working"
-                    ? "Recording order…"
-                    : isWaitingOrder
-                      ? `Place ${ORDER_TYPE_LABELS[ticketOrderType].toLowerCase()} order`
-                      : `Place simulated ${side.toLowerCase()}`}
-                  <ArrowIcon />
-                </button>
-                <button
-                  className="button button--secondary"
-                  type="button"
-                  onClick={() => {
-                    setQuantity("");
-                    setTriggerPrice("");
-                    setTakeProfitPrice("");
-                    setStopLossPrice("");
-                    setTicketStatus({ kind: "idle", message: "Order ticket cleared." });
-                  }}
-                >
-                  Clear ticket
-                </button>
+                <div className="ticket-receipt" aria-label="Order summary" role="group">
+                  <dl>
+                    <div>
+                      <dt>
+                        {isWaitingOrder
+                          ? selectedIsCrypto
+                            ? "Price per lot now"
+                            : "Price now"
+                          : selectedIsCrypto
+                            ? "Estimated fill per lot"
+                            : "Estimated fill"}
+                      </dt>
+                      <dd>{quoteLoaded ? formatMoney(selectedQuote.priceCadCents) : "—"}</dd>
+                    </div>
+                    <div>
+                      <dt>× {selectedIsCrypto ? "Lots" : "Shares"}</dt>
+                      <dd>{quantityIsValid ? number.format(wholeQuantity) : "—"}</dd>
+                    </div>
+                    <div className="ticket-receipt__total">
+                      <dt>
+                        {setsAsideCash
+                          ? "Cash set aside"
+                          : isWaitingOrder
+                            ? "Value at your price"
+                            : "Estimated total"}
+                      </dt>
+                      <dd>
+                        {quoteLoaded && quantityIsValid && (!isWaitingOrder || triggerPriceCents !== null)
+                          ? formatMoney(estimatedValue)
+                          : "—"}
+                      </dd>
+                      <dd className="ticket-receipt__note">
+                        {setsAsideCash && selectedQuote.listingCurrency === "USD"
+                          ? "Includes a 2% cushion for USD/CAD moves"
+                          : `$0.00 simulated commission · ${
+                              quoteLoaded
+                                ? `${marketSourceLabel(selectedQuote.source)} snapshot`
+                                : "waiting for market data"
+                            }`}
+                      </dd>
+                    </div>
+                    {side === "BUY" ? (
+                      <div
+                        className={
+                          receiptCashLeft !== null && receiptCashLeft < 0
+                            ? "ticket-receipt__after is-short"
+                            : "ticket-receipt__after"
+                        }
+                      >
+                        <dt>{receiptCashLeft !== null ? "Cash left" : "Cash available"}</dt>
+                        <dd>
+                          {receiptCashLeft !== null
+                            ? formatSignedCash(receiptCashLeft)
+                            : formatMoney(portfolio.buyingPowerCents)}
+                        </dd>
+                        <dd className="ticket-receipt__sub">
+                          {receiptCashLeft !== null
+                            ? `of ${formatMoney(portfolio.buyingPowerCents)} available`
+                            : isPlatformAdmin
+                              ? "Admin test account"
+                              : "Team account"}
+                          {portfolio.reservedCashCents > 0
+                            ? ` · ${formatMoney(portfolio.reservedCashCents)} set aside for waiting buys`
+                            : ""}
+                        </dd>
+                      </div>
+                    ) : (
+                      <div
+                        className={
+                          quantityIsValid && wholeQuantity > freeQuantity
+                            ? "ticket-receipt__after is-short"
+                            : "ticket-receipt__after"
+                        }
+                      >
+                        <dt>
+                          {quantityIsValid
+                            ? `${selectedIsCrypto ? "Lots" : "Shares"} left`
+                            : reservedQuantity > 0
+                              ? "Free to sell"
+                              : selectedIsCrypto
+                                ? "Lots held"
+                                : "Shares held"}
+                        </dt>
+                        <dd>
+                          {quantityIsValid
+                            ? number.format(freeQuantity - wholeQuantity)
+                            : number.format(freeQuantity)}
+                        </dd>
+                        <dd className="ticket-receipt__sub">
+                          {reservedQuantity > 0
+                            ? `${number.format(heldQuantity)} held · ${number.format(reservedQuantity)} held back for waiting sells`
+                            : selectedIsCrypto
+                              ? `${selectedQuote.symbol} · ${tokenAmountLabel(heldQuantity, selectedLotSize, selectedQuote.symbol)}`
+                              : `of ${number.format(freeQuantity)} ${selectedQuote.symbol} held`}
+                        </dd>
+                      </div>
+                    )}
+                  </dl>
+                  <button
+                    className={`button button--primary ${side === "SELL" ? "button--sell" : ""}`}
+                    type="submit"
+                    disabled={!canTrade || ticketStatus.kind === "working"}
+                    aria-describedby="ticket-status"
+                  >
+                    {ticketStatus.kind === "working"
+                      ? "Recording order…"
+                      : isWaitingOrder
+                        ? `Place ${ORDER_TYPE_LABELS[ticketOrderType].toLowerCase()} order`
+                        : `Place simulated ${side.toLowerCase()}`}
+                    <ArrowIcon />
+                  </button>
+                  <button
+                    className="ticket-receipt__clear"
+                    type="button"
+                    onClick={() => {
+                      setQuantity("");
+                      setTriggerPrice("");
+                      setTakeProfitPrice("");
+                      setStopLossPrice("");
+                      setExitsOpen(false);
+                      setTicketStatus({ kind: "idle", message: "Order ticket cleared." });
+                    }}
+                  >
+                    Clear ticket
+                  </button>
+                </div>
               </div>
 
               <div
@@ -6277,6 +6353,8 @@ export function SimulatorApp({
               </p>
             </AnimatedRailSection>
 
+            {/* Students never see host tools, not even a locked panel. */}
+            {canManageCompetition ? (
             <AnimatedRailSection
               className="host-section"
               headingId="host-heading"
@@ -6286,8 +6364,7 @@ export function SimulatorApp({
               isOpen={openRailSections.host}
               onToggle={() => toggleRailSection("host")}
             >
-              {canManageCompetition ? (
-                <>
+              <>
                   <div className="host-status">
                     <div>
                       <span>Competition</span>
@@ -6405,13 +6482,14 @@ export function SimulatorApp({
                       Save schedule
                     </button>
                   </form>
-                  {dashboard.currentUser.role === "platform_admin" ? (
+                  {/* With real sign-in these live in the account menu instead. */}
+                  {!isManaged && dashboard.currentUser.role === "platform_admin" ? (
                     <a className="button button--secondary host-accounts-link" href="/admin/valuation-lab">
                       <FlaskIcon />
                       Past → Present valuation lab
                     </a>
                   ) : null}
-                  {dashboard.currentUser.role === "platform_admin" ? (
+                  {!isManaged && dashboard.currentUser.role === "platform_admin" ? (
                     <a className="button button--secondary host-accounts-link" href="/admin/feedback">
                       <ChatIcon />
                       User feedback
@@ -6687,31 +6765,9 @@ export function SimulatorApp({
                                 : hostFeedback}
                     </div>
                   </div>
-                </>
-              ) : (
-                <div className="host-locked">
-                  {isManaged ? (
-                    <p>
-                      Host controls are reserved for the competition host. Ask
-                      your host if something about your team needs attention.
-                    </p>
-                  ) : (
-                    <>
-                      <p>Switch to the host identity to pause trading or manage teams.</p>
-                      <button
-                        className="button button--secondary"
-                        type="button"
-                        onClick={() => void switchIdentity("host")}
-                        disabled={identityBusy}
-                      >
-                        <UserIcon />
-                        Open host view
-                      </button>
-                    </>
-                  )}
-                </div>
-              )}
+              </>
             </AnimatedRailSection>
+            ) : null}
           </aside>
         </div>
 

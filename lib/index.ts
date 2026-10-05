@@ -95,6 +95,12 @@ export {
 } from "./server/admin-trading";
 
 export {
+  DISPLAY_NAME_MAX_LENGTH,
+  normalizeDisplayName,
+  updateDisplayName,
+} from "./server/display-name";
+
+export {
   addToWatchlist,
   getWatchlist,
   listWatchlist,
