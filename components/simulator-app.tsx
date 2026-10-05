@@ -13,6 +13,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import type {
   ActivityItem,
@@ -71,6 +72,8 @@ import {
 } from "@/lib/market-config";
 import {
   ArrowIcon,
+  BellIcon,
+  BookIcon,
   CashIcon,
   ChevronDownIcon,
   CalendarIcon,
@@ -99,7 +102,7 @@ type DashboardPayload = Omit<Dashboard, "leaderboard"> & {
   };
 };
 
-type RailSectionId = "presence" | "activity" | "leaderboard" | "host";
+type RailSectionId = "presence" | "leaderboard" | "host";
 
 /** What the portfolio map dialog shows: this portfolio, or a team a host opened. */
 type MapDialogView =
@@ -116,7 +119,6 @@ type TeamEditorField = "name" | "cash";
 
 const INITIAL_RAIL_SECTIONS: Record<RailSectionId, boolean> = {
   presence: true,
-  activity: true,
   leaderboard: true,
   host: true,
 };
@@ -471,6 +473,8 @@ const MAKER_LINKS = [
   },
 ];
 /** Hover box width (176px) plus its 10px gap from the line and an edge margin. */
+// The step-by-step guide lives on the public site.
+const SIM_GUIDE_URL = "https://lubancanada.com/sim-guide";
 const CHART_TOOLTIP_SPACE_PX = 172;
 const SUGGESTION_DELAY_MS = 120;
 
@@ -1941,6 +1945,155 @@ function AnimatedRailSection({
         ) : null}
       </AnimatePresence>
     </section>
+  );
+}
+
+// Which activity a viewer has already seen lives in this browser only; it
+// just decides whether the bell shows a "new" bubble.
+const ACTIVITY_SEEN_EVENT = "luban:activity-seen";
+const activitySeenFallback = new Map<string, string>();
+
+function readActivitySeen(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key) ?? activitySeenFallback.get(key) ?? null;
+  } catch {
+    return activitySeenFallback.get(key) ?? null;
+  }
+}
+
+function writeActivitySeen(key: string, value: string): void {
+  activitySeenFallback.set(key, value);
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Private windows can refuse storage; the in-memory copy still works.
+  }
+  window.dispatchEvent(new Event(ACTIVITY_SEEN_EVENT));
+}
+
+function subscribeActivitySeen(onChange: () => void): () => void {
+  window.addEventListener("storage", onChange);
+  window.addEventListener(ACTIVITY_SEEN_EVENT, onChange);
+  return () => {
+    window.removeEventListener("storage", onChange);
+    window.removeEventListener(ACTIVITY_SEEN_EVENT, onChange);
+  };
+}
+
+function ActivityBell({
+  items,
+  title,
+  emptyMessage,
+  showTeamNames,
+  storageKey,
+}: {
+  items: ActivityItem[];
+  title: string;
+  emptyMessage: string;
+  showTeamNames: boolean;
+  storageKey: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const panelId = useId();
+  const seenAt = useSyncExternalStore(
+    subscribeActivitySeen,
+    () => readActivitySeen(storageKey),
+    () => null,
+  );
+  const seenMs = seenAt === null ? Number.NEGATIVE_INFINITY : Date.parse(seenAt);
+  const latest = items.reduce<ActivityItem | null>(
+    (newest, item) =>
+      newest === null || Date.parse(item.createdAt) > Date.parse(newest.createdAt)
+        ? item
+        : newest,
+    null,
+  );
+  const unseen = items.filter((item) => Date.parse(item.createdAt) > seenMs).length;
+
+  // Anything that arrives while the feed is open counts as seen.
+  useEffect(() => {
+    if (open && latest && Date.parse(latest.createdAt) > seenMs) {
+      writeActivitySeen(storageKey, latest.createdAt);
+    }
+  }, [latest, open, seenMs, storageKey]);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setOpen(false);
+      buttonRef.current?.focus();
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  return (
+    <div className="activity-bell" ref={rootRef}>
+      <button
+        ref={buttonRef}
+        type="button"
+        className="activity-bell__button"
+        aria-expanded={open}
+        aria-controls={panelId}
+        aria-label={unseen > 0 ? `${title}, ${unseen} new` : title}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <BellIcon />
+        {unseen > 0 ? (
+          <span className="activity-bell__badge" aria-hidden="true">
+            {unseen > 9 ? "9+" : unseen}
+          </span>
+        ) : null}
+      </button>
+      <div
+        className="activity-bell__panel"
+        id={panelId}
+        role="region"
+        aria-labelledby={`${panelId}-title`}
+        hidden={!open}
+      >
+        <div className="activity-bell__head">
+          <h2 id={`${panelId}-title`}>{title}</h2>
+          <span>Immutable log</span>
+        </div>
+        <ol className="activity-list">
+          {items.length === 0 ? (
+            <li className="activity-list__empty">
+              <p>{emptyMessage}</p>
+            </li>
+          ) : (
+            items.map((item) => (
+              <li
+                key={item.id}
+                data-new={Date.parse(item.createdAt) > seenMs ? "true" : undefined}
+              >
+                <time dateTime={item.createdAt}>{formatActivityTime(item.createdAt)}</time>
+                <div>
+                  <strong>{item.title}</strong>
+                  {showTeamNames && item.teamName ? (
+                    <small className="activity-team-name">{item.teamName}</small>
+                  ) : null}
+                  <p>{item.detail}</p>
+                </div>
+                <span className={`activity-state activity-state--${item.type.toLowerCase()}`}>
+                  {activityStateLabel(item.type)}
+                </span>
+              </li>
+            ))
+          )}
+        </ol>
+      </div>
+    </div>
   );
 }
 
@@ -3780,8 +3933,36 @@ export function SimulatorApp({
               <span className="state-dot" aria-hidden="true" />
               {dashboard.competition.phase}
             </span>
+            <a
+              className="guide-link"
+              href={SIM_GUIDE_URL}
+              target="_blank"
+              rel="noopener"
+            >
+              <BookIcon />
+              How to use
+              <span className="sr-only"> (opens the guide in a new tab)</span>
+            </a>
           </div>
 
+          <div className="header-tools">
+          <ActivityBell
+            items={dashboard.recentActivity}
+            title={
+              isPlatformAdmin
+                ? "Test account activity"
+                : isCompetitionHost
+                  ? "Competition activity"
+                  : "Team activity"
+            }
+            emptyMessage={
+              dashboard.currentUser.role === "student" && !dashboard.team
+                ? "No team activity is available until a host assigns you to a team."
+                : "No activity has been recorded yet."
+            }
+            showTeamNames={isCompetitionHost}
+            storageKey={`luban.activity-seen.${dashboard.currentUser.id}`}
+          />
           {accountControls ?? (
             <label className="identity-switcher">
               <span>Demo user</span>
@@ -3802,6 +3983,7 @@ export function SimulatorApp({
               </span>
             </label>
           )}
+          </div>
         </header>
 
         <section className="simulation-strip" aria-label="Prototype disclosure">
@@ -3861,8 +4043,16 @@ export function SimulatorApp({
               title={isPlatformAdmin ? "Admin test portfolio" : "Team portfolio"}
               icon={isPlatformAdmin ? <UserIcon /> : <UsersIcon />}
               aside={
-                <span className="version-tag">
-                  v{teamVersion} {isPlatformAdmin ? "private" : "shared"}
+                <span
+                  className="version-tag"
+                  title={
+                    isPlatformAdmin
+                      ? "How many times this private test account has changed: every trade or cash adjustment counts once."
+                      : "How many times your team's shared portfolio has changed: every trade by anyone on the team, and any change a host makes, counts once. Everyone on the team sees the same number."
+                  }
+                >
+                  {number.format(teamVersion)} {teamVersion === 1 ? "update" : "updates"} ·{" "}
+                  {isPlatformAdmin ? "private" : "shared"}
                 </span>
               }
             />
@@ -5318,55 +5508,6 @@ export function SimulatorApp({
             </AnimatedRailSection>
 
             <AnimatedRailSection
-              className="activity-section sync-region"
-              headingId="activity-heading"
-              contentId="activity-content"
-              title={
-                isPlatformAdmin
-                  ? "Test account activity"
-                  : isCompetitionHost
-                    ? "Competition activity"
-                    : "Team activity"
-              }
-              aside={<span>Immutable log</span>}
-              isOpen={openRailSections.activity}
-              onToggle={() => toggleRailSection("activity")}
-              data-flash={syncFlash}
-            >
-              <ol className="activity-list">
-                {dashboard.recentActivity.length === 0 ? (
-                  <li className="activity-list__empty">
-                    <p>
-                      {dashboard.currentUser.role === "student" && !dashboard.team
-                        ? "No team activity is available until a host assigns you to a team."
-                        : "No activity has been recorded yet."}
-                    </p>
-                  </li>
-                ) : (
-                  dashboard.recentActivity.slice(0, 5).map((item) => (
-                    <li key={item.id}>
-                      <time dateTime={item.createdAt}>
-                        {formatActivityTime(item.createdAt)}
-                      </time>
-                      <div>
-                        <strong>{item.title}</strong>
-                        {isCompetitionHost && item.teamName ? (
-                          <small className="activity-team-name">{item.teamName}</small>
-                        ) : null}
-                        <p>{item.detail}</p>
-                      </div>
-                      <span
-                        className={`activity-state activity-state--${item.type.toLowerCase()}`}
-                      >
-                        {activityStateLabel(item.type)}
-                      </span>
-                    </li>
-                  ))
-                )}
-              </ol>
-            </AnimatedRailSection>
-
-            <AnimatedRailSection
               className="leaderboard-section sync-region"
               headingId="leaderboard-heading"
               contentId="leaderboard-content"
@@ -5908,7 +6049,9 @@ export function SimulatorApp({
         </footer>
 
         <div className="sr-only" role="status" aria-live="polite">
-          {syncFlash ? `Shared portfolio updated to version ${teamVersion}.` : ""}
+          {syncFlash
+            ? `Shared portfolio updated. ${number.format(teamVersion)} ${teamVersion === 1 ? "update" : "updates"} so far.`
+            : ""}
         </div>
       </div>
     </main>

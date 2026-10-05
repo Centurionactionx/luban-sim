@@ -182,3 +182,21 @@ export function CalendarIcon(props: IconProps) {
     </IconBase>
   );
 }
+
+export function BookIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z" />
+      <path d="M4 20.5A2.5 2.5 0 0 0 6.5 23H20v-5M8 7h8M8 11h6" />
+    </IconBase>
+  );
+}
+
+export function BellIcon(props: IconProps) {
+  return (
+    <IconBase {...props}>
+      <path d="M6 9a6 6 0 0 1 12 0c0 6 2.5 7.5 2.5 7.5h-17S6 15 6 9z" />
+      <path d="M10.3 20a1.9 1.9 0 0 0 3.4 0" />
+    </IconBase>
+  );
+}

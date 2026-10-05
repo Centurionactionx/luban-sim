@@ -4972,6 +4972,8 @@ html:has(dialog[open]) {
 }
 
 .portfolio-map__sector > span {
+  /* Its own ink, so the strip stays legible over the cash backdrop. */
+  background: var(--ink);
   color: var(--paper);
   font-size: 10px;
   font-weight: 600;
@@ -5195,5 +5197,158 @@ html:has(dialog[open]) {
 @media (forced-colors: active) {
   .portfolio-map__tile {
     border: 1px solid CanvasText;
+  }
+}
+
+/* Link to the step-by-step guide on the public site. */
+.guide-link {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--purple);
+  border-radius: 3px;
+  background: var(--quiet-purple);
+  color: var(--purple-deep);
+  font-family: var(--font-data);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.035em;
+  text-decoration: none;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.guide-link:hover,
+.guide-link:focus-visible {
+  background: var(--paper);
+}
+
+.guide-link svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* Activity feed behind a bell in the header, with a bubble for new entries. */
+.header-tools {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  min-width: 0;
+}
+
+.activity-bell {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.activity-bell__button {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border: 1.5px solid var(--rule);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.activity-bell__button:hover,
+.activity-bell__button:focus-visible,
+.activity-bell__button[aria-expanded="true"] {
+  background: var(--quiet-purple);
+}
+
+.activity-bell__button svg {
+  width: 20px;
+  height: 20px;
+}
+
+.activity-bell__badge {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  min-width: 19px;
+  height: 19px;
+  display: grid;
+  place-items: center;
+  padding: 0 4px;
+  border: 2px solid var(--paper);
+  border-radius: 999px;
+  background: var(--red);
+  color: var(--paper);
+  font-family: var(--font-data);
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.activity-bell__panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  width: min(400px, calc(100vw - 24px));
+  max-height: min(70vh, 560px);
+  overflow-y: auto;
+  border: 2px solid var(--rule);
+  border-radius: var(--tile-radius, 10px);
+  background: var(--paper);
+  box-shadow: 0 10px 28px rgba(0, 23, 31, 0.18);
+}
+
+.activity-bell__panel[hidden] {
+  display: none;
+}
+
+.activity-bell__head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--paper);
+}
+
+.activity-bell__head h2 {
+  font-size: var(--type-section-title);
+  font-weight: 600;
+}
+
+.activity-bell__head span {
+  color: var(--purple-deep);
+  font-family: var(--font-data);
+  font-size: var(--type-meta);
+}
+
+.activity-bell__panel .activity-list {
+  margin: 0;
+  padding: 10px;
+}
+
+/* Entries that arrived since the feed was last opened. */
+.activity-bell__panel .activity-list li[data-new="true"] {
+  box-shadow: inset 3px 0 0 var(--purple);
+}
+
+@media (max-width: 960px) {
+  .header-tools {
+    grid-column: 1 / -1;
+    padding-top: 2px;
+    border-top: 1px solid var(--hairline);
+  }
+
+  .header-tools .identity-switcher {
+    flex: 1;
+    padding-top: 0;
+    border-top: 0;
   }
 }
