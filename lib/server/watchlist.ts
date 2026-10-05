@@ -91,6 +91,18 @@ export async function listWatchlist(
   return items;
 }
 
+/** The symbols on the caller's watchlist, without pricing them. */
+export async function watchlistSymbolsFor(userId: string): Promise<string[]> {
+  const teamId = await watchlistTeamIdFor(userId);
+  if (!teamId) return [];
+  const db = await getDb();
+  const rows = await db.all<{ symbol: string }>(
+    "SELECT symbol FROM watchlist_items WHERE team_id = ?",
+    [teamId],
+  );
+  return rows.map((row) => row.symbol);
+}
+
 /** The caller's watchlist, or an empty one when they have no portfolio. */
 export async function getWatchlist(
   userId: string,

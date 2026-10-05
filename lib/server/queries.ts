@@ -25,7 +25,7 @@ import { getAdminTradingTeamId } from "./admin-trading";
 import { getSessionUser } from "./auth";
 import type { DbExecutor } from "./database";
 import { getDb, withReadTransaction } from "./db";
-import { getQuote, listQuotes, quoteCacheGeneration } from "./quotes";
+import { getQuote, listQuotesForSymbols, quoteCacheGeneration } from "./quotes";
 import { readReservations, workingOrdersAvailableTo } from "./working-order-book";
 import { listWatchlist } from "./watchlist";
 import { listWorkingOrders } from "./working-orders";
@@ -876,6 +876,7 @@ async function getPortfolioHistory(
   teamId: string,
   current: PortfolioSummary,
   start: PortfolioPoint | null,
+  after: string | null = null,
 ): Promise<PortfolioPoint[]> {
   const db = await getDb();
   const rows = await db.all<{
@@ -885,11 +886,11 @@ async function getPortfolioHistory(
     `
       SELECT total_value_cents, captured_at
       FROM portfolio_snapshots
-      WHERE team_id = ?
+      WHERE team_id = ?${after ? " AND captured_at > ?" : ""}
       ORDER BY captured_at DESC
       LIMIT ?
     `,
-    [teamId, SNAPSHOT_HISTORY_LIMIT],
+    after ? [teamId, after, SNAPSHOT_HISTORY_LIMIT] : [teamId, SNAPSHOT_HISTORY_LIMIT],
   );
 
   const history = rows.reverse().map((row) => ({
@@ -897,6 +898,7 @@ async function getPortfolioHistory(
     valueCents: Number(row.total_value_cents),
   }));
   if (
+    !after &&
     start &&
     start.at < current.asOf &&
     (history.length === 0 || start.at < history[0].at)
@@ -938,7 +940,21 @@ export async function recordPortfolioSnapshot(
   );
 }
 
-export async function getDashboard(userId: string): Promise<Dashboard> {
+export interface DashboardOptions {
+  /** The symbol on this person's screen, so its price comes along. */
+  focusSymbol?: string | null;
+  /**
+   * The newest history point the browser already holds for historyTeamId.
+   * Only later points are sent; any other team gets the full history.
+   */
+  historyAfter?: string | null;
+  historyTeamId?: string | null;
+}
+
+export async function getDashboard(
+  userId: string,
+  options: DashboardOptions = {},
+): Promise<Dashboard> {
   return withReadTransaction(async () => {
     const currentUser = await requireSessionUser(userId);
     const now = new Date();
@@ -961,6 +977,15 @@ export async function getDashboard(userId: string): Promise<Dashboard> {
         )
       : null;
     const leaderboard = await buildLeaderboard(currentUser, now);
+    const historyAfter =
+      portfolioTeamId &&
+      options.historyTeamId === portfolioTeamId &&
+      options.historyAfter &&
+      !Number.isNaN(Date.parse(options.historyAfter))
+        ? new Date(options.historyAfter).toISOString()
+        : null;
+    const watchlist = portfolioTeamId ? await listWatchlist(portfolioTeamId, now) : [];
+    const workingOrders = portfolioTeamId ? await listWorkingOrders(portfolioTeamId) : [];
 
     return {
       currentUser,
@@ -982,16 +1007,26 @@ export async function getDashboard(userId: string): Promise<Dashboard> {
                     valueCents: competition.startingCashCents,
                   }
                 : null,
+              historyAfter,
             )
           : [],
+      portfolioHistoryAfter: historyAfter,
       recentOrders: await listOrders(currentUser.id, 8),
       recentActivity: await listActivity(currentUser.id, 10),
       leaderboard: leaderboard.rows.slice(0, 5),
-      availableSymbols: await listQuotes(now),
-      workingOrders: portfolioTeamId ? await listWorkingOrders(portfolioTeamId) : [],
+      availableSymbols: await listQuotesForSymbols(
+        [
+          ...(calculated?.holdings.map((holding) => holding.symbol) ?? []),
+          ...watchlist.map((item) => item.symbol),
+          ...workingOrders.map((order) => order.symbol),
+          ...(options.focusSymbol ? [options.focusSymbol] : []),
+        ],
+        now,
+      ),
+      workingOrders,
       workingOrdersEnabled:
         currentUser.role !== "host" && workingOrdersAvailableTo(currentUser.role),
-      watchlist: portfolioTeamId ? await listWatchlist(portfolioTeamId, now) : [],
+      watchlist,
       serverTime: now.toISOString(),
     };
   });

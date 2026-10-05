@@ -23,6 +23,7 @@ import {
 import { lotExponentFromSize, lotSizeFromExponent } from "../lots";
 import { MARKET_REFRESH_INTERVAL_MS } from "../market-config";
 import { getDb } from "./db";
+import { databaseMarketCache, type SharedMarketCache } from "./market-cache";
 
 export const QUOTE_DELAY_MINUTES = 15;
 
@@ -217,6 +218,11 @@ export interface MarketDataProvider {
   now?(): number;
   quote(instrument: MarketInstrument, at: Date): Quote;
   refreshQuote?(instrument: MarketInstrument, at: Date): Promise<Quote>;
+  /**
+   * Loads quotes other server instances already fetched, in one round trip,
+   * so the refreshes that follow skip the upstream call.
+   */
+  preloadQuotes?(symbols: string[]): Promise<void>;
   search?(query: string): Promise<InstrumentSearchResult[]>;
   /** Today's most actively traded supported stocks, most active first. */
   mostActive?(): Promise<InstrumentSearchResult[]>;
@@ -1344,7 +1350,52 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
   constructor(
     private readonly fetcher: typeof fetch = fetch,
     readonly now: () => number = Date.now,
+    /** Shared across instances in production; tests run without it. */
+    private readonly shared: SharedMarketCache | null = null,
   ) {}
+
+  private async readShared<T>(
+    key: string,
+    ttlMs: number,
+  ): Promise<{ value: T; fetchedAtMs: number } | null> {
+    if (!this.shared) return null;
+    const entry = (await this.shared.read([key])).get(key);
+    if (!entry || this.now() - entry.fetchedAtMs >= ttlMs) return null;
+    try {
+      return { value: JSON.parse(entry.payload) as T, fetchedAtMs: entry.fetchedAtMs };
+    } catch {
+      return null;
+    }
+  }
+
+  private async writeShared(key: string, value: unknown, fetchedAtMs: number): Promise<void> {
+    if (!this.shared) return;
+    await this.shared.write(key, JSON.stringify(value), fetchedAtMs);
+  }
+
+  async preloadQuotes(symbols: string[]): Promise<void> {
+    if (!this.shared) return;
+    const nowMs = this.now();
+    const wanted = symbols.filter((symbol) => {
+      const cached = this.state.quotes.get(symbol);
+      return !cached || nowMs - cached.fetchedAtMs >= QUOTE_TTL_MS || cached.value.isStale;
+    });
+    if (wanted.length === 0) return;
+    const entries = await this.shared.read(wanted.map((symbol) => `quote:${symbol}`));
+    for (const symbol of wanted) {
+      const entry = entries.get(`quote:${symbol}`);
+      if (!entry || nowMs - entry.fetchedAtMs >= QUOTE_TTL_MS) continue;
+      try {
+        const value = JSON.parse(entry.payload) as Quote;
+        if (value.isStale) continue;
+        quoteGeneration += 1;
+        boundedSet(this.state.quotes, symbol, { value, fetchedAtMs: entry.fetchedAtMs });
+        this.state.quoteFailures.delete(symbol);
+      } catch {
+        // A bad row is ignored; the symbol is fetched normally.
+      }
+    }
+  }
 
   quote(instrument: MarketInstrument): Quote {
     const cached = this.state.quotes.get(instrument.symbol);
@@ -1386,6 +1437,17 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
           return refreshedCache.value;
         }
 
+        const sharedQuote = await this.readShared<Quote>(
+          `quote:${instrument.symbol}`,
+          QUOTE_TTL_MS,
+        );
+        if (sharedQuote && !sharedQuote.value.isStale) {
+          quoteGeneration += 1;
+          boundedSet(this.state.quotes, instrument.symbol, sharedQuote);
+          this.state.quoteFailures.delete(instrument.symbol);
+          return sharedQuote.value;
+        }
+
         const [chart, fxRateBasisPoints] = await Promise.all([
           this.fetchChart(instrument.symbol, "1d", "5m"),
           instrument.listingCurrency === "USD"
@@ -1406,6 +1468,7 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
           fetchedAtMs: refreshedNow,
         });
         this.state.quoteFailures.delete(instrument.symbol);
+        await this.writeShared(`quote:${instrument.symbol}`, value, refreshedNow);
         return value;
       });
     } catch (error) {
@@ -1518,6 +1581,16 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
           return refreshedCache.value;
         }
 
+        // Preset ranges are the same for everyone, so instances share them.
+        const sharedKey = range === "CUSTOM" ? null : `history:${key}`;
+        const sharedHistory = sharedKey
+          ? await this.readShared<QuoteHistory>(sharedKey, ttl)
+          : null;
+        if (sharedHistory && !sharedHistory.value.isStale) {
+          boundedSet(this.state.histories, key, sharedHistory);
+          return sharedHistory.value;
+        }
+
         const chart =
           range === "CUSTOM" && request.from && request.to
             ? await this.fetchChartBetween(
@@ -1540,6 +1613,7 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
           request,
         );
         boundedSet(this.state.histories, key, { value, fetchedAtMs: refreshedNow });
+        if (sharedKey) await this.writeShared(sharedKey, value, refreshedNow);
         return value;
       });
     } catch (error) {
@@ -1935,7 +2009,7 @@ function createDefaultProvider(): MarketDataProvider {
   const configured = process.env.LUBAN_MARKET_DATA_PROVIDER?.trim().toLowerCase();
   return configured === "synthetic" || process.env.NODE_ENV === "test"
     ? new DeterministicMarketDataProvider()
-    : new YahooFinanceMarketDataProvider();
+    : new YahooFinanceMarketDataProvider(fetch, Date.now, databaseMarketCache);
 }
 
 let activeProvider: MarketDataProvider = createDefaultProvider();
@@ -2224,8 +2298,10 @@ export async function refreshQuote(
 
 export async function refreshAllQuotes(at?: Date | string): Promise<void> {
   const quoteAt = normalizeAt(at);
+  const instruments = await readRefreshInstruments();
+  await activeProvider.preloadQuotes?.(instruments.map((instrument) => instrument.symbol));
   const results = await Promise.allSettled(
-    (await readRefreshInstruments()).map((instrument) =>
+    instruments.map((instrument) =>
       activeProvider.refreshQuote
         ? activeProvider.refreshQuote(instrument, quoteAt)
         : Promise.resolve(activeProvider.quote(instrument, quoteAt)),
@@ -2255,16 +2331,24 @@ export async function refreshAllQuotes(at?: Date | string): Promise<void> {
  * when the cache is warm: no network call happens at all.
  */
 export async function refreshMissingQuotes(at?: Date | string): Promise<void> {
-  const quoteAt = normalizeAt(at);
-  const missing = (await readRefreshInstruments()).filter((instrument) => {
-    try {
-      activeProvider.quote(instrument, quoteAt);
-      return false;
-    } catch {
-      return true;
-    }
-  });
+  await refreshMissingFor(await readRefreshInstruments(), normalizeAt(at));
+}
+
+function isQuoteCached(instrument: MarketInstrument, at: Date): boolean {
+  try {
+    activeProvider.quote(instrument, at);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function refreshMissingFor(instruments: MarketInstrument[], quoteAt: Date): Promise<void> {
+  let missing = instruments.filter((instrument) => !isQuoteCached(instrument, quoteAt));
   if (missing.length === 0 || !activeProvider.refreshQuote) return;
+  await activeProvider.preloadQuotes?.(missing.map((instrument) => instrument.symbol));
+  missing = missing.filter((instrument) => !isQuoteCached(instrument, quoteAt));
+  if (missing.length === 0) return;
   const results = await Promise.allSettled(
     missing.map((instrument) => activeProvider.refreshQuote!(instrument, quoteAt)),
   );
@@ -2272,6 +2356,35 @@ export async function refreshMissingQuotes(at?: Date | string): Promise<void> {
     results.map((result) =>
       result.status === "fulfilled" ? rememberLastPrice(result.value) : null,
     ),
+  );
+}
+
+/**
+ * Prices the listed symbols a person is looking at (their watchlist and the
+ * quote on screen) on this instance: all of them when the market refresh is
+ * due, otherwise only those it has never priced. Symbols the simulator has
+ * never listed are skipped; looking one up is search's job.
+ */
+export async function refreshQuotesFor(
+  symbols: string[],
+  options: { onlyMissing: boolean },
+  at?: Date | string,
+): Promise<void> {
+  const quoteAt = normalizeAt(at);
+  const wanted = [...new Set(symbols.map(normalizeMarketSymbol))].filter((symbol) =>
+    MARKET_SYMBOL_PATTERN.test(symbol),
+  );
+  if (wanted.length === 0 || !activeProvider.refreshQuote) return;
+  const instruments = (
+    await Promise.all(wanted.map((symbol) => readInstrument(symbol)))
+  ).filter((instrument): instrument is MarketInstrument => instrument !== null);
+  if (options.onlyMissing) {
+    await refreshMissingFor(instruments, quoteAt);
+    return;
+  }
+  await activeProvider.preloadQuotes?.(instruments.map((instrument) => instrument.symbol));
+  await Promise.allSettled(
+    instruments.map((instrument) => activeProvider.refreshQuote!(instrument, quoteAt)),
   );
 }
 
@@ -2495,6 +2608,40 @@ export async function getHistoricalSplitMultipliers(
 export async function listQuotes(at?: Date | string): Promise<Quote[]> {
   const quoteAt = normalizeAt(at);
   return (await readInstruments()).flatMap((instrument) => {
+    try {
+      return [activeProvider.quote(instrument, quoteAt)];
+    } catch (error) {
+      if (error instanceof AppError && error.code.startsWith("MARKET_DATA_")) {
+        return [];
+      }
+      throw error;
+    }
+  });
+}
+
+/**
+ * Quotes for the dashboard: the always-refreshed listings plus the symbols
+ * this person's screen needs. Sending every listing the class ever looked up
+ * made each minute's update grow with every search.
+ */
+export async function listQuotesForSymbols(
+  symbols: string[],
+  at?: Date | string,
+): Promise<Quote[]> {
+  const quoteAt = normalizeAt(at);
+  const wanted = [...new Set(symbols)].slice(0, 200);
+  const db = await getDb();
+  const rows = await db.all<InstrumentRow>(
+    `SELECT ${INSTRUMENT_COLUMNS}
+     FROM instruments
+     WHERE is_active = 1
+       AND (auto_refresh = 1${
+         wanted.length > 0 ? ` OR symbol IN (${wanted.map(() => "?").join(", ")})` : ""
+       })
+     ORDER BY symbol ASC`,
+    wanted,
+  );
+  return rows.map(rowToInstrument).flatMap((instrument) => {
     try {
       return [activeProvider.quote(instrument, quoteAt)];
     } catch (error) {

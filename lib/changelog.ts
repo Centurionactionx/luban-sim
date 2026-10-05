@@ -33,6 +33,17 @@ export const CHANGE_KIND_LABELS: Record<ChangeKind, string> = {
 
 export const CHANGELOG: readonly ChangelogRelease[] = [
   {
+    version: "1.38.0",
+    date: "2026-10-05",
+    title: "Ready for a full class",
+    changes: [
+      { kind: "changed", text: "Each minute's update is about 93% smaller. It only carries the prices your screen shows and the new points on your portfolio chart, not every stock anyone has looked up." },
+      { kind: "changed", text: "Servers share the prices they fetch, so a busy class asks Yahoo Finance for each price about once a minute instead of once per server." },
+      { kind: "changed", text: "Your browser makes one less request a minute: the price of the stock on screen now comes with the regular update." },
+      { kind: "fixed", text: "On a busy day, watchlist prices could show a dash until you opened the stock." },
+    ],
+  },
+  {
     version: "1.37.1",
     date: "2026-10-05",
     title: "Flat buttons in the dark theme",

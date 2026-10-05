@@ -21,7 +21,7 @@ import {
 import { postgresConnectionOptions } from "./postgres-config";
 
 const DEFAULT_DATABASE_PATH = join(process.cwd(), "data", "luban.sqlite");
-const SCHEMA_VERSION = 15;
+const SCHEMA_VERSION = 16;
 /** Map grouping within a sector; "Other" until the feed reports one. */
 const INSTRUMENT_INDUSTRY_COLUMN = "industry TEXT NOT NULL DEFAULT 'Other'";
 
@@ -417,6 +417,13 @@ const SHARED_TABLE_BODIES = {
       added_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
       created_at TEXT NOT NULL,
       PRIMARY KEY (team_id, symbol)`,
+  // Market data shared by every server instance: the latest quote and recent
+  // chart history per symbol, as fetched JSON. A cache only; losing it costs
+  // one upstream fetch per entry.
+  market_cache: () => `
+      cache_key TEXT PRIMARY KEY,
+      payload TEXT NOT NULL,
+      fetched_at_ms BIGINT NOT NULL`,
 } as const;
 
 const WATCHLIST_INDEXES = [
@@ -646,6 +653,18 @@ function instrumentAssetColumns(big: string): string {
  * schema on cold start (fresh databases get the current DDL directly).
  */
 export async function runPostgresMigrations(tx: DbExecutor): Promise<void> {
+  // v16: shared market-data cache. A new table only.
+  const marketCacheTable = await tx.get<{ present: number }>(
+    `SELECT 1 AS present
+     FROM information_schema.tables
+     WHERE table_schema = current_schema() AND table_name = 'market_cache'`,
+  );
+  if (!marketCacheTable) {
+    await tx.run(`CREATE TABLE IF NOT EXISTS market_cache (${SHARED_TABLE_BODIES.market_cache()}
+    )`);
+    await tx.run("ALTER TABLE market_cache ENABLE ROW LEVEL SECURITY");
+  }
+
   // v15: team watchlists. A new table only; nothing existing changes.
   const watchlistTable = await tx.get<{ present: number }>(
     `SELECT 1 AS present
@@ -897,6 +916,7 @@ async function clearDomainData(
   }
 
   const tables = [
+    "market_cache",
     "watchlist_items",
     "working_orders",
     "admin_valuation_positions",

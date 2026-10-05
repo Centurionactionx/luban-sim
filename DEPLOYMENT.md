@@ -128,3 +128,18 @@ Run `pnpm verify` locally. The browser-test runner forces demo authentication, s
 Unit/integration tests exercise PostgreSQL SQL through embedded PGlite. PGlite is a single-connection engine: a staging test with multiple real PostgreSQL connections is still required to validate pooler behavior and lock contention. Also verify real Clerk sign-in, invitation acceptance, second-factor enforcement, suspension, and the production hostname in staging.
 
 The Yahoo adapter is a prototype feed. Verify the intended market-data provider's availability and redistribution terms before public operation. The public site's EmailJS contact delivery, provider abuse controls, production TLS certificates, backups, and deployed headers require checks in their respective environments; local test success does not establish those settings.
+
+## Load testing
+
+`scripts/load-test.mjs` simulates a class against a running server in demo mode: each student signs in, loads the dashboard, popular picks, a chart and the watchlist charts, then polls once a minute, switches symbols, searches and places an order now and then. It reports latency per endpoint, errors, response sizes, and server CPU, plus what that comes to per class-hour.
+
+It writes its own students (`lt-001` and up) straight into the SQLite file the server uses, so run it against a throwaway database, never a real one:
+
+```bash
+pnpm build
+LUBAN_AUTH_MODE=demo LUBAN_DEMO_MODE=true LUBAN_MARKET_DATA_PROVIDER=synthetic LUBAN_DATABASE_PATH=data/loadtest.sqlite pnpm start --port 3006
+node scripts/load-test.mjs --base http://localhost:3006 --db data/loadtest.sqlite --users 75 --minutes 6
+```
+
+Every server instance shares fetched quotes and preset chart history through the `market_cache` table, so a class makes roughly one Yahoo request per symbol per minute however many instances Vercel runs.
+

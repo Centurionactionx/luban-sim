@@ -104,6 +104,7 @@ export {
   addToWatchlist,
   getWatchlist,
   listWatchlist,
+  watchlistSymbolsFor,
   removeFromWatchlist,
 } from "./server/watchlist";
 export type { WatchlistChangeInput } from "./server/watchlist";
@@ -132,7 +133,7 @@ export {
   MAX_EXPORTED_ORDERS,
   readRealizedGains,
 } from "./server/queries";
-export type { RealizedGains } from "./server/queries";
+export type { DashboardOptions, RealizedGains } from "./server/queries";
 
 export {
   QUOTE_DELAY_MINUTES,
@@ -144,6 +145,8 @@ export {
   getQuote,
   getQuoteHistory,
   listQuotes,
+  listQuotesForSymbols,
+  refreshQuotesFor,
   MARKET_SYMBOL_PATTERN,
   normalizeMarketSymbol,
   getPopularInstruments,

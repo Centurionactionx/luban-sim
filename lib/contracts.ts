@@ -418,6 +418,11 @@ export interface Dashboard {
   portfolio: PortfolioSummary | null;
   holdings: HoldingView[];
   portfolioHistory: PortfolioPoint[];
+  /**
+   * Set when portfolioHistory holds only the points after this instant (plus
+   * the live value at the end), because the browser said it had the rest.
+   */
+  portfolioHistoryAfter?: string | null;
   recentOrders: OrderView[];
   recentActivity: ActivityItem[];
   leaderboard: LeaderboardRow[];

@@ -7,8 +7,12 @@ import {
   runWorkingOrdersIfDue,
   isDemoLoginAllowed,
   listDemoUsers,
+  MARKET_SYMBOL_PATTERN,
+  normalizeMarketSymbol,
   refreshAllQuotes,
   refreshMissingQuotes,
+  refreshQuotesFor,
+  watchlistSymbolsFor,
 } from "@/lib";
 
 import {
@@ -25,13 +29,36 @@ export async function GET(request: Request): Promise<Response> {
     // Each dashboard read recomputes the whole leaderboard; cap how fast one
     // client can force that work. Well above any legitimate polling cadence.
     assertRequestAllowed(`poll:${user.id}`, 120);
-    const refreshMarket =
-      new URL(request.url).searchParams.get("refreshMarket") !== "0";
+    const params = new URL(request.url).searchParams;
+    const refreshMarket = params.get("refreshMarket") !== "0";
+    const rawSymbol = params.get("symbol")?.trim();
+    const focusSymbol =
+      rawSymbol && MARKET_SYMBOL_PATTERN.test(normalizeMarketSymbol(rawSymbol))
+        ? normalizeMarketSymbol(rawSymbol)
+        : null;
+    const ownSymbols = [
+      ...(await watchlistSymbolsFor(user.id)),
+      ...(focusSymbol ? [focusSymbol] : []),
+    ];
     // Light polls skip the market refresh but must still price any holding
-    // this server instance has never quoted, or valuing it would fail.
-    if (refreshMarket) await refreshAllQuotes();
-    else await refreshMissingQuotes();
-    const dashboard = await getDashboard(user.id);
+    // this server instance has never quoted, or valuing it would fail. The
+    // shared market cache makes most of these database reads, not Yahoo calls.
+    if (refreshMarket) {
+      await Promise.all([
+        refreshAllQuotes(),
+        refreshQuotesFor(ownSymbols, { onlyMissing: false }).catch(() => {}),
+      ]);
+    } else {
+      await Promise.all([
+        refreshMissingQuotes(),
+        refreshQuotesFor(ownSymbols, { onlyMissing: true }).catch(() => {}),
+      ]);
+    }
+    const dashboard = await getDashboard(user.id, {
+      focusSymbol,
+      historyAfter: params.get("historyAfter"),
+      historyTeamId: params.get("historyTeam"),
+    });
     // Backup price check for waiting orders, after the response is sent.
     after(runWorkingOrdersIfDue);
     // Feeds the portfolio history chart; at most one row per team every two

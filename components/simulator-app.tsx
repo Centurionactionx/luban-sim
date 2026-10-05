@@ -441,6 +441,8 @@ const currency = new Intl.NumberFormat("en-CA", {
 const number = new Intl.NumberFormat("en-CA");
 const TEAM_NAME_MAX_LENGTH = 80;
 const MAX_SUGGESTIONS = 8;
+/** The server's snapshot limit plus the start and live points. */
+const PORTFOLIO_HISTORY_KEEP = 722;
 // package.json's version; its minor number counts production releases.
 const APP_VERSION = process.env.NEXT_PUBLIC_APP_VERSION ?? "";
 const APP_COMMIT = process.env.NEXT_PUBLIC_APP_COMMIT ?? "";
@@ -2616,6 +2618,9 @@ export function SimulatorApp({
   const pendingOrder = useRef<{ key: string; fingerprint: string } | null>(null);
   const autoLoginAttempted = useRef(false);
   const knownVersion = useRef(fallbackTeam.version);
+  // The portfolio history this page already holds, so each poll only asks
+  // for newer points. The last point is always the live value.
+  const historyCache = useRef<{ teamId: string; points: PortfolioPoint[] } | null>(null);
   const lastMarketRefreshAttemptAt = useRef(0);
 
   const toggleRailSection = useCallback((section: RailSectionId) => {
@@ -2684,7 +2689,16 @@ export function SimulatorApp({
     const controller = new AbortController();
     dashboardRequest.current = controller;
     if (refreshMarket) lastMarketRefreshAttemptAt.current = Date.now();
-    const dashboardUrl = `/api/dashboard?refreshMarket=${refreshMarket ? "1" : "0"}`;
+    const dashboardParams = new URLSearchParams({
+      refreshMarket: refreshMarket ? "1" : "0",
+      symbol: selectedSymbol,
+    });
+    const heldHistory = historyCache.current;
+    if (heldHistory && heldHistory.points.length >= 2) {
+      dashboardParams.set("historyTeam", heldHistory.teamId);
+      dashboardParams.set("historyAfter", heldHistory.points[heldHistory.points.length - 2].at);
+    }
+    const dashboardUrl = `/api/dashboard?${dashboardParams.toString()}`;
 
     try {
       let response = await fetch(dashboardUrl, {
@@ -2720,37 +2734,37 @@ export function SimulatorApp({
         throw new Error(extractError(payload, "The local simulator server did not respond."));
       }
 
-      const nextDashboard = payload as DashboardPayload;
-      let refreshedSelectedQuote: Quote | null = null;
-      if (refreshMarket) {
-        try {
-          const quoteResponse = await fetch(
-            `/api/quotes?symbol=${encodeURIComponent(selectedSymbol)}`,
-            { cache: "no-store", credentials: "same-origin", signal: controller.signal },
-          );
-          const quotePayload = (await readJson(quoteResponse)) as {
-            results?: Quote[];
-          };
-          refreshedSelectedQuote =
-            quotePayload.results?.find(
-              (quote) => quote.symbol === selectedSymbol,
-            ) ?? null;
-        } catch {
-          // The dashboard remains usable with its last disclosed market snapshot.
-        }
+      let nextDashboard = payload as DashboardPayload;
+      // A partial history adds to the copy this page holds, replacing its
+      // live last point.
+      if (
+        nextDashboard.portfolioHistoryAfter &&
+        heldHistory &&
+        heldHistory.teamId === nextDashboard.team?.id
+      ) {
+        const after = nextDashboard.portfolioHistoryAfter;
+        nextDashboard = {
+          ...nextDashboard,
+          portfolioHistory: [
+            ...heldHistory.points.slice(0, -1).filter((point) => point.at <= after),
+            ...nextDashboard.portfolioHistory,
+          ].slice(-PORTFOLIO_HISTORY_KEEP),
+        };
       }
       if (controller.signal.aborted) return;
       const nextVersion = nextDashboard.team?.version ?? 0;
       const changed = nextVersion > knownVersion.current;
       knownVersion.current = nextVersion;
+      historyCache.current = nextDashboard.team
+        ? { teamId: nextDashboard.team.id, points: nextDashboard.portfolioHistory }
+        : null;
       setDashboard(nextDashboard);
+      // The update carries a fresh price for the symbol on screen.
       setSelectedQuote((current) => {
         const liveQuote = nextDashboard.availableSymbols.find(
           (quote) => quote.symbol === current.symbol,
         );
-        return refreshedSelectedQuote?.symbol === current.symbol
-          ? refreshedSelectedQuote
-          : liveQuote ?? current;
+        return liveQuote ?? current;
       });
       setConnection("connected");
       setConnectionError("");

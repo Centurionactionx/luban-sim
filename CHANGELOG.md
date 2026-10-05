@@ -5,6 +5,18 @@ Releases before v1.28.0 didn't have numbers, so they're listed by date.
 
 <!-- Generated from lib/changelog.ts by `pnpm changelog`. Edit that file, not this one. -->
 
+## v1.38.0: Ready for a full class (2026-10-05)
+
+### Improved
+
+- Each minute's update is about 93% smaller. It only carries the prices your screen shows and the new points on your portfolio chart, not every stock anyone has looked up.
+- Servers share the prices they fetch, so a busy class asks Yahoo Finance for each price about once a minute instead of once per server.
+- Your browser makes one less request a minute: the price of the stock on screen now comes with the regular update.
+
+### Fixed
+
+- On a busy day, watchlist prices could show a dash until you opened the stock.
+
 ## v1.37.1: Flat buttons in the dark theme (2026-10-05)
 
 ### Improved
