@@ -1,6 +1,6 @@
 {
   "name": "luban-sim",
-  "version": "1.35.1",
+  "version": "1.36.0",
   "description": "A collaborative, real-market-data paper-trading simulator for student teams.",
   "private": true,
   "repository": {
@@ -22,7 +22,8 @@
     "test:e2e": "node scripts/run-e2e.mjs",
     "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm test:e2e",
     "bootstrap:admin": "tsx scripts/create-admin-invitation.ts",
-    "backup:db": "tsx scripts/export-database.ts"
+    "backup:db": "tsx scripts/export-database.ts",
+    "changelog": "tsx scripts/write-changelog.ts"
   },
   "dependencies": {
     "@clerk/nextjs": "^7.8.2",

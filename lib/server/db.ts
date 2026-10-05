@@ -21,7 +21,7 @@ import {
 import { postgresConnectionOptions } from "./postgres-config";
 
 const DEFAULT_DATABASE_PATH = join(process.cwd(), "data", "luban.sqlite");
-const SCHEMA_VERSION = 13;
+const SCHEMA_VERSION = 15;
 /** Map grouping within a sector; "Other" until the feed reports one. */
 const INSTRUMENT_INDUSTRY_COLUMN = "industry TEXT NOT NULL DEFAULT 'Other'";
 
@@ -398,7 +398,35 @@ const SHARED_TABLE_BODIES = {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       UNIQUE (actor_user_id, idempotency_key)`,
+  // What signed-in people tell us about the public website or this app. The
+  // team is the sender's team when they sent it; removing that team later
+  // only clears the link, so the message itself is kept.
+  feedback: () => `
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      team_id TEXT REFERENCES teams(id) ON DELETE SET NULL,
+      topic TEXT NOT NULL CHECK (topic IN ('WEBSITE', 'SIMULATOR')),
+      message TEXT NOT NULL CHECK (length(message) BETWEEN 1 AND 2000),
+      source TEXT NOT NULL CHECK (source IN ('header', 'page')),
+      created_at TEXT NOT NULL`,
+  // Symbols a team (or an admin's test portfolio) keeps an eye on. Shared by
+  // every teammate; it never moves money, so it has no ledger rows.
+  watchlist_items: () => `
+      team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+      symbol TEXT NOT NULL REFERENCES instruments(symbol) ON DELETE CASCADE,
+      added_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (team_id, symbol)`,
 } as const;
+
+const WATCHLIST_INDEXES = [
+  "CREATE INDEX IF NOT EXISTS idx_watchlist_team_created ON watchlist_items (team_id, created_at)",
+];
+
+const FEEDBACK_INDEXES = [
+  "CREATE INDEX IF NOT EXISTS idx_feedback_created ON feedback (created_at DESC)",
+  "CREATE INDEX IF NOT EXISTS idx_feedback_topic_created ON feedback (topic, created_at DESC)",
+];
 
 const SCHEMA_INDEXES = [
   "CREATE INDEX IF NOT EXISTS idx_activity_competition_created ON activity_events (competition_id, created_at DESC)",
@@ -414,6 +442,8 @@ const SCHEMA_INDEXES = [
   "CREATE INDEX IF NOT EXISTS idx_instruments_auto_refresh ON instruments (auto_refresh, is_active)",
   "CREATE INDEX IF NOT EXISTS idx_working_orders_status_symbol ON working_orders (status, symbol)",
   "CREATE INDEX IF NOT EXISTS idx_working_orders_team_status ON working_orders (team_id, status)",
+  ...FEEDBACK_INDEXES,
+  ...WATCHLIST_INDEXES,
 ];
 
 function schemaStatements(engine: DatabaseEngine): string[] {
@@ -616,6 +646,37 @@ function instrumentAssetColumns(big: string): string {
  * schema on cold start (fresh databases get the current DDL directly).
  */
 export async function runPostgresMigrations(tx: DbExecutor): Promise<void> {
+  // v15: team watchlists. A new table only; nothing existing changes.
+  const watchlistTable = await tx.get<{ present: number }>(
+    `SELECT 1 AS present
+     FROM information_schema.tables
+     WHERE table_schema = current_schema() AND table_name = 'watchlist_items'`,
+  );
+  if (!watchlistTable) {
+    await tx.run(`CREATE TABLE IF NOT EXISTS watchlist_items (${SHARED_TABLE_BODIES.watchlist_items()}
+    )`);
+    for (const statement of WATCHLIST_INDEXES) {
+      await tx.run(statement);
+    }
+    await tx.run("ALTER TABLE watchlist_items ENABLE ROW LEVEL SECURITY");
+  }
+
+  // v14: user feedback. A new table only; nothing existing changes. Checked
+  // first so warm starts skip the DDL and the table lock.
+  const feedbackTable = await tx.get<{ present: number }>(
+    `SELECT 1 AS present
+     FROM information_schema.tables
+     WHERE table_schema = current_schema() AND table_name = 'feedback'`,
+  );
+  if (!feedbackTable) {
+    await tx.run(`CREATE TABLE IF NOT EXISTS feedback (${SHARED_TABLE_BODIES.feedback()}
+    )`);
+    for (const statement of FEEDBACK_INDEXES) {
+      await tx.run(statement);
+    }
+    await tx.run("ALTER TABLE feedback ENABLE ROW LEVEL SECURITY");
+  }
+
   // v13: industry for the portfolio map. Existing rows read "Other" until
   // their next lookup. Checked first so warm starts skip the table lock.
   const industryColumn = await tx.get<{ present: number }>(
@@ -836,6 +897,7 @@ async function clearDomainData(
   }
 
   const tables = [
+    "watchlist_items",
     "working_orders",
     "admin_valuation_positions",
     "admin_valuation_accounts",

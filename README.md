@@ -16,6 +16,8 @@ This is an educational simulator. It does not move real money, connect to a brok
 - A host can set any team's exact CAD cash balance, pause/resume trading, freeze/disqualify/restore a team, and reset the local demonstration. Cash edits are audited and reconciled in the ledger.
 - A platform administrator can set an exact cash balance directly in the main trading workspace, then use the ordinary quote and order ticket against a private test portfolio. That account is excluded from teams, invitations, activity feeds, and the leaderboard.
 - A platform administrator has a separate cash-backed Past → Present test account: the admin sets its exact starting cash, historical purchases debit that budget, and current portfolio value includes remaining cash without touching any competition team.
+- Portfolios show average cost per holding and split gains into unrealized (on holdings) and realized (from sales). Sales realize against the average cost, exactly as the trade engine keeps it.
+- Each team keeps a shared watchlist with sortable prices and intraday sparklines; trade history and holdings export to CSV; the interface has a light and a dark theme.
 - The responsive web interface supports a 320 px viewport, so the same codebase covers laptops and phones.
 
 ## Architecture
@@ -140,7 +142,11 @@ pnpm test:e2e
 | `GET /api/quotes?q=...` | Search TSX, Nasdaq, and NYSE-family stock metadata |
 | `GET /api/quotes?symbol=DAKT` | Resolve one supported symbol and return its current quote |
 | `GET /api/quotes/history?symbol=SHOP.TO&range=1D` | Real timestamped OHLCV history and matching quote |
-| `GET /api/orders` | Read visible order history |
+| `GET /api/orders` | Read visible order history, with each sale's realized gain |
+| `GET /api/orders/export` | Download every visible fill as CSV |
+| `GET /api/watchlist` | The caller's shared team watchlist, priced |
+| `POST /api/watchlist` | Add a symbol to the team watchlist (any teammate; at most 20) |
+| `DELETE /api/watchlist/:symbol` | Remove a symbol from the team watchlist |
 | `POST /api/orders` | Commit an idempotent market order, optionally with take profit/stop loss exits on a buy |
 | `GET /api/working-orders` | The team's waiting orders (`?closed=1` adds filled, cancelled, and expired ones) |
 | `POST /api/working-orders` | Place an idempotent limit, stop loss, or take profit order |
@@ -152,6 +158,7 @@ pnpm test:e2e
 | `PATCH /api/admin/teams/:teamId` | Freeze, disqualify, or restore a team |
 | `PATCH /api/admin/teams/:teamId/cash` | Set a team's exact CAD cash balance in cents |
 | `PATCH /api/admin/trading-account/cash` | Platform admin: set the caller's private main-trading cash balance in cents |
+| `POST /api/admin/trading-account/reset` | Platform admin: empty the caller's private test portfolio back to its funded cash |
 | `GET /api/admin/valuation-lab` | Platform admin: read the isolated historical test portfolio |
 | `PATCH /api/admin/valuation-lab` | Platform admin: set the test account's exact starting cash in cents |
 | `POST /api/admin/valuation-lab` | Platform admin: record an affordable historical test purchase |
@@ -188,6 +195,7 @@ The data layer now runs on managed PostgreSQL when `LUBAN_DATABASE_PROVIDER=post
 ## Key implementation files
 
 - `components/simulator-app.tsx` — shared trading room and host UI
+- `lib/changelog.ts` — release notes behind the in-app What's new page (`/changelog`) and `CHANGELOG.md`; add each release there and run `pnpm changelog`
 - `app/api/` — authenticated HTTP boundary
 - `lib/server/trading.ts` — atomic/idempotent order transaction
 - `lib/server/quotes.ts` — cached Yahoo adapter, exact history parser, and deterministic test provider

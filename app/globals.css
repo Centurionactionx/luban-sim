@@ -13,12 +13,98 @@
   --muted: #59666b;
   --rule: #00171f;
   --hairline: #c8cbd4;
+  /* Text on lime and pink, which stay bright in both themes. */
+  --on-bright: #00171f;
+  --placeholder: #657075;
+  --positive-wash: #f1ffe7;
+  --positive-wash-2: #f2fbee;
+  --negative-wash: #fff0f3;
+  --neutral-wash: #e8ecee;
+  --chart-grid: #e3e1f3;
+  --callout-text: #332a67;
+  --purple-hover: #5143a7;
+  --offline: #9aa2a6;
+  color-scheme: light;
   --font-ui: var(--font-space-grotesk), "Helvetica Neue", Arial, sans-serif;
   --font-data: var(--font-plex-mono), "SFMono-Regular", Consolas, monospace;
   --type-section-title: 13px;
   --type-item-title: 11.5px;
   --type-description: 10.5px;
   --type-meta: 9px;
+}
+
+/*
+ * Dark theme. It follows the system setting unless someone picks a theme
+ * with the header toggle, which sets data-theme on <html>. Text on lime and
+ * the portfolio map's tiles keep their light-theme colours on purpose.
+ */
+:root[data-theme="dark"] {
+  --canvas: #120f24;
+  --paper: #1d1a33;
+  --ink: #ebe8fa;
+  --purple: #a194f2;
+  --purple-deep: #c4baff;
+  --quiet-purple: #2b2650;
+  --quiet-purple-2: #24203f;
+  --green: #74dc88;
+  --pink: #ff8fa3;
+  --red: #ff8494;
+  --muted: #a5aac2;
+  --rule: #7c74aa;
+  --hairline: #3b355f;
+  --placeholder: #8c92ad;
+  --positive-wash: #1b3524;
+  --positive-wash-2: #1b3524;
+  --negative-wash: #3d1d27;
+  --neutral-wash: #2a2c3a;
+  --chart-grid: #2f2a52;
+  --callout-text: #d3cdf7;
+  --purple-hover: #c4baff;
+  --offline: #6b7080;
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --canvas: #120f24;
+    --paper: #1d1a33;
+    --ink: #ebe8fa;
+    --purple: #a194f2;
+    --purple-deep: #c4baff;
+    --quiet-purple: #2b2650;
+    --quiet-purple-2: #24203f;
+    --green: #74dc88;
+    --pink: #ff8fa3;
+    --red: #ff8494;
+    --muted: #a5aac2;
+    --rule: #7c74aa;
+    --hairline: #3b355f;
+    --placeholder: #8c92ad;
+    --positive-wash: #1b3524;
+    --positive-wash-2: #1b3524;
+    --negative-wash: #3d1d27;
+    --neutral-wash: #2a2c3a;
+    --chart-grid: #2f2a52;
+    --callout-text: #d3cdf7;
+    --purple-hover: #c4baff;
+    --offline: #6b7080;
+    color-scheme: dark;
+  }
+}
+
+/* Map tiles carry white text, so they keep the light theme's deep colours. */
+:root[data-theme="dark"] .portfolio-map {
+  --green: #287337;
+  --red: #a92f40;
+  --muted: #59666b;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .portfolio-map {
+    --green: #287337;
+    --red: #a92f40;
+    --muted: #59666b;
+  }
 }
 
 * {
@@ -72,12 +158,12 @@ a {
 }
 
 ::selection {
-  color: var(--ink);
+  color: var(--on-bright);
   background: var(--lime);
 }
 
 ::placeholder {
-  color: #657075;
+  color: var(--placeholder);
   opacity: 1;
 }
 
@@ -129,6 +215,7 @@ a {
   min-height: 44px;
   padding: 12px 16px;
   border: 2px solid var(--ink);
+  color: var(--on-bright);
   background: var(--lime);
   font-family: var(--font-data);
   font-weight: 600;
@@ -157,7 +244,9 @@ a {
 .app-header {
   min-height: 58px;
   display: grid;
-  grid-template-columns: minmax(210px, 0.7fr) minmax(320px, 1.4fr) minmax(260px, 0.8fr);
+  /* The tools column fits its buttons and switcher, so they never overlap
+     the competition name; the middle column gives way instead. */
+  grid-template-columns: minmax(210px, 0.7fr) minmax(320px, 1.4fr) minmax(260px, auto);
   align-items: center;
   gap: 22px;
   padding: 8px 18px;
@@ -188,9 +277,10 @@ a {
 
 .competition-lockup {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: center;
-  gap: 14px;
+  gap: 8px 14px;
 }
 
 .competition-lockup > strong,
@@ -253,7 +343,7 @@ a {
 .state-tag--open,
 .connection-state--connected {
   color: var(--green);
-  background: #f1ffe7;
+  background: var(--positive-wash);
 }
 
 .state-tag--scheduled,
@@ -265,12 +355,12 @@ a {
 .state-tag--paused,
 .connection-state--reconnecting {
   color: var(--red);
-  background: #fff0f3;
+  background: var(--negative-wash);
 }
 
 .state-tag--ended {
   color: var(--ink);
-  background: #e8ecee;
+  background: var(--neutral-wash);
 }
 
 .identity-switcher {
@@ -437,7 +527,7 @@ a {
   gap: 16px;
   padding: 7px 18px 7px 22px;
   border-bottom: 2px solid var(--rule);
-  background: #fff0f3;
+  background: var(--negative-wash);
   color: var(--red);
   font-size: 12px;
 }
@@ -593,7 +683,7 @@ a {
 .team-state--frozen,
 .team-state--disqualified {
   color: var(--red);
-  background: #fff0f3;
+  background: var(--negative-wash);
 }
 
 .portfolio-total {
@@ -716,7 +806,7 @@ a {
   border: 1px solid var(--purple);
   border-radius: 3px;
   background: var(--purple);
-  color: #fff;
+  color: var(--paper);
   font-family: var(--font-data);
   font-size: 7.5px;
   font-weight: 600;
@@ -727,7 +817,7 @@ a {
 }
 
 .admin-cash-editor__form button:hover:not(:disabled) {
-  background: #5143a7;
+  background: var(--purple-hover);
 }
 
 .admin-cash-editor__form button:disabled {
@@ -858,7 +948,7 @@ a {
 }
 
 .chart__grid {
-  stroke: #e3e1f3;
+  stroke: var(--chart-grid);
   stroke-width: 1;
 }
 
@@ -1249,7 +1339,7 @@ a {
 
 .shared-callout p {
   margin-top: 3px;
-  color: #332a67;
+  color: var(--callout-text);
   font-size: 11px;
   line-height: 1.5;
 }
@@ -1541,7 +1631,7 @@ a {
   padding: 8px 10px;
   border: 1.5px solid var(--red);
   border-radius: 4px;
-  background: #fff0f3;
+  background: var(--negative-wash);
   color: var(--red);
   font-size: var(--type-description);
   line-height: 1.4;
@@ -1663,7 +1753,7 @@ a {
 
 .side-control button.is-active--sell {
   background: var(--pink);
-  color: var(--ink);
+  color: var(--on-bright);
 }
 
 .order-type {
@@ -1775,7 +1865,12 @@ a {
 .button--sell {
   border-color: var(--pink);
   background: var(--pink);
-  color: var(--ink);
+  color: var(--on-bright);
+}
+
+/* The primary hover turns the button ink; its label must turn light with it. */
+.button--sell:hover:not(:disabled) {
+  color: var(--paper);
 }
 
 .button--secondary {
@@ -1789,7 +1884,7 @@ a {
 
 .button--danger {
   border-color: var(--red);
-  background: #fff0f3;
+  background: var(--negative-wash);
   color: var(--red);
 }
 
@@ -1815,13 +1910,13 @@ a {
 
 .ticket-message--success {
   border-color: var(--green);
-  background: #f1ffe7;
+  background: var(--positive-wash);
   color: var(--green);
 }
 
 .ticket-message--error {
   border-color: var(--red);
-  background: #fff0f3;
+  background: var(--negative-wash);
   color: var(--red);
 }
 
@@ -1953,7 +2048,7 @@ a {
 }
 
 .presence-dot--offline {
-  background: #9aa2a6;
+  background: var(--offline);
 }
 
 .activity-list {
@@ -2022,7 +2117,7 @@ a {
 
 .activity-state--order_filled {
   color: var(--green);
-  background: #f1ffe7;
+  background: var(--positive-wash);
 }
 
 .leaderboard-section .table-scroll {
@@ -2352,7 +2447,7 @@ a {
   border: 1px solid var(--purple);
   border-radius: 3px;
   background: var(--purple);
-  color: #fff;
+  color: var(--paper);
   font-family: var(--font-data);
   font-size: 8px;
   text-transform: uppercase;
@@ -2361,7 +2456,7 @@ a {
 .host-team__create button:hover:not(:disabled),
 .host-team__name button:hover:not(:disabled),
 .host-team__cash button:hover:not(:disabled) {
-  background: #5143a7;
+  background: var(--purple-hover);
 }
 
 .host-team__actions {
@@ -2388,7 +2483,7 @@ a {
 
 .host-team__actions button.is-danger {
   border-color: var(--red);
-  background: #fff0f3;
+  background: var(--negative-wash);
   color: var(--red);
 }
 
@@ -3285,7 +3380,7 @@ a {
   border: 1px solid var(--red);
   border-radius: 4px;
   color: var(--red);
-  background: #fff0f3;
+  background: var(--negative-wash);
   font-size: var(--type-description);
 }
 
@@ -3330,7 +3425,7 @@ a {
   padding: 10px 12px;
   border: 1.5px solid var(--pink);
   border-radius: 4px;
-  background: #fff0f3;
+  background: var(--negative-wash);
   color: var(--ink);
   font-size: var(--type-description);
 }
@@ -3439,7 +3534,7 @@ a {
   padding: 14px;
   border: 2px solid var(--green);
   border-radius: 4px;
-  background: #f2fbee;
+  background: var(--positive-wash-2);
 }
 
 .accounts-created strong {
@@ -3473,7 +3568,7 @@ a {
   border: 1px solid var(--red);
   border-radius: 4px;
   color: var(--red);
-  background: #fff0f3;
+  background: var(--negative-wash);
   font-size: var(--type-description);
 }
 
@@ -3520,7 +3615,7 @@ a {
 
 .invite-state--active {
   color: var(--green);
-  background: #f2fbee;
+  background: var(--positive-wash-2);
 }
 
 .invite-state--used {
@@ -3531,7 +3626,7 @@ a {
 .invite-state--revoked,
 .invite-state--expired {
   color: var(--red);
-  background: #fff0f3;
+  background: var(--negative-wash);
 }
 
 .accounts-revoke {
@@ -3559,6 +3654,7 @@ a {
   height: 32px;
   border: 1.5px solid var(--rule);
   border-radius: 4px;
+  color: var(--on-bright);
   background: var(--lime);
   font-family: var(--font-data);
   font-size: 10.5px;
@@ -5242,8 +5338,10 @@ html:has(dialog[open]) {
   flex: 0 0 auto;
 }
 
-.activity-bell__button {
+.activity-bell__button,
+.feedback-button {
   position: relative;
+  flex: 0 0 auto;
   width: 40px;
   height: 40px;
   display: grid;
@@ -5257,11 +5355,14 @@ html:has(dialog[open]) {
 
 .activity-bell__button:hover,
 .activity-bell__button:focus-visible,
-.activity-bell__button[aria-expanded="true"] {
+.activity-bell__button[aria-expanded="true"],
+.feedback-button:hover,
+.feedback-button:focus-visible {
   background: var(--quiet-purple);
 }
 
-.activity-bell__button svg {
+.activity-bell__button svg,
+.feedback-button svg {
   width: 20px;
   height: 20px;
 }
@@ -5430,4 +5531,750 @@ html:has(dialog[open]) {
   .leaderboard-table td:nth-child(2) {
     text-align: left;
   }
+}
+
+/* ── Feedback: the header dialog, the /feedback page, and admin review ── */
+
+.feedback-dialog {
+  width: min(480px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+  overflow-y: auto;
+}
+
+/* Padding lives inside, so a click there is not a backdrop click. */
+.feedback-dialog__body {
+  padding: 20px 22px 18px;
+}
+
+.feedback-dialog h2 {
+  margin-bottom: 14px;
+}
+
+.feedback-form__fields {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  border: 0;
+}
+
+.feedback-topic {
+  min-width: 0;
+  border: 0;
+}
+
+.feedback-topic legend,
+.feedback-form__label-row label {
+  color: var(--muted);
+  font-family: var(--font-data);
+  font-size: var(--type-description);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.feedback-topic legend {
+  margin-bottom: 6px;
+}
+
+/* Two real radios drawn as the ticket's Buy / Sell control. */
+.feedback-topic__options {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  border: 1.5px solid var(--purple);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.feedback-topic__option {
+  position: relative;
+  min-height: 48px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  padding: 6px 10px;
+  background: var(--paper);
+  text-align: center;
+  cursor: pointer;
+}
+
+.feedback-topic__option + .feedback-topic__option {
+  border-left: 1px solid var(--purple);
+}
+
+.feedback-topic__option input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.feedback-topic__option span {
+  font-family: var(--font-data);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.feedback-topic__option small {
+  color: var(--muted);
+  font-size: var(--type-description);
+}
+
+.feedback-topic__option:hover {
+  background: var(--quiet-purple);
+}
+
+.feedback-topic__option:has(input:checked) {
+  background: var(--purple);
+  color: var(--paper);
+}
+
+.feedback-topic__option:has(input:checked) small {
+  color: var(--paper);
+}
+
+.feedback-topic__option:has(input:focus-visible) {
+  outline: 3px solid var(--lime);
+  outline-offset: -5px;
+}
+
+.feedback-form__fields:disabled .feedback-topic__option {
+  opacity: 0.52;
+  cursor: not-allowed;
+}
+
+.feedback-form__label-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.feedback-form__count {
+  color: var(--muted);
+  font-family: var(--font-data);
+  font-size: var(--type-description);
+  font-variant-numeric: tabular-nums;
+}
+
+.feedback-form__message textarea {
+  width: 100%;
+  min-height: 132px;
+  display: block;
+  padding: 10px 11px;
+  border: 1.5px solid var(--rule);
+  border-radius: 4px;
+  background: var(--paper);
+  color: inherit;
+  font: inherit;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.feedback-form__message textarea:focus-visible {
+  outline: 2px solid var(--purple);
+  outline-offset: 1px;
+  box-shadow: none;
+}
+
+.feedback-form__message textarea[aria-invalid="true"] {
+  border-color: var(--red);
+}
+
+.feedback-form__note {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.feedback-form__error {
+  padding: 9px 11px;
+  border: 1px solid var(--red);
+  border-radius: 4px;
+  color: var(--red);
+  background: var(--negative-wash);
+  font-size: 12px;
+}
+
+.feedback-form__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.feedback-form__actions .button {
+  min-height: 40px;
+  padding-inline: 16px;
+}
+
+.feedback-form--done {
+  display: grid;
+  gap: 10px;
+}
+
+.feedback-form--done .feedback-form__actions {
+  margin-top: 8px;
+}
+
+.feedback-form__done-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.feedback-form__done-title:focus {
+  outline: none;
+}
+
+.feedback-form--done p:not(.feedback-form__done-title) {
+  color: var(--muted);
+}
+
+.accounts-sheet--narrow {
+  width: min(640px, 100%);
+}
+
+.feedback-page__body {
+  display: grid;
+  gap: 18px;
+  padding: clamp(18px, 3vw, 28px);
+}
+
+.feedback-page__intro {
+  color: var(--muted);
+}
+
+.feedback-page__intro strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* Admin review: filter links drawn as a segmented control. */
+.feedback-filter {
+  display: inline-flex;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  border: 1.5px solid var(--purple);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.feedback-filter a {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 14px;
+  background: var(--paper);
+  font-family: var(--font-data);
+  font-size: 11px;
+  font-weight: 600;
+  text-decoration: none;
+  text-transform: uppercase;
+}
+
+.feedback-filter a + a {
+  border-left: 1px solid var(--purple);
+}
+
+.feedback-filter a:hover {
+  background: var(--quiet-purple);
+}
+
+.feedback-filter a[aria-current="page"] {
+  background: var(--purple);
+  color: var(--paper);
+}
+
+.feedback-count {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: var(--type-description);
+}
+
+.feedback-list {
+  margin-top: 8px;
+  border-top: 2px solid var(--rule);
+  list-style: none;
+}
+
+.feedback-entry {
+  display: grid;
+  gap: 8px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.feedback-entry__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  color: var(--muted);
+  font-size: var(--type-description);
+}
+
+.feedback-entry__meta time {
+  font-family: var(--font-data);
+}
+
+.feedback-entry__meta strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.feedback-entry__meta a {
+  overflow-wrap: anywhere;
+}
+
+.feedback-entry__message {
+  font-size: 14px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.feedback-tag {
+  display: inline-block;
+  padding: 3px 8px;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  font-family: var(--font-data);
+  font-size: var(--type-meta);
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.feedback-tag--website {
+  color: var(--green);
+  background: var(--positive-wash-2);
+}
+
+.feedback-tag--simulator {
+  color: var(--purple-deep);
+  background: var(--quiet-purple-2);
+}
+
+.feedback-empty {
+  margin-top: 16px;
+  padding: 18px;
+  border: 1px dashed var(--hairline);
+  border-radius: 4px;
+  color: var(--muted);
+}
+
+/* -------------------------------------------------------------------------
+   Theme toggle, watchlist, trade history, and the admin sandbox reset.
+   ------------------------------------------------------------------------- */
+
+.theme-toggle {
+  flex: 0 0 auto;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border: 1.5px solid var(--rule);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.theme-toggle:hover,
+.theme-toggle:focus-visible {
+  background: var(--quiet-purple);
+}
+
+.theme-toggle svg {
+  width: 20px;
+  height: 20px;
+}
+
+.watch-toggle {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  align-self: center;
+  margin-left: auto;
+  padding: 3px 9px 3px 7px;
+  border: 1px solid var(--purple);
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--purple-deep);
+  font-family: var(--font-data);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.watch-toggle:hover:not(:disabled),
+.watch-toggle:focus-visible {
+  background: var(--quiet-purple);
+}
+
+.watch-toggle[aria-pressed="true"] {
+  background: var(--quiet-purple);
+}
+
+.watch-toggle svg {
+  width: 14px;
+  height: 14px;
+}
+
+.watch-toggle[aria-pressed="true"] svg {
+  color: var(--purple);
+}
+
+.watchlist-table th,
+.watchlist-table td {
+  padding-block: 4px;
+}
+
+.watchlist-table tbody tr.is-current {
+  background: var(--quiet-purple-2);
+}
+
+.watchlist-table .symbol-button {
+  min-height: 38px;
+}
+
+.watchlist-table__spark {
+  width: 72px;
+}
+
+.watchlist-table__remove {
+  width: 40px;
+}
+
+.sort-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+}
+
+.sort-button:hover {
+  color: var(--purple-deep);
+}
+
+.sort-button__arrow {
+  min-width: 0.8em;
+  display: inline-block;
+}
+
+.sparkline {
+  display: block;
+  margin-left: auto;
+  overflow: visible;
+}
+
+.sparkline--up path {
+  stroke: var(--green);
+}
+
+.sparkline--down path {
+  stroke: var(--red);
+}
+
+.sparkline--empty {
+  width: 64px;
+  height: 22px;
+  border-bottom: 1px dashed var(--hairline);
+  transform: translateY(-10px);
+}
+
+.icon-button {
+  width: 32px;
+  height: 32px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.icon-button:hover:not(:disabled),
+.icon-button:focus-visible {
+  border-color: var(--hairline);
+  background: var(--quiet-purple-2);
+  color: var(--red);
+}
+
+.icon-button svg {
+  width: 15px;
+  height: 15px;
+}
+
+.watchlist-empty {
+  padding: 14px 18px 18px;
+  color: var(--muted);
+  font-size: var(--type-description);
+  line-height: 1.5;
+}
+
+.watchlist-empty strong {
+  color: var(--purple-deep);
+}
+
+.watchlist-feedback {
+  margin: 8px 18px 12px;
+}
+
+.trade-history-section {
+  border-top: 1px solid var(--rule);
+  padding-bottom: 12px;
+}
+
+.trade-history-table th[scope="row"] {
+  font-weight: 500;
+}
+
+.trade-history-table th[scope="row"] strong {
+  font-weight: 600;
+}
+
+.side-tag {
+  display: inline-block;
+  min-width: 34px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 8.5px;
+  letter-spacing: 0.04em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.side-tag--buy {
+  color: var(--green);
+  background: var(--positive-wash);
+}
+
+.side-tag--sell {
+  color: var(--red);
+  background: var(--negative-wash);
+}
+
+.cell-muted {
+  color: var(--muted);
+}
+
+.trade-history-toggle {
+  margin: 10px 18px 0;
+}
+
+.trade-history-section > .ticket-message {
+  margin: 10px 18px 0;
+}
+
+.sandbox-reset {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.sandbox-reset small {
+  color: var(--callout-text);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.metric-grid dt .help-tip {
+  margin-left: 3px;
+  vertical-align: middle;
+}
+
+@media (max-width: 560px) {
+  .trade-history-table tbody tr {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px 14px;
+    padding: 12px 2px;
+    border-top: 1px solid var(--hairline);
+  }
+
+  .trade-history-table thead {
+    display: none;
+  }
+
+  .trade-history-table tbody tr:first-child {
+    border-top: 0;
+  }
+
+  .trade-history-table th,
+  .trade-history-table td,
+  .trade-history-table th:first-child,
+  .trade-history-table td:first-child,
+  .trade-history-table th:last-child,
+  .trade-history-table td:last-child {
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    text-align: left;
+    white-space: normal;
+  }
+
+  .trade-history-table th::before,
+  .trade-history-table td::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 3px;
+    color: var(--muted);
+    font-size: 8px;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+
+  .trade-history-table th:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .trade-history-toggle {
+    margin-inline: 12px;
+  }
+}
+
+/* -------------------------------------------------------------------------
+   What's new: the changelog page, linked from the footer's version.
+   ------------------------------------------------------------------------- */
+
+.status-footer__version {
+  text-decoration-color: var(--purple);
+}
+
+.status-footer__version:hover {
+  color: var(--purple-deep);
+}
+
+.accounts-sheet.changelog {
+  width: min(760px, 100%);
+}
+
+.changelog__intro {
+  padding: 18px clamp(18px, 3vw, 28px) 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.changelog__intro strong {
+  color: var(--ink);
+  font-family: var(--font-data);
+}
+
+.changelog__releases {
+  display: grid;
+  gap: 0;
+  padding: 8px clamp(18px, 3vw, 28px) clamp(18px, 3vw, 28px);
+  list-style: none;
+}
+
+.changelog-release {
+  padding: 22px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.changelog-release:last-child {
+  border-bottom: 0;
+}
+
+.changelog-release__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  color: var(--muted);
+  font-family: var(--font-data);
+  font-size: 11px;
+}
+
+.changelog-release__version {
+  padding: 3px 8px;
+  border: 1px solid var(--purple);
+  border-radius: 3px;
+  background: var(--quiet-purple-2);
+  color: var(--purple-deep);
+  font-weight: 600;
+}
+
+.changelog-release__version--next {
+  border-style: dashed;
+}
+
+.changelog-release__current {
+  padding: 3px 8px;
+  border-radius: 3px;
+  background: var(--lime);
+  color: var(--on-bright);
+  font-weight: 600;
+}
+
+.changelog-release h2 {
+  margin-top: 10px;
+  font-size: 19px;
+  font-weight: 500;
+  letter-spacing: -0.015em;
+}
+
+.changelog-release__group {
+  margin-top: 14px;
+}
+
+.changelog-kind {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 3px;
+  font-family: var(--font-data);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.changelog-kind--added {
+  color: var(--green);
+  background: var(--positive-wash);
+}
+
+.changelog-kind--changed {
+  color: var(--purple-deep);
+  background: var(--quiet-purple);
+}
+
+.changelog-kind--fixed {
+  color: var(--ink);
+  background: var(--neutral-wash);
+}
+
+.changelog-kind--security {
+  color: var(--red);
+  background: var(--negative-wash);
+}
+
+.changelog-release__group ul {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  padding-left: 18px;
+  font-size: 13.5px;
+  line-height: 1.55;
+}
+
+.changelog-release__group li::marker {
+  color: var(--purple);
 }

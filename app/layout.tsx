@@ -3,6 +3,7 @@ import { IBM_Plex_Mono, Space_Grotesk } from "next/font/google";
 import type { ReactNode } from "react";
 
 import { isManagedAuthMode } from "@/lib/server/auth-mode";
+import { THEME_BOOT_SCRIPT } from "@/lib/theme";
 
 import "./globals.css";
 
@@ -26,6 +27,12 @@ export const metadata: Metadata = {
 };
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
+  // Applies a saved light/dark choice before the first paint.
+  const head = (
+    <head>
+      <script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
+    </head>
+  );
   const body = (
     <body>
       {children}
@@ -38,7 +45,12 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
     const { ClerkProvider } = await import("@clerk/nextjs");
 
     return (
-      <html lang="en" className={`${spaceGrotesk.variable} ${plexMono.variable}`}>
+      <html
+        lang="en"
+        className={`${spaceGrotesk.variable} ${plexMono.variable}`}
+        suppressHydrationWarning
+      >
+        {head}
         <ClerkProvider
           appearance={{
             variables: {
@@ -63,7 +75,12 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
   }
 
   return (
-    <html lang="en" className={`${spaceGrotesk.variable} ${plexMono.variable}`}>
+    <html
+      lang="en"
+      className={`${spaceGrotesk.variable} ${plexMono.variable}`}
+      suppressHydrationWarning
+    >
+      {head}
       {body}
     </html>
   );

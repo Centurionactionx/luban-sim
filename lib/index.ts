@@ -90,8 +90,17 @@ export {
 export {
   MAX_ADMIN_TRADING_CASH_CENTS,
   getAdminTradingTeamId,
+  resetAdminTradingAccount,
   setAdminTradingCash,
 } from "./server/admin-trading";
+
+export {
+  addToWatchlist,
+  getWatchlist,
+  listWatchlist,
+  removeFromWatchlist,
+} from "./server/watchlist";
+export type { WatchlistChangeInput } from "./server/watchlist";
 
 export type {
   AdminValuationPortfolio,
@@ -113,7 +122,11 @@ export {
   getTeamSummary,
   listActivity,
   listOrders,
+  listOrdersForExport,
+  MAX_EXPORTED_ORDERS,
+  readRealizedGains,
 } from "./server/queries";
+export type { RealizedGains } from "./server/queries";
 
 export {
   QUOTE_DELAY_MINUTES,
@@ -173,6 +186,14 @@ export {
   workingOrderTriggered,
   workingOrdersAvailableTo,
 } from "./server/working-order-book";
+
+export {
+  FEEDBACK_SUBMISSIONS_PER_MINUTE,
+  MAX_FEEDBACK_LIST_LIMIT,
+  listFeedback,
+  submitFeedback,
+} from "./server/feedback";
+export type { ListFeedbackOptions, SubmitFeedbackInput } from "./server/feedback";
 
 export {
   assertLedgerReconciles,

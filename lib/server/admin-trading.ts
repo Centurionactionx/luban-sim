@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import type {
   AdminTradingCashResult,
+  ResetAdminTradingAccountInput,
   SetAdminTradingCashInput,
 } from "../contracts";
 import { AppError } from "../errors";
@@ -243,6 +244,118 @@ export async function setAdminTradingCash(
       cashCents: Number(sandbox.cash_cents),
       portfolioVersion: Number(sandbox.version),
       created,
+    };
+  });
+}
+
+/**
+ * Empties the authenticated administrator's private test portfolio: every
+ * holding, waiting order, fill, ledger row, value snapshot, and activity
+ * entry goes, and it starts again with one starting-cash row. The cash is
+ * the amount it was funded with unless a new amount is given. The watchlist
+ * is kept. Competition teams can never be reset this way: the row is found
+ * by its owner, the authenticated actor.
+ */
+export async function resetAdminTradingAccount(
+  input: ResetAdminTradingAccountInput,
+): Promise<AdminTradingCashResult> {
+  const requestedCashCents =
+    input.cashCents === undefined ? null : normalizeCashCents(input.cashCents);
+  const db = await getDb();
+
+  return db.transaction(async (tx) => {
+    await acquireAdvisoryLock(tx, ADVISORY_LOCK_ACCOUNTS);
+    const actor = await requirePlatformAdminActor(tx, input.actorUserId);
+    const sandbox = await tx.get<AdminSandboxRow>(
+      `SELECT id, competition_id, cash_cents, version
+       FROM teams
+       WHERE sandbox_owner_user_id = ?`,
+      [actor.id],
+    );
+    if (!sandbox) {
+      throw new AppError(
+        "NO_TEST_PORTFOLIO",
+        "Set your test cash first; there is no test portfolio to reset yet.",
+        404,
+      );
+    }
+
+    const funding = await tx.get<{ amount_cents: number }>(
+      `SELECT COALESCE(SUM(amount_cents), 0) AS amount_cents
+       FROM ledger_entries
+       WHERE team_id = ? AND entry_type IN ('STARTING_CASH', 'ADJUSTMENT')`,
+      [sandbox.id],
+    );
+    const cashCents =
+      requestedCashCents ??
+      Math.min(
+        MAX_ADMIN_TRADING_CASH_CENTS,
+        Math.max(0, Number(funding?.amount_cents ?? 0)),
+      );
+
+    // Bumping the version first makes any fill racing this reset fail its
+    // own version check instead of landing on the emptied portfolio.
+    const changed = await tx.run(
+      `UPDATE teams
+       SET cash_cents = ?, version = version + 1
+       WHERE id = ? AND sandbox_owner_user_id = ? AND version = ?`,
+      [cashCents, sandbox.id, actor.id, sandbox.version],
+    );
+    if (changed.changes !== 1) {
+      throw new AppError(
+        "PORTFOLIO_CONFLICT",
+        "The test portfolio changed while it was being reset. Retry the request.",
+        409,
+      );
+    }
+
+    for (const table of [
+      "working_orders",
+      "ledger_entries",
+      "orders",
+      "holdings",
+      "portfolio_snapshots",
+      "activity_events",
+    ]) {
+      await tx.run(`DELETE FROM ${table} WHERE team_id = ?`, [sandbox.id]);
+    }
+
+    const createdAt = new Date().toISOString();
+    await tx.run(
+      `INSERT INTO ledger_entries (
+         id, team_id, order_id, entry_type, amount_cents,
+         symbol, quantity, note, created_at
+       ) VALUES (?, ?, NULL, 'STARTING_CASH', ?, NULL, NULL, ?, ?)`,
+      [
+        randomUUID(),
+        sandbox.id,
+        cashCents,
+        "Admin test portfolio reset",
+        createdAt,
+      ],
+    );
+    await tx.run(
+      `INSERT INTO activity_events (
+         id, competition_id, team_id, actor_user_id, type,
+         title, detail, created_at
+       ) VALUES (?, ?, ?, ?, 'TEAM_CASH_ADJUSTED', ?, ?, ?)`,
+      [
+        randomUUID(),
+        sandbox.competition_id,
+        sandbox.id,
+        actor.id,
+        "Admin test portfolio reset",
+        `${actor.name} reset the private test portfolio to ${formatCad(cashCents)} cash.`,
+        createdAt,
+      ],
+    );
+
+    await assertTeamLedgerReconciles([sandbox.id], tx);
+    return {
+      teamId: sandbox.id,
+      cashCents,
+      portfolioVersion: Number(sandbox.version) + 1,
+      created: false,
     };
   });
 }

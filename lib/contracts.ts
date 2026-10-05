@@ -111,6 +111,39 @@ export interface AuthAuditEventView {
   createdAt: string;
 }
 
+/**
+ * Feedback is about either the public website (lubancanada.com) or this
+ * simulator. The sender is the signed-in account, so there is no email field.
+ */
+export type FeedbackTopic = "WEBSITE" | "SIMULATOR";
+/** Where it was sent from: the header button or the standalone /feedback page. */
+export type FeedbackSource = "header" | "page";
+
+export const FEEDBACK_TOPICS: readonly FeedbackTopic[] = ["WEBSITE", "SIMULATOR"];
+export const FEEDBACK_SOURCES: readonly FeedbackSource[] = ["header", "page"];
+/** Counted in characters after trimming. */
+export const FEEDBACK_MIN_LENGTH = 5;
+export const FEEDBACK_MAX_LENGTH = 2000;
+
+export function isFeedbackTopic(value: unknown): value is FeedbackTopic {
+  return FEEDBACK_TOPICS.includes(value as FeedbackTopic);
+}
+
+/** One submission as platform administrators review it. */
+export interface FeedbackItem {
+  id: string;
+  topic: FeedbackTopic;
+  message: string;
+  source: FeedbackSource;
+  createdAt: string;
+  userId: string;
+  userName: string;
+  userEmail: string;
+  /** The sender's team when they sent it; null for no team or a removed one. */
+  teamId: string | null;
+  teamName: string | null;
+}
+
 /** One row of the admin user-management list. */
 export interface AccountView {
   id: string;
@@ -291,6 +324,10 @@ export interface PortfolioSummary {
   buyingPowerCents: number;
   /** Cash set aside for waiting buys (already left out of buying power). */
   reservedCashCents: number;
+  /** Gain or loss on shares still held: market value minus their cost. */
+  unrealizedGainCents: number;
+  /** Gain or loss locked in by sells, each against the average cost then. */
+  realizedGainCents: number;
   asOf: string;
 }
 
@@ -309,6 +346,29 @@ export interface OrderView {
   grossCents: number;
   status: OrderStatus;
   createdAt: string;
+  /**
+   * For a sell, what it locked in: proceeds minus the average cost of the
+   * shares sold. Null for buys, and left out where it was not worked out.
+   */
+  realizedGainCents?: number | null;
+}
+
+/** Most symbols one team can watch at once. */
+export const MAX_WATCHLIST_ITEMS = 20;
+
+/**
+ * One symbol on a team's shared watchlist, priced like the rest of the
+ * dashboard. quote is null when no price could be found for it right now.
+ */
+export interface WatchlistItemView {
+  symbol: string;
+  name: string;
+  exchange: string;
+  listingCurrency: "CAD" | "USD";
+  assetClass: AssetClass;
+  addedByName: string | null;
+  addedAt: string;
+  quote: Quote | null;
 }
 
 export interface ActivityItem {
@@ -366,6 +426,8 @@ export interface Dashboard {
   workingOrders: WorkingOrderView[];
   /** Whether this person may place limit, stop loss, and take profit orders. */
   workingOrdersEnabled: boolean;
+  /** The portfolio's shared watchlist, oldest first. Empty without a portfolio. */
+  watchlist: WatchlistItemView[];
   serverTime: string;
 }
 
@@ -532,6 +594,13 @@ export interface SetTeamCashInput {
 export interface SetAdminTradingCashInput {
   actorUserId: string;
   cashCents: number;
+}
+
+/** Empties the authenticated administrator's private test portfolio. */
+export interface ResetAdminTradingAccountInput {
+  actorUserId: string;
+  /** The cash to start again with; defaults to the cash it was funded with. */
+  cashCents?: number;
 }
 
 export interface AdminTradingCashResult {

@@ -310,6 +310,7 @@ const shots = {
       targets: [
         { rect: box(lockup.locator("strong"), lockup.locator(".state-tag")) },
         { rect: box(page.locator(".guide-link")) },
+        { rect: box(page.getByRole("button", { name: "Send feedback" })), inflateX: 10, inflateY: 10 },
         // A fresh browser hasn't seen any activity, so the bell shows its bubble.
         { rect: box(page.locator(".activity-bell__button")), inflateX: 10, inflateY: 10 },
         { rect: box(strip.locator(":scope > div").last()), inflateY: 8, badgeAngle: 180 },
@@ -529,7 +530,7 @@ const shots = {
       extraRegion: panel,
       keepScroll: true,
       targets: [
-        { rect: box(bell.locator(".activity-bell__button")), inflateX: 10, inflateY: 10, badgeAngle: 180 },
+        { rect: box(bell.locator(".activity-bell__button")), inflateX: 10, inflateY: 10, badgeAngle: 315 },
         { rect: box(entry), inflateX: 8, inflateY: 6, slack: 12 },
         { rect: box(entry.locator(".activity-state")), inflateX: 10, inflateY: 8 },
       ],

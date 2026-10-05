@@ -24,6 +24,7 @@ import type {
   DemoUser,
   HoldingView,
   InstrumentSearchResult,
+  OrderView,
   PopularSection,
   Leaderboard,
   LeaderboardRow,
@@ -38,9 +39,12 @@ import type {
   TeamStatus,
   TimeInForce,
   TradeSide,
+  WatchlistItemView,
   WorkingOrderType,
   WorkingOrderView,
 } from "@/lib/contracts";
+import { MAX_WATCHLIST_ITEMS } from "@/lib/contracts";
+import { centsToDecimal, toCsv } from "@/lib/csv";
 import {
   cryptoTokenSymbol,
   formatTokenQuantity,
@@ -75,7 +79,11 @@ import {
   BellIcon,
   BookIcon,
   CashIcon,
+  ChatIcon,
   ChevronDownIcon,
+  DownloadIcon,
+  HistoryIcon,
+  StarIcon,
   CalendarIcon,
   CloseIcon,
   ExpandIcon,
@@ -92,7 +100,9 @@ import {
   UserIcon,
   UsersIcon,
 } from "./simulator-icons";
+import { FeedbackButton } from "./feedback-button";
 import { PortfolioMap } from "./portfolio-map";
+import { ThemeToggle } from "./theme-toggle";
 
 type DashboardPayload = Omit<Dashboard, "leaderboard"> & {
   leaderboard: LeaderboardRow[] | Leaderboard;
@@ -102,7 +112,7 @@ type DashboardPayload = Omit<Dashboard, "leaderboard"> & {
   };
 };
 
-type RailSectionId = "presence" | "leaderboard" | "host";
+type RailSectionId = "watchlist" | "presence" | "leaderboard" | "host";
 
 /** What the portfolio map dialog shows: this portfolio, or a team a host opened. */
 type MapDialogView =
@@ -118,6 +128,7 @@ type MapDialogView =
 type TeamEditorField = "name" | "cash";
 
 const INITIAL_RAIL_SECTIONS: Record<RailSectionId, boolean> = {
+  watchlist: true,
   presence: true,
   leaderboard: true,
   host: true,
@@ -282,6 +293,8 @@ const fallbackPortfolio: PortfolioSummary = {
   dayChangePercent: 0,
   buyingPowerCents: 10000000,
   reservedCashCents: 0,
+  unrealizedGainCents: 0,
+  realizedGainCents: 0,
   asOf: FIXED_NOW,
 };
 
@@ -393,6 +406,7 @@ const fallbackDashboard: DashboardPayload = {
   availableSymbols: fallbackQuotes,
   workingOrders: [],
   workingOrdersEnabled: false,
+  watchlist: [],
   serverTime: FIXED_NOW,
   session: {
     user: { ...fallbackUsers[0], email: "alex@demo.luban.org", status: "active" },
@@ -411,6 +425,8 @@ const emptyPortfolio: PortfolioSummary = {
   dayChangePercent: 0,
   buyingPowerCents: 0,
   reservedCashCents: 0,
+  unrealizedGainCents: 0,
+  realizedGainCents: 0,
   asOf: FIXED_NOW,
 };
 
@@ -2121,6 +2137,364 @@ function ChangeValue({ cents, percent }: { cents?: number; percent: number }) {
   );
 }
 
+
+/* ───────────────────────────── Watchlist ───────────────────────────── */
+
+const SPARKLINE_TTL_MS = 5 * 60_000;
+const SPARKLINE_CONCURRENCY = 2;
+const sparklineCache = new Map<
+  string,
+  { at: number; closes: Promise<number[] | null> }
+>();
+let sparklinesInFlight = 0;
+const sparklineQueue: Array<() => void> = [];
+
+function runSparklineJob<T>(job: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const start = () => {
+      sparklinesInFlight += 1;
+      job()
+        .then(resolve, reject)
+        .finally(() => {
+          sparklinesInFlight -= 1;
+          sparklineQueue.shift()?.();
+        });
+    };
+    if (sparklinesInFlight < SPARKLINE_CONCURRENCY) start();
+    else sparklineQueue.push(start);
+  });
+}
+
+/**
+ * Today's closes for a watchlist row, remembered for a few minutes and
+ * fetched two at a time so a full watchlist never crowds out the main
+ * chart's requests.
+ */
+function loadSparklineCloses(symbol: string): Promise<number[] | null> {
+  const cached = sparklineCache.get(symbol);
+  if (cached && Date.now() - cached.at < SPARKLINE_TTL_MS) return cached.closes;
+  const closes = runSparklineJob(async () => {
+    try {
+      const response = await fetch(
+        `/api/quotes/history?symbol=${encodeURIComponent(symbol)}&range=1D`,
+        { cache: "no-store", credentials: "same-origin" },
+      );
+      if (!response.ok) return null;
+      const payload = (await response.json()) as { history?: QuoteHistory };
+      return (payload.history?.points ?? []).map((point) => point.closeCents);
+    } catch {
+      return null;
+    }
+  });
+  sparklineCache.set(symbol, { at: Date.now(), closes });
+  return closes;
+}
+
+function Sparkline({ symbol, refreshKey }: { symbol: string; refreshKey: number }) {
+  const [closes, setCloses] = useState<number[] | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    void loadSparklineCloses(symbol).then((next) => {
+      if (live) setCloses(next);
+    });
+    return () => {
+      live = false;
+    };
+  }, [symbol, refreshKey]);
+
+  if (!closes || closes.length < 2) {
+    return <span className="sparkline sparkline--empty" aria-hidden="true" />;
+  }
+
+  const width = 64;
+  const height = 22;
+  const low = Math.min(...closes);
+  const high = Math.max(...closes);
+  const span = high - low || 1;
+  const path = closes
+    .map((close, index) => {
+      const x = (index / (closes.length - 1)) * width;
+      const y = height - 2 - ((close - low) / span) * (height - 4);
+      return `${index === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  const rising = closes[closes.length - 1] >= closes[0];
+
+  return (
+    <svg
+      className={`sparkline ${rising ? "sparkline--up" : "sparkline--down"}`}
+      viewBox={`0 0 ${width} ${height}`}
+      width={width}
+      height={height}
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d={path} fill="none" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+    </svg>
+  );
+}
+
+type WatchlistSortKey = "added" | "symbol" | "price" | "change";
+
+function WatchlistTable({
+  items,
+  selectedSymbol,
+  busySymbol,
+  onOpen,
+  onRemove,
+}: {
+  items: WatchlistItemView[];
+  selectedSymbol: string;
+  busySymbol: string | null;
+  onOpen: (item: WatchlistItemView) => void;
+  onRemove: (symbol: string) => void;
+}) {
+  const [sort, setSort] = useState<{ key: WatchlistSortKey; descending: boolean }>({
+    key: "added",
+    descending: false,
+  });
+  // Sparklines redraw every few minutes, when their cache runs out.
+  const [sparkKey, setSparkKey] = useState(0);
+  useEffect(() => {
+    const timer = window.setInterval(() => setSparkKey((key) => key + 1), SPARKLINE_TTL_MS);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const sorted = useMemo(() => {
+    const rows = items.map((item, index) => ({ item, index }));
+    const value = ({ item, index }: { item: WatchlistItemView; index: number }) =>
+      sort.key === "symbol"
+        ? item.symbol
+        : sort.key === "price"
+          ? (item.quote?.priceCadCents ?? -Infinity)
+          : sort.key === "change"
+            ? (item.quote?.changePercent ?? -Infinity)
+            : index;
+    rows.sort((left, right) => {
+      const a = value(left);
+      const b = value(right);
+      const order =
+        typeof a === "string" && typeof b === "string"
+          ? a.localeCompare(b)
+          : Number(a) - Number(b);
+      return sort.descending ? -order : order;
+    });
+    return rows.map((row) => row.item);
+  }, [items, sort]);
+
+  const sortHeader = (key: WatchlistSortKey, label: string) => {
+    const active = sort.key === key;
+    return (
+      <th
+        scope="col"
+        aria-sort={active ? (sort.descending ? "descending" : "ascending") : "none"}
+      >
+        <button
+          type="button"
+          className="sort-button"
+          onClick={() =>
+            setSort((current) =>
+              current.key === key
+                ? { key, descending: !current.descending }
+                : // Numbers read best largest first; names A to Z.
+                  { key, descending: key !== "symbol" },
+            )
+          }
+        >
+          {label}
+          <span aria-hidden="true" className="sort-button__arrow">
+            {active ? (sort.descending ? "↓" : "↑") : ""}
+          </span>
+        </button>
+      </th>
+    );
+  };
+
+  return (
+    <div className="table-scroll">
+      <table className="data-table watchlist-table">
+        <thead>
+          <tr>
+            {sortHeader("symbol", "Symbol")}
+            {sortHeader("price", "Price")}
+            {sortHeader("change", "Day")}
+            <th scope="col">
+              <span className="sr-only">Today&apos;s trend</span>
+            </th>
+            <th scope="col">
+              <span className="sr-only">Remove</span>
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((item) => {
+            const tag = assetTagLabel(item.assetClass);
+            return (
+              <tr
+                key={item.symbol}
+                className={item.symbol === selectedSymbol ? "is-current" : undefined}
+              >
+                <th scope="row" data-label="Symbol">
+                  <button
+                    type="button"
+                    className="symbol-button"
+                    onClick={() => onOpen(item)}
+                    title={item.addedByName ? `Added by ${item.addedByName}` : undefined}
+                  >
+                    <strong>
+                      {item.symbol}
+                      {tag ? <em className="asset-tag">{tag}</em> : null}
+                    </strong>
+                    <span>{item.name}</span>
+                  </button>
+                </th>
+                <td data-label="Price">
+                  {item.quote ? formatMoney(item.quote.priceCadCents) : "—"}
+                </td>
+                <td data-label="Day">
+                  {item.quote ? <ChangeValue percent={item.quote.changePercent} /> : "—"}
+                </td>
+                <td data-label="Today" className="watchlist-table__spark">
+                  <Sparkline symbol={item.symbol} refreshKey={sparkKey} />
+                </td>
+                <td data-label="" className="watchlist-table__remove">
+                  <button
+                    type="button"
+                    className="icon-button"
+                    disabled={busySymbol !== null}
+                    onClick={() => onRemove(item.symbol)}
+                    aria-label={`Remove ${item.symbol} from the watchlist`}
+                    title="Remove from watchlist"
+                  >
+                    <CloseIcon />
+                  </button>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/* ──────────────────────────── Trade history ─────────────────────────── */
+
+function formatTradeTime(iso: string): string {
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) return "Unknown time";
+  return new Intl.DateTimeFormat("en-CA", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: DISPLAY_TIME_ZONE,
+  }).format(parsed);
+}
+
+/** Most fills the history table loads at once; the CSV has every one. */
+const TRADE_HISTORY_PAGE = 100;
+/** Fills shown before "Show all". */
+const TRADE_HISTORY_PREVIEW = 8;
+
+function TradeHistoryTable({
+  orders,
+  showTeam,
+}: {
+  orders: OrderView[];
+  showTeam: boolean;
+}) {
+  return (
+    <div className="table-scroll">
+      <table className="data-table trade-history-table">
+        <thead>
+          <tr>
+            <th scope="col">Trade</th>
+            <th scope="col">Quantity</th>
+            <th scope="col">Price</th>
+            <th scope="col">Total</th>
+            <th scope="col">Realized</th>
+          </tr>
+        </thead>
+        <tbody>
+          {orders.map((order) => (
+            <tr key={order.id}>
+              <th scope="row" data-label="Trade">
+                <strong>
+                  <span className={`side-tag side-tag--${order.side.toLowerCase()}`}>
+                    {order.side === "BUY" ? "Buy" : "Sell"}
+                  </span>{" "}
+                  {order.symbol}
+                </strong>
+                <small className="cell-note">
+                  {formatTradeTime(order.createdAt)} ·{" "}
+                  {showTeam ? `${order.teamName} · ${order.actorName}` : order.actorName}
+                </small>
+              </th>
+              <td data-label="Quantity">{number.format(order.quantity)}</td>
+              <td data-label="Price">{formatMoney(order.fillPriceCadCents)}</td>
+              <td data-label="Total">{formatMoney(order.grossCents)}</td>
+              <td data-label="Realized">
+                {order.side === "SELL" && typeof order.realizedGainCents === "number" ? (
+                  <ChangeValue cents={order.realizedGainCents} percent={0} />
+                ) : (
+                  <span className="cell-muted">—</span>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** Starts a browser download of text the page already has. */
+function downloadTextFile(filename: string, text: string, type: string): void {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function holdingsCsv(holdings: HoldingView[]): string {
+  return toCsv(
+    [
+      "Symbol",
+      "Name",
+      "Exchange",
+      "Listing currency",
+      "Quantity",
+      "Average cost (CAD)",
+      "Price (CAD)",
+      "Cost basis (CAD)",
+      "Market value (CAD)",
+      "Unrealized gain (CAD)",
+      "Unrealized gain (%)",
+      "Portfolio weight (%)",
+    ],
+    holdings.map((holding) => [
+      holding.symbol,
+      holding.name,
+      holding.exchange,
+      holding.listingCurrency,
+      holding.quantity,
+      centsToDecimal(holding.averageCostCents),
+      centsToDecimal(holding.currentPriceCadCents),
+      centsToDecimal(holding.costBasisCents),
+      centsToDecimal(holding.marketValueCents),
+      centsToDecimal(holding.gainLossCents),
+      holding.gainLossPercent,
+      holding.portfolioWeightPercent,
+    ]),
+  );
+}
+
 export interface SimulatorAppProps {
   /** demo (default): seeded identities and the identity switcher. */
   authMode?: AuthMode;
@@ -2218,6 +2592,14 @@ export function SimulatorApp({
   const [removeTeamArmed, setRemoveTeamArmed] = useState<string | null>(null);
   const [hostFeedback, setHostFeedback] = useState("");
   const [resetArmed, setResetArmed] = useState(false);
+  const [watchBusy, setWatchBusy] = useState<string | null>(null);
+  const [watchFeedback, setWatchFeedback] = useState<TicketStatus | null>(null);
+  // The full trade history loads only when someone asks for it.
+  const [tradeHistoryOpen, setTradeHistoryOpen] = useState(false);
+  const [tradeHistory, setTradeHistory] = useState<OrderView[] | null>(null);
+  const [tradeHistoryError, setTradeHistoryError] = useState("");
+  const [sandboxResetArmed, setSandboxResetArmed] = useState(false);
+  const [sandboxResetBusy, setSandboxResetBusy] = useState(false);
   const [syncFlash, setSyncFlash] = useState(false);
   const [openRailSections, setOpenRailSections] = useState(INITIAL_RAIL_SECTIONS);
   const dashboardRequest = useRef<AbortController | null>(null);
@@ -2381,6 +2763,37 @@ export function SimulatorApp({
       if (dashboardRequest.current === controller) dashboardRequest.current = null;
     }
   }, [isManaged, router, selectedSymbol]);
+
+  // The full history follows the portfolio: every trade bumps its version.
+  const historyVersion = dashboard.team?.version ?? 0;
+  const historyUserId = dashboard.currentUser.id;
+  useEffect(() => {
+    if (!tradeHistoryOpen) return;
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const response = await fetch(`/api/orders?limit=${TRADE_HISTORY_PAGE}`, {
+          cache: "no-store",
+          credentials: "same-origin",
+          signal: controller.signal,
+        });
+        const payload = (await readJson(response)) as {
+          orders?: OrderView[];
+        } & ApiErrorShape;
+        if (!response.ok || !payload.orders) {
+          throw new Error(extractError(payload, "The trade history could not load."));
+        }
+        setTradeHistory(payload.orders);
+        setTradeHistoryError("");
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setTradeHistoryError(
+          error instanceof Error ? error.message : "The trade history could not load.",
+        );
+      }
+    })();
+    return () => controller.abort();
+  }, [tradeHistoryOpen, historyVersion, historyUserId]);
 
   useEffect(() => {
     if (!sessionReady) return;
@@ -2715,6 +3128,13 @@ export function SimulatorApp({
   const isPlatformAdmin = dashboard.currentUser.role === "platform_admin";
   const isCompetitionHost = dashboard.currentUser.role === "host";
   const canManageCompetition = isCompetitionHost || isPlatformAdmin;
+  // A watchlist belongs to a portfolio: a team's, or an admin's test account.
+  const canKeepWatchlist = !isCompetitionHost && dashboard.team !== null;
+  const isWatched = dashboard.watchlist.some((item) => item.symbol === selectedQuote.symbol);
+  const watchlistFull = dashboard.watchlist.length >= MAX_WATCHLIST_ITEMS;
+  const tradeRows = tradeHistoryOpen
+    ? (tradeHistory ?? dashboard.recentOrders)
+    : dashboard.recentOrders.slice(0, TRADE_HISTORY_PREVIEW);
   const hasAdminTradingAccount =
     isPlatformAdmin && dashboard.team !== null && dashboard.portfolio !== null;
   const tradingAccountIsOpen =
@@ -3531,6 +3951,100 @@ export function SimulatorApp({
     }
   };
 
+  const resetAdminSandbox = async () => {
+    if (!isPlatformAdmin || !dashboard.team) return;
+    if (!sandboxResetArmed) {
+      setSandboxResetArmed(true);
+      return;
+    }
+    setSandboxResetBusy(true);
+    setAdminCashFeedback({ kind: "working", message: "Resetting your test portfolio…" });
+    try {
+      const response = await fetch("/api/admin/trading-account/reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({}),
+      });
+      const payload = (await readJson(response)) as {
+        account?: { cashCents: number };
+      } & ApiErrorShape;
+      if (!response.ok) {
+        throw new Error(extractError(payload, "The test portfolio was not reset."));
+      }
+      setAdminCashDraft(null);
+      setTradeHistory(null);
+      setAdminCashFeedback({
+        kind: "success",
+        message: `Test portfolio reset to ${formatMoney(payload.account?.cashCents ?? 0)} cash.`,
+      });
+      await fetchDashboard(true, false);
+    } catch (error) {
+      setAdminCashFeedback({
+        kind: "error",
+        message: error instanceof Error ? error.message : "The test portfolio was not reset.",
+      });
+    } finally {
+      setSandboxResetBusy(false);
+      setSandboxResetArmed(false);
+    }
+  };
+
+  const changeWatchlist = async (symbol: string, watch: boolean) => {
+    if (!canKeepWatchlist) return;
+    setWatchBusy(symbol);
+    setWatchFeedback(null);
+    try {
+      const response = await fetch(
+        watch ? "/api/watchlist" : `/api/watchlist/${encodeURIComponent(symbol)}`,
+        {
+          method: watch ? "POST" : "DELETE",
+          headers: watch ? { "Content-Type": "application/json" } : undefined,
+          credentials: "same-origin",
+          body: watch ? JSON.stringify({ symbol }) : undefined,
+        },
+      );
+      const payload = (await readJson(response)) as {
+        watchlist?: WatchlistItemView[];
+      } & ApiErrorShape;
+      if (!response.ok || !payload.watchlist) {
+        throw new Error(
+          extractError(
+            payload,
+            watch ? `${symbol} was not added to the watchlist.` : `${symbol} was not removed.`,
+          ),
+        );
+      }
+      const watchlist = payload.watchlist;
+      setDashboard((current) => ({ ...current, watchlist }));
+      setWatchFeedback({
+        kind: "success",
+        message: watch ? `${symbol} added to the watchlist.` : `${symbol} removed from the watchlist.`,
+      });
+    } catch (error) {
+      setWatchFeedback({
+        kind: "error",
+        message: error instanceof Error ? error.message : "The watchlist did not change.",
+      });
+    } finally {
+      setWatchBusy(null);
+    }
+  };
+
+  const openWatchlistItem = (item: WatchlistItemView) => {
+    if (item.quote) selectQuote(item.quote);
+    else void loadSearchResult({ symbol: item.symbol });
+  };
+
+  const exportHoldings = () => {
+    const day = new Date().toISOString().slice(0, 10);
+    downloadTextFile(
+      `luban-holdings-${day}.csv`,
+      holdingsCsv(dashboard.holdings),
+      "text/csv;charset=utf-8",
+    );
+  };
+
   const updateCompetition = async () => {
     if (!canManageCompetition) return;
     const nextStatus = dashboard.competition.status === "active" ? "paused" : "active";
@@ -3960,6 +4474,8 @@ export function SimulatorApp({
           </div>
 
           <div className="header-tools">
+          <ThemeToggle />
+          <FeedbackButton />
           <ActivityBell
             items={dashboard.recentActivity}
             title={
@@ -4188,6 +4704,32 @@ export function SimulatorApp({
                   <small>{formatPercent(portfolio.totalReturnPercent)}</small>
                 </dd>
               </div>
+              <div>
+                <dt>
+                  Unrealized
+                  <HelpTip id="help-unrealized" label="What unrealized gain means">
+                    The gain or loss on shares you still hold: what they are worth now
+                    minus what you paid for them. It changes with the price until you sell.
+                  </HelpTip>
+                </dt>
+                <dd>
+                  <ChangeValue cents={portfolio.unrealizedGainCents} percent={0} />
+                  <small>On holdings</small>
+                </dd>
+              </div>
+              <div>
+                <dt>
+                  Realized
+                  <HelpTip id="help-realized" label="What realized gain means">
+                    The gain or loss locked in by selling: each sale&apos;s proceeds minus the
+                    average cost of the shares sold.
+                  </HelpTip>
+                </dt>
+                <dd>
+                  <ChangeValue cents={portfolio.realizedGainCents} percent={0} />
+                  <small>From sales</small>
+                </dd>
+              </div>
             </dl>
 
             <section className="portfolio-chart" aria-labelledby="portfolio-chart-title">
@@ -4217,6 +4759,17 @@ export function SimulatorApp({
               <div className="subheading-row">
                 <h3 id="holdings-heading">Holdings</h3>
                 <span>Ranked by market value</span>
+                {dashboard.holdings.length > 0 ? (
+                  <button
+                    type="button"
+                    className="chart-expand"
+                    onClick={exportHoldings}
+                    aria-label="Export holdings as CSV"
+                  >
+                    <DownloadIcon />
+                    CSV
+                  </button>
+                ) : null}
                 {dashboard.portfolio !== null ? (
                   <button
                     type="button"
@@ -4236,6 +4789,7 @@ export function SimulatorApp({
                       <tr>
                         <th scope="col">Symbol</th>
                         <th scope="col">{holdingsHaveLots ? "Quantity" : "Shares"}</th>
+                        <th scope="col">Avg cost</th>
                         <th scope="col">Price</th>
                         <th scope="col">Market value</th>
                         <th scope="col">Gain/loss</th>
@@ -4282,6 +4836,12 @@ export function SimulatorApp({
                                   {number.format(holding.reservedQuantity)} held for waiting sells
                                 </small>
                               ) : null}
+                            </td>
+                            <td data-label="Avg cost">
+                              {formatMoney(holding.averageCostCents)}
+                              <small className="cell-note">
+                                {formatMoney(holding.costBasisCents)} paid
+                              </small>
                             </td>
                             <td data-label="Price">
                               {formatMoney(holding.currentPriceCadCents)}
@@ -4422,6 +4982,60 @@ export function SimulatorApp({
               </section>
             ) : null}
 
+            <section className="trade-history-section" aria-labelledby="trade-history-heading">
+              <div className="subheading-row">
+                <h3 id="trade-history-heading">Trade history</h3>
+                <span>
+                  {tradeHistoryOpen && tradeHistory
+                    ? `Latest ${number.format(tradeHistory.length)}`
+                    : "Newest first"}
+                </span>
+                {dashboard.recentOrders.length > 0 ? (
+                  <a
+                    className="chart-expand"
+                    href="/api/orders/export"
+                    download
+                    aria-label="Export every trade as CSV"
+                  >
+                    <DownloadIcon />
+                    CSV
+                  </a>
+                ) : null}
+              </div>
+              {tradeRows.length > 0 ? (
+                <TradeHistoryTable orders={tradeRows} showTeam={isCompetitionHost} />
+              ) : (
+                <div className="empty-state">
+                  <HistoryIcon />
+                  <p>
+                    {isCompetitionHost
+                      ? "No trades yet in this competition."
+                      : "No trades yet. Filled orders appear here with what each sale made or lost."}
+                  </p>
+                </div>
+              )}
+              {tradeHistoryError ? (
+                <p className="ticket-message ticket-message--error" role="alert">
+                  {tradeHistoryError}
+                </p>
+              ) : null}
+              {dashboard.recentOrders.length >= TRADE_HISTORY_PREVIEW ? (
+                <button
+                  type="button"
+                  className="button button--secondary button--compact trade-history-toggle"
+                  aria-expanded={tradeHistoryOpen}
+                  onClick={() => {
+                    setTradeHistoryOpen((open) => !open);
+                    setTradeHistoryError("");
+                  }}
+                >
+                  {tradeHistoryOpen
+                    ? "Show fewer"
+                    : `Show up to ${TRADE_HISTORY_PAGE} trades`}
+                </button>
+              ) : null}
+            </section>
+
             {isPlatformAdmin ? (
               <aside className="shared-callout shared-callout--private">
                 <LockIcon />
@@ -4431,6 +5045,32 @@ export function SimulatorApp({
                     Your cash, holdings, and orders are isolated from every team and
                     never affect the competition leaderboard.
                   </p>
+                  {dashboard.team ? (
+                    <div className="sandbox-reset">
+                      <button
+                        type="button"
+                        className={`button button--secondary button--compact${
+                          sandboxResetArmed ? " button--danger" : ""
+                        }`}
+                        onClick={() => void resetAdminSandbox()}
+                        onBlur={() => setSandboxResetArmed(false)}
+                        disabled={sandboxResetBusy}
+                      >
+                        <RefreshIcon />
+                        {sandboxResetBusy
+                          ? "Resetting…"
+                          : sandboxResetArmed
+                            ? "Confirm reset"
+                            : "Reset test portfolio"}
+                      </button>
+                      {sandboxResetArmed ? (
+                        <small role="status">
+                          Clears every holding, waiting order, and past trade, and puts back
+                          the cash it was funded with. The watchlist stays.
+                        </small>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
               </aside>
             ) : isCompetitionHost ? (
@@ -4575,6 +5215,23 @@ export function SimulatorApp({
                   <strong>{quoteLoaded ? formatMoney(selectedQuote.priceCadCents) : "—"}</strong>
                   <span>{selectedIsCrypto ? "CAD per lot" : "CAD"}</span>
                   {quoteLoaded ? <ChangeValue percent={selectedQuote.changePercent} /> : null}
+                  {canKeepWatchlist && quoteLoaded ? (
+                    <button
+                      type="button"
+                      className="watch-toggle"
+                      aria-pressed={isWatched}
+                      disabled={watchBusy !== null || (!isWatched && watchlistFull)}
+                      title={
+                        !isWatched && watchlistFull
+                          ? `The watchlist is full (${MAX_WATCHLIST_ITEMS} symbols).`
+                          : undefined
+                      }
+                      onClick={() => void changeWatchlist(selectedQuote.symbol, !isWatched)}
+                    >
+                      <StarIcon filled={isWatched} />
+                      {isWatched ? "Watching" : "Watch"}
+                    </button>
+                  ) : null}
                 </div>
                 {selectedIsCrypto ? (
                   <small className="quote-lot-note">
@@ -5491,6 +6148,45 @@ export function SimulatorApp({
           </section>
 
           <aside className="room-column room-column--team" aria-label="Team room and competition">
+            {canKeepWatchlist ? (
+              <AnimatedRailSection
+                className="watchlist-section"
+                headingId="watchlist-heading"
+                contentId="watchlist-content"
+                title={isPlatformAdmin ? "Watchlist" : "Team watchlist"}
+                icon={<StarIcon />}
+                aside={
+                  <span>
+                    {dashboard.watchlist.length} of {MAX_WATCHLIST_ITEMS}
+                  </span>
+                }
+                isOpen={openRailSections.watchlist}
+                onToggle={() => toggleRailSection("watchlist")}
+              >
+                {dashboard.watchlist.length > 0 ? (
+                  <WatchlistTable
+                    items={dashboard.watchlist}
+                    selectedSymbol={selectedQuote.symbol}
+                    busySymbol={watchBusy}
+                    onOpen={openWatchlistItem}
+                    onRemove={(symbol) => void changeWatchlist(symbol, false)}
+                  />
+                ) : (
+                  <p className="watchlist-empty">
+                    Press <strong>Watch</strong> beside a quote&apos;s price to keep an eye on
+                    it here.{isPlatformAdmin ? "" : " Everyone on your team sees the same list."}
+                  </p>
+                )}
+                {watchFeedback ? (
+                  <p
+                    className={`watchlist-feedback ticket-message ticket-message--${watchFeedback.kind}`}
+                    role={watchFeedback.kind === "error" ? "alert" : "status"}
+                  >
+                    {watchFeedback.message}
+                  </p>
+                ) : null}
+              </AnimatedRailSection>
+            ) : null}
             <AnimatedRailSection
               className="presence-section"
               headingId="presence-heading"
@@ -5713,6 +6409,12 @@ export function SimulatorApp({
                     <a className="button button--secondary host-accounts-link" href="/admin/valuation-lab">
                       <FlaskIcon />
                       Past → Present valuation lab
+                    </a>
+                  ) : null}
+                  {dashboard.currentUser.role === "platform_admin" ? (
+                    <a className="button button--secondary host-accounts-link" href="/admin/feedback">
+                      <ChatIcon />
+                      User feedback
                     </a>
                   ) : null}
                   <div className="host-teams" aria-label="Manage competition teams">
@@ -6039,7 +6741,14 @@ export function SimulatorApp({
           </div>
           <div className="status-footer__credits">
             <span>
-              Version <strong>v{APP_VERSION}</strong>
+              Version{" "}
+              <a
+                className="status-footer__version"
+                href="/changelog"
+                title="See what's new in each release"
+              >
+                <strong>v{APP_VERSION}</strong>
+              </a>
               {APP_COMMIT ? <span className="status-footer__commit"> · {APP_COMMIT}</span> : null}
             </span>
             <span className="status-footer__maker">

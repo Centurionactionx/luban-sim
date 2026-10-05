@@ -23,9 +23,11 @@ import type {
 import { AppError } from "../errors";
 import { getAdminTradingTeamId } from "./admin-trading";
 import { getSessionUser } from "./auth";
+import type { DbExecutor } from "./database";
 import { getDb, withReadTransaction } from "./db";
 import { getQuote, listQuotes, quoteCacheGeneration } from "./quotes";
 import { readReservations, workingOrdersAvailableTo } from "./working-order-book";
+import { listWatchlist } from "./watchlist";
 import { listWorkingOrders } from "./working-orders";
 
 interface CompetitionRow {
@@ -249,6 +251,70 @@ export function mapGrouping(
   return { sector: quote.sector.trim() || UNKNOWN_SECTOR, industry };
 }
 
+export interface RealizedGains {
+  totalCents: number;
+  /** Each sell's realized gain, keyed by order id. */
+  bySellOrderId: Map<string, number>;
+}
+
+/**
+ * Gains locked in by a portfolio's sells. Replays its fills in the order
+ * they changed the portfolio, using the trade engine's own average-cost
+ * math: a buy blends its cost into the average (rounded to the cent), a sell
+ * realizes its proceeds minus the average cost of the shares sold, and
+ * selling out starts the next buy from a fresh average.
+ */
+export async function readRealizedGains(
+  teamId: string,
+  executor?: DbExecutor,
+): Promise<RealizedGains> {
+  const db = executor ?? (await getDb());
+  const fills = await db.all<{
+    id: string;
+    symbol: string;
+    side: TradeSide;
+    quantity: number;
+    gross_cents: number;
+  }>(
+    `SELECT id, symbol, side, quantity, gross_cents
+     FROM orders
+     WHERE team_id = ? AND status = 'FILLED'
+     ORDER BY portfolio_version ASC, created_at ASC, id ASC`,
+    [teamId],
+  );
+  const positions = new Map<string, { quantity: number; averageCostCents: number }>();
+  const bySellOrderId = new Map<string, number>();
+  let totalCents = 0;
+
+  for (const fill of fills) {
+    const quantity = Number(fill.quantity);
+    const grossCents = Number(fill.gross_cents);
+    const position = positions.get(fill.symbol) ?? { quantity: 0, averageCostCents: 0 };
+
+    if (fill.side === "BUY") {
+      const quantityAfter = position.quantity + quantity;
+      positions.set(fill.symbol, {
+        quantity: quantityAfter,
+        averageCostCents: Math.round(
+          (position.quantity * position.averageCostCents + grossCents) / quantityAfter,
+        ),
+      });
+      continue;
+    }
+
+    const realizedCents = grossCents - quantity * position.averageCostCents;
+    bySellOrderId.set(fill.id, realizedCents);
+    totalCents += realizedCents;
+    const quantityAfter = Math.max(0, position.quantity - quantity);
+    positions.set(fill.symbol, {
+      quantity: quantityAfter,
+      averageCostCents: quantityAfter === 0 ? 0 : position.averageCostCents,
+    });
+  }
+
+  return { totalCents, bySellOrderId };
+}
+
 export interface PortfolioCalculation {
   summary: PortfolioSummary;
   holdings: HoldingView[];
@@ -354,6 +420,11 @@ export async function calculatePortfolio(
     0,
   );
   const priorValueCents = totalValueCents - dayChangeCents;
+  const unrealizedGainCents = interim.reduce(
+    (total, holding) => total + holding.gainLossCents,
+    0,
+  );
+  const realized = await readRealizedGains(teamId, database);
 
   const holdings: HoldingView[] = interim
     .map((holding) => ({
@@ -405,6 +476,8 @@ export async function calculatePortfolio(
       // Cash set aside for waiting buy orders can't be spent twice.
       buyingPowerCents: cashCents - reservedCashCents,
       reservedCashCents,
+      unrealizedGainCents,
+      realizedGainCents: realized.totalCents,
       asOf: at.toISOString(),
     },
     holdings,
@@ -541,8 +614,29 @@ export async function listOrders(
   limit?: number,
   requestedTeamId?: string,
 ): Promise<OrderView[]> {
+  return readOrders(userId, normalizedLimit(limit, 12), requestedTeamId);
+}
+
+/** Most fills one export may hold; far beyond any classroom competition. */
+export const MAX_EXPORTED_ORDERS = 10_000;
+
+/**
+ * Every fill the caller may see, newest first, for a CSV download. The same
+ * visibility rules as listOrders apply.
+ */
+export async function listOrdersForExport(
+  userId: string,
+  requestedTeamId?: string,
+): Promise<OrderView[]> {
+  return readOrders(userId, MAX_EXPORTED_ORDERS, requestedTeamId);
+}
+
+async function readOrders(
+  userId: string,
+  resultLimit: number,
+  requestedTeamId?: string,
+): Promise<OrderView[]> {
   const user = await requireSessionUser(userId);
-  const resultLimit = normalizedLimit(limit, 12);
   const teamId =
     user.role === "platform_admin"
       ? await getAdminTradingTeamId(user.id)
@@ -587,13 +681,29 @@ export async function listOrders(
       JOIN users u ON u.id = o.actor_user_id
       LEFT JOIN idempotency_records ir ON ir.order_id = o.id
       ${where}
-      ORDER BY o.created_at DESC, o.id DESC
+      ORDER BY o.created_at DESC, o.portfolio_version DESC, o.id DESC
       LIMIT ?
     `,
     parameters,
   );
 
-  return rows.map(orderRowToView);
+  // A sell's realized gain depends on every earlier fill of its portfolio,
+  // so each portfolio on the page is replayed once.
+  const realizedByTeam = new Map<string, Map<string, number>>();
+  for (const teamIdOnPage of new Set(rows.map((row) => row.team_id))) {
+    realizedByTeam.set(
+      teamIdOnPage,
+      (await readRealizedGains(teamIdOnPage, db)).bySellOrderId,
+    );
+  }
+
+  return rows.map((row) => ({
+    ...orderRowToView(row),
+    realizedGainCents:
+      row.side === "SELL"
+        ? (realizedByTeam.get(row.team_id)?.get(row.id) ?? null)
+        : null,
+  }));
 }
 
 function activityRowToItem(row: ActivityRow): ActivityItem {
@@ -881,6 +991,7 @@ export async function getDashboard(userId: string): Promise<Dashboard> {
       workingOrders: portfolioTeamId ? await listWorkingOrders(portfolioTeamId) : [],
       workingOrdersEnabled:
         currentUser.role !== "host" && workingOrdersAvailableTo(currentUser.role),
+      watchlist: portfolioTeamId ? await listWatchlist(portfolioTeamId, now) : [],
       serverTime: now.toISOString(),
     };
   });
