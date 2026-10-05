@@ -3102,10 +3102,6 @@ a {
     justify-self: start;
   }
 
-  .leaderboard-table th:nth-child(3),
-  .leaderboard-table td:nth-child(3) {
-    display: none;
-  }
 }
 
 @media (max-width: 390px) {
@@ -4417,6 +4413,7 @@ html:has(dialog[open]) {
 .chart__legend {
   position: absolute;
   top: 8px;
+  right: 8px;
   left: 8px;
   z-index: 2;
   display: grid;
@@ -5019,8 +5016,9 @@ html:has(dialog[open]) {
 }
 
 /* An inset ring, since an outline would be clipped by the canvas edge. */
-.portfolio-map__tile:hover,
-.portfolio-map__tile:focus-visible {
+/* Holdings only: cash is the backdrop and must stay underneath them. */
+.portfolio-map__tile:not(.portfolio-map__tile--cash):hover,
+.portfolio-map__tile:not(.portfolio-map__tile--cash):focus-visible {
   z-index: 1;
   outline: 0;
   box-shadow:
@@ -5350,5 +5348,86 @@ html:has(dialog[open]) {
     flex: 1;
     padding-top: 0;
     border-top: 0;
+  }
+}
+
+/* Advanced view on phones: the header wraps so the close button stays on
+   screen, and the chart gets as much of the width as possible. */
+@media (max-width: 720px) {
+  .chart-dialog {
+    width: calc(100vw - 16px);
+    height: calc(100dvh - 16px);
+  }
+
+  .chart-dialog__header {
+    flex-wrap: wrap;
+    gap: 10px 14px;
+    padding: 10px 12px;
+  }
+
+  .chart-dialog__identity {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .chart-dialog__close {
+    order: 1;
+    margin-left: 0;
+  }
+
+  .chart-dialog__price {
+    order: 2;
+    flex-basis: 100%;
+  }
+
+  .chart-style {
+    order: 3;
+    flex-basis: 100%;
+    margin-left: 0;
+  }
+
+  .chart-style button {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .chart-dialog__body {
+    padding: 8px 4px 0 10px;
+  }
+
+  .chart-dialog__footer {
+    flex-wrap: wrap;
+    padding: 8px 12px;
+  }
+
+  .chart__readout,
+  .chart__study {
+    gap: 2px 10px;
+    font-size: 12px;
+  }
+}
+
+/* Phones: a heading whose only tool is its collapse arrow keeps the arrow on
+   the title's row, and the leaderboard keeps its Value column. */
+@media (max-width: 390px) {
+  .panel-heading--collapsible:not(:has(.panel-heading__aside)) {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .panel-heading--collapsible:not(:has(.panel-heading__aside)) .panel-heading__tools {
+    width: auto;
+  }
+}
+
+@media (max-width: 560px) {
+  .leaderboard-table th,
+  .leaderboard-table td {
+    font-size: 10px;
+  }
+
+  .leaderboard-table th:nth-child(2),
+  .leaderboard-table td:nth-child(2) {
+    text-align: left;
   }
 }

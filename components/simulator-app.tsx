@@ -1329,6 +1329,16 @@ function LineChart({
   // The hover box may spill over the price axis, so that strip counts as room.
   const [axisWidth, setAxisWidth] = useState(0);
   const [volumeOpen, setVolumeOpen] = useState(true);
+  // The plot's drawn width, so time labels never crowd on a narrow screen.
+  const [plotWidth, setPlotWidth] = useState(0);
+  const hasPlot = !loading && points.length >= 2;
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!hasPlot || !svg) return;
+    const observer = new ResizeObserver(([entry]) => setPlotWidth(entry.contentRect.width));
+    observer.observe(svg);
+    return () => observer.disconnect();
+  }, [hasPlot]);
   const [interactionMethod, setInteractionMethod] = useState<
     "keyboard" | "mouse" | "touch" | null
   >(null);
@@ -1360,7 +1370,11 @@ function LineChart({
     points,
     geometry.coordinates.map((coordinate) => coordinate.x / width),
     timeZone,
-    expanded ? 12 : compact ? 3 : 6,
+    Math.min(
+      expanded ? 12 : compact ? 3 : 6,
+      // About one label per 90px (110px in the larger expanded type).
+      plotWidth > 0 ? Math.max(2, Math.floor(plotWidth / (expanded ? 110 : 90))) : Infinity,
+    ),
   );
   const requestedActivePointIndex = activeAt === null
     ? -1
