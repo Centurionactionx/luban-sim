@@ -5,6 +5,30 @@ Releases before v1.28.0 didn't have numbers, so they're listed by date.
 
 <!-- Generated from lib/changelog.ts by `pnpm changelog`. Edit that file, not this one. -->
 
+## v1.40.0: A clearer portfolio summary and leaderboard (2026-10-06)
+
+### New
+
+- If your team isn't in the top five, its row is pinned under the leaderboard so you can always see where you stand.
+
+### Improved
+
+- A redesigned portfolio summary. Today's and total return sit beside your total, a bar shows how it splits into holdings, buying power and cash set aside for waiting buys, and the ? buttons explain set aside, unrealized and realized gains.
+- The leaderboard shows each team's return as a bar on one shared scale. In the narrow side panel, a team's value moves under its name.
+- The Watch button beside a quote's price is now a round star.
+- Platform admins get a new Accounts page: an invite bar, a roster of team cards showing who signed in recently, and a panel with each person's details.
+
+## v1.39.0: The Luban logo and account deletion (2026-10-06)
+
+### New
+
+- Delete your own account from the Account page. A public page at /delete-account explains what's removed, what your team keeps, and how to ask for deletion if you can't sign in.
+- If your connection drops, you'll see a page saying you're offline instead of a browser error. It reloads by itself when you're back online.
+
+### Improved
+
+- The Luban bridge logo now appears in the header, on the sign-in and other standalone pages, in your browser tab, and in the preview when you share an invitation link.
+
 ## v1.38.0: Ready for a full class (2026-10-05)
 
 ### Improved

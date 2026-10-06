@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 const SITE_URL = "https://lubancanada.com";
 
 /**
@@ -10,7 +12,8 @@ export function LegalNote() {
       All trading uses simulated money, for education only. Nothing here is
       investment advice. By continuing you agree to the{" "}
       <a href={`${SITE_URL}/terms`}>contest rules</a> and{" "}
-      <a href={`${SITE_URL}/privacy`}>privacy policy</a>.
+      <a href={`${SITE_URL}/privacy`}>privacy policy</a>. You can{" "}
+      <Link href="/delete-account">delete your account</Link> at any time.
     </p>
   );
 }

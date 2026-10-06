@@ -40,7 +40,7 @@
 
 .intro h1 {
   max-width: 320px;
-  font-size: 40px;
+  font-size: 41px;
   font-weight: 600;
   line-height: 48px;
   letter-spacing: -2.4px;
@@ -50,7 +50,7 @@
 
 .intro p {
   max-width: 440px;
-  font-size: 18px;
+  font-size: 19px;
   line-height: 32px;
   text-wrap: balance;
   color: var(--text-secondary);
@@ -67,7 +67,7 @@
   width: 100%;
   max-width: 440px;
   gap: 16px;
-  font-size: 14px;
+  font-size: 15px;
 }
 
 .ctas a {
@@ -117,7 +117,7 @@ a.secondary {
   }
 
   .intro h1 {
-    font-size: 32px;
+    font-size: 33px;
     line-height: 40px;
     letter-spacing: -1.92px;
   }

@@ -1013,7 +1013,9 @@ export async function getDashboard(
       portfolioHistoryAfter: historyAfter,
       recentOrders: await listOrders(currentUser.id, 8),
       recentActivity: await listActivity(currentUser.id, 10),
-      leaderboard: leaderboard.rows.slice(0, 5),
+      // The top five, plus the viewer's own team when it ranks lower so the
+      // leaderboard can show where they stand.
+      leaderboard: leaderboard.rows.filter((row, index) => index < 5 || row.isCurrentTeam),
       availableSymbols: await listQuotesForSymbols(
         [
           ...(calculated?.holdings.map((holding) => holding.symbol) ?? []),

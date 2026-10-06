@@ -27,10 +27,10 @@
   color-scheme: light;
   --font-ui: var(--font-space-grotesk), "Helvetica Neue", Arial, sans-serif;
   --font-data: var(--font-plex-mono), "SFMono-Regular", Consolas, monospace;
-  --type-section-title: 13px;
-  --type-item-title: 11.5px;
-  --type-description: 10.5px;
-  --type-meta: 9px;
+  --type-section-title: 14px;
+  --type-item-title: 12.5px;
+  --type-description: 11.5px;
+  --type-meta: 10px;
 }
 
 /*
@@ -98,7 +98,7 @@ body {
   color: var(--ink);
   background: var(--canvas);
   font-family: var(--font-ui);
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -228,21 +228,28 @@ a {
 .brand-lockup {
   display: inline-flex;
   width: fit-content;
-  align-items: baseline;
+  align-items: center;
   gap: 10px;
   text-decoration: none;
   white-space: nowrap;
 }
 
+/* The logo bridge, then "LuBan" drawn at the cap height of the old 22px text. */
+.brand-lockup__mark {
+  width: auto;
+  height: 30px;
+  flex: none;
+}
+
 .brand-lockup__luban {
-  font-size: 22px;
-  font-weight: 600;
-  letter-spacing: -0.035em;
+  width: auto;
+  height: 18px;
+  flex: none;
 }
 
 .brand-lockup__product {
   color: var(--purple);
-  font-size: 19px;
+  font-size: 20px;
   font-weight: 500;
   letter-spacing: -0.025em;
 }
@@ -261,7 +268,6 @@ a {
 .metric-grid dt,
 .chart-header h3,
 .subheading-row,
-.quote-facts dt,
 .ticket-quantity label,
 .order-type span,
 .status-footer,
@@ -272,7 +278,7 @@ a {
 }
 
 .competition-lockup > strong {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   text-align: center;
 }
@@ -291,7 +297,7 @@ a {
   border: 1px solid currentColor;
   border-radius: 3px;
   font-family: var(--font-data);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   line-height: 1;
   letter-spacing: 0.035em;
@@ -341,7 +347,7 @@ a {
   justify-content: flex-end;
   gap: 10px;
   font-family: var(--font-data);
-  font-size: 11px;
+  font-size: 12px;
   white-space: nowrap;
 }
 
@@ -368,7 +374,7 @@ a {
   border: 1.5px solid var(--rule);
   border-radius: 4px;
   background-color: var(--paper);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .simulation-strip {
@@ -381,7 +387,7 @@ a {
   border-bottom: 2px solid var(--rule);
   background: var(--quiet-purple-2);
   font-family: var(--font-data);
-  font-size: 10.5px;
+  font-size: 11.5px;
 }
 
 .simulation-strip > div:first-child::before {
@@ -453,7 +459,7 @@ a {
   color: var(--ink);
   background: var(--paper);
   font-family: var(--font-sans);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 400;
   line-height: 1.45;
   letter-spacing: normal;
@@ -501,7 +507,7 @@ a {
   border-bottom: 2px solid var(--rule);
   background: var(--negative-wash);
   color: var(--red);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .connection-banner button {
@@ -512,7 +518,7 @@ a {
   background: var(--paper);
   color: var(--red);
   font-family: var(--font-data);
-  font-size: 10px;
+  font-size: 11px;
   text-transform: uppercase;
 }
 
@@ -671,13 +677,13 @@ a {
 }
 
 .portfolio-total > span {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
 }
 
 .portfolio-total > strong {
   font-family: var(--font-data);
-  font-size: clamp(30px, 3vw, 42px);
+  font-size: clamp(31px, 3vw, 43px);
   font-weight: 500;
   letter-spacing: -0.045em;
   line-height: 1.15;
@@ -716,7 +722,7 @@ a {
 }
 
 .metric-grid dt {
-  font-size: 9.5px;
+  font-size: 10.5px;
 }
 
 .metric-grid dd {
@@ -725,13 +731,13 @@ a {
   justify-content: space-between;
   gap: 8px;
   font-family: var(--font-data);
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 500;
   line-height: 1.2;
 }
 
 .metric-grid dd small {
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 500;
 }
 
@@ -759,7 +765,7 @@ a {
   background: var(--paper);
   color: var(--ink);
   font-family: var(--font-data);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1;
 }
 
@@ -780,7 +786,7 @@ a {
   background: var(--purple);
   color: var(--paper);
   font-family: var(--font-data);
-  font-size: 7.5px;
+  font-size: 8.5px;
   font-weight: 600;
   letter-spacing: 0.025em;
   line-height: 1.15;
@@ -802,7 +808,7 @@ a {
   min-height: 11px;
   color: var(--muted);
   font-family: var(--font-body);
-  font-size: 8px;
+  font-size: 9px;
   line-height: 1.3;
 }
 
@@ -857,7 +863,7 @@ a {
   border-radius: 3px;
   background: transparent;
   font-family: var(--font-data);
-  font-size: 9.5px;
+  font-size: 10.5px;
 }
 
 .range-tabs button:hover {
@@ -1016,7 +1022,7 @@ a {
   color: var(--ink);
   background: var(--paper);
   font-family: var(--font-data);
-  font-size: 8.5px;
+  font-size: 9.5px;
   font-variant-numeric: tabular-nums;
   line-height: 1.35;
   pointer-events: none;
@@ -1087,7 +1093,7 @@ a {
 
 .chart__y-tick {
   color: var(--muted);
-  font-size: 8.5px;
+  font-size: 9.5px;
 }
 
 .chart__y-sizer {
@@ -1097,7 +1103,7 @@ a {
   visibility: hidden;
   margin-left: 4px;
   padding: 0 5px;
-  font-size: 8.5px;
+  font-size: 9.5px;
   font-weight: 600;
   white-space: nowrap;
 }
@@ -1107,7 +1113,7 @@ a {
   padding: 3px 4px;
   border: 1px solid transparent;
   border-radius: 3px;
-  font-size: 8.5px;
+  font-size: 9.5px;
   font-weight: 600;
 }
 
@@ -1141,7 +1147,7 @@ a {
   pointer-events: none;
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 8.5px;
+  font-size: 9.5px;
 }
 
 .chart__x-tick,
@@ -1218,7 +1224,7 @@ a {
   width: 100%;
   border-collapse: collapse;
   font-family: var(--font-data);
-  font-size: 10.5px;
+  font-size: 11.5px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1232,7 +1238,7 @@ a {
 
 .data-table thead th {
   color: var(--muted);
-  font-size: 8.5px;
+  font-size: 9.5px;
   font-weight: 500;
   letter-spacing: 0.03em;
   text-transform: uppercase;
@@ -1306,13 +1312,13 @@ a {
 }
 
 .shared-callout strong {
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .shared-callout p {
   margin-top: 3px;
   color: var(--callout-text);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.5;
 }
 
@@ -1343,7 +1349,7 @@ a {
   border-radius: 4px;
   background: var(--paper);
   font-family: var(--font-data);
-  font-size: 10.5px;
+  font-size: 11.5px;
   text-transform: uppercase;
 }
 
@@ -1409,7 +1415,7 @@ a {
   gap: 10px;
   padding: 7px 12px;
   border-bottom: 1px solid var(--hairline);
-  font-size: 10.5px;
+  font-size: 11.5px;
   cursor: pointer;
 }
 
@@ -1453,7 +1459,7 @@ a {
   background: var(--quiet-purple-2);
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -1463,22 +1469,52 @@ a {
   margin: 0;
   padding: 12px;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 11.5px;
 }
 
 .quote-summary {
-  min-height: 122px;
+  container-type: inline-size;
   display: grid;
-  grid-template-columns: 66px 1fr;
+  grid-template-columns: 56px minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 15px;
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--rule);
+  gap: 12px 14px;
+  padding: 14px 18px 16px;
+}
+
+.quote-meta {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  color: var(--muted);
+  font-family: var(--font-data);
+  font-size: var(--type-meta);
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.quote-meta__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.quote-meta__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.quote-meta__dot.is-open {
+  background: var(--green);
 }
 
 .quote-symbol-block {
-  width: 62px;
-  height: 62px;
+  width: 56px;
+  height: 56px;
   display: grid;
   place-items: center;
   border: 2px solid var(--ink);
@@ -1493,75 +1529,99 @@ a {
 .quote-identity {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(150px, 1fr) auto;
-  align-items: center;
-  gap: 6px 16px;
-}
-
-.quote-identity > div:first-child {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  min-width: 0;
+  gap: 3px;
 }
 
 .quote-identity h2 {
   font-family: var(--font-data);
-  font-size: 21px;
+  font-size: 23px;
   font-weight: 600;
   line-height: 1.1;
 }
 
-.quote-identity > div:first-child > span {
+.quote-identity > span {
   overflow: hidden;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.source-tag {
-  min-height: 25px;
-  justify-self: end;
-  color: var(--purple-deep);
-  background: var(--quiet-purple-2);
-  text-decoration: none;
-}
-
 .quote-price {
-  grid-column: 1 / -1;
   display: flex;
   align-items: baseline;
-  gap: 10px;
+  gap: 6px;
+  white-space: nowrap;
 }
 
 .quote-price > strong {
   font-family: var(--font-data);
-  font-size: clamp(26px, 3vw, 36px);
+  /* Sized to the card, so a narrow column leaves room for the ticker. */
+  font-size: clamp(29px, 7.5cqi, 39px);
   font-weight: 500;
+  font-variant-numeric: tabular-nums;
   letter-spacing: -0.035em;
   line-height: 1;
 }
 
-.quote-price > span:nth-child(2) {
+.quote-price > span {
   font-family: var(--font-data);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
 }
 
-.quote-identity > small {
+.quote-note {
   grid-column: 1 / -1;
   color: var(--muted);
   font-size: var(--type-meta);
 }
 
-.quote-identity > .quote-lot-note {
+.quote-summary > .quote-lot-note {
   color: var(--ink);
   font-family: var(--font-data);
   font-size: var(--type-description);
 }
 
-/* Asset class marker (ETF / Crypto). Text carries the meaning; stocks get none. */
+.quote-band {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 20px;
+  padding: 9px 18px;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  color: var(--muted);
+  font-family: var(--font-data);
+  font-size: var(--type-description);
+  font-variant-numeric: tabular-nums;
+}
+
+.quote-band--up {
+  background: var(--positive-wash);
+  color: var(--green);
+}
+
+.quote-band--down {
+  background: var(--negative-wash);
+  color: var(--red);
+}
+
+.quote-band__move {
+  font-weight: 600;
+}
+
+.quote-band__meta {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--type-meta);
+}
+
+.quote-band__meta a {
+  color: inherit;
+  text-underline-offset: 2px;
+}
+
+/* Asset class marker/* Asset class marker (ETF / Crypto). Text carries the meaning; stocks get none. */
 .asset-tag {
   display: inline-flex;
   align-items: center;
@@ -1572,7 +1632,7 @@ a {
   background: var(--quiet-purple-2);
   color: var(--purple-deep);
   font-family: var(--font-data);
-  font-size: 8.5px;
+  font-size: 9.5px;
   font-style: normal;
   font-weight: 600;
   letter-spacing: 0.035em;
@@ -1627,48 +1687,6 @@ a {
   font-family: var(--font-data);
 }
 
-.quote-facts {
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  border-bottom: 1px solid var(--rule);
-}
-
-.quote-facts > div {
-  min-width: 0;
-  min-height: 66px;
-  padding: 12px 10px;
-}
-
-.quote-facts > div:first-child {
-  padding-left: 18px;
-}
-
-.quote-facts > div:last-child {
-  padding-right: 18px;
-}
-
-.quote-facts > div + div {
-  border-left: 1px solid var(--hairline);
-}
-
-.quote-facts dt {
-  overflow: hidden;
-  color: var(--muted);
-  font-size: var(--type-meta);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.quote-facts dd {
-  margin-top: 6px;
-  overflow: hidden;
-  font-family: var(--font-data);
-  font-size: var(--type-description);
-  font-variant-numeric: tabular-nums;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .quote-chart {
   margin-top: 14px;
   border: 0;
@@ -1678,7 +1696,7 @@ a {
 .chart-kind {
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .order-ticket {
@@ -1699,7 +1717,7 @@ a {
   border: 0;
   background: var(--paper);
   font-family: var(--font-data);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
 }
@@ -1740,7 +1758,7 @@ a {
 
 .order-type strong {
   font-family: var(--font-data);
-  font-size: 10px;
+  font-size: 11px;
   text-transform: uppercase;
 }
 
@@ -1768,7 +1786,7 @@ a {
   border: 1.5px solid var(--rule);
   border-radius: 4px;
   font-family: var(--font-data);
-  font-size: 10.5px;
+  font-size: 11.5px;
   font-weight: 600;
   letter-spacing: 0.015em;
   text-transform: uppercase;
@@ -1827,7 +1845,7 @@ a {
   border-radius: 4px;
   background: var(--quiet-purple-2);
   color: var(--purple-deep);
-  font-size: 10.5px;
+  font-size: 11.5px;
 }
 
 .ticket-message svg {
@@ -1873,7 +1891,7 @@ a {
   background: var(--paper);
   color: var(--purple-deep);
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.03em;
   text-transform: uppercase;
@@ -1954,7 +1972,7 @@ a {
 
 .presence-list li > span:nth-child(2) strong {
   color: var(--purple-deep);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 500;
 }
 
@@ -2001,7 +2019,7 @@ a {
 .activity-list time {
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 8.5px;
+  font-size: 9.5px;
   line-height: 1.4;
 }
 
@@ -2023,7 +2041,7 @@ a {
   margin-top: 2px;
   color: var(--purple-deep);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: 9px;
   letter-spacing: 0.03em;
   text-transform: uppercase;
 }
@@ -2054,51 +2072,242 @@ a {
   border-radius: 4px;
 }
 
-.leaderboard-table th,
-.leaderboard-table td {
-  padding: 9px 7px;
-  font-size: 10px;
-}
-
-.leaderboard-table thead th {
-  font-size: var(--type-meta);
-}
-
-.leaderboard-table th:first-child,
-.leaderboard-table td:first-child {
-  width: 40px;
-  padding-left: 9px;
-}
-
-.leaderboard-table th:last-child,
-.leaderboard-table td:last-child {
-  padding-right: 9px;
-}
-
-.leaderboard-table tbody th {
-  font-family: var(--font-ui);
-  font-weight: 500;
-}
-
-.leaderboard-table tbody tr.is-current {
-  outline: 1.5px solid var(--purple);
-  outline-offset: -1px;
-  background: var(--quiet-purple-2);
-  color: var(--purple-deep);
-}
-
-.leaderboard-table small {
-  display: block;
-  color: var(--purple-deep);
+/* Leaderboard: rank, team, a return bar on a scale shared by every row,
+   value, and (where allowed) a map button. */
+.leaderboard-bars {
+  width: 100%;
+  border-collapse: collapse;
   font-family: var(--font-data);
-  font-size: 7.5px;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.leaderboard-bars th,
+.leaderboard-bars td {
+  padding: 9px 7px;
+  border-bottom: 1px solid var(--hairline);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.leaderboard-bars thead th {
+  border-bottom: 1.5px solid var(--rule);
+  color: var(--muted);
+  font-size: var(--type-meta);
+  font-weight: 500;
+  letter-spacing: 0.03em;
   text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.leaderboard-bars thead th:nth-child(3) {
+  text-align: center;
+}
+
+.leaderboard-bars thead th:nth-child(4),
+.leaderboard-bars__value {
+  text-align: right;
+}
+
+.leaderboard-bars th:first-child,
+.leaderboard-bars td:first-child {
+  width: 34px;
+  padding-left: 10px;
+}
+
+.leaderboard-bars th:last-child,
+.leaderboard-bars td:last-child {
+  padding-right: 10px;
+}
+
+.leaderboard-bars__rank span {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 1.5px solid var(--rule);
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.leaderboard-bars tbody:first-of-type tr:first-child .leaderboard-bars__rank span {
+  background: var(--lime);
+  color: var(--on-bright);
+}
+
+.leaderboard-bars__team {
+  font-weight: 400;
+}
+
+.leaderboard-bars__name {
+  display: block;
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.leaderboard-bars__team small,
+.leaderboard-bars__value small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.leaderboard-bars__status {
+  color: var(--red);
+}
+
+.leaderboard-bars__you {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--lime);
+  color: var(--on-bright);
+  font-family: var(--font-data);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  vertical-align: 2px;
+}
+
+.leaderboard-bars__return {
+  width: 42%;
+  white-space: nowrap;
+}
+
+.leaderboard-bars__return .change {
+  display: inline-block;
+  width: 58px;
+  font-weight: 600;
+  text-align: right;
+  vertical-align: middle;
+}
+
+/* The bar track: a dashed zero line in the middle, gains to the right,
+   losses to the left. */
+.leaderboard-bars__track {
+  position: relative;
+  width: calc(100% - 64px);
+  height: 16px;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.leaderboard-bars__track::before {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  left: 50%;
+  border-left: 1.5px dashed var(--muted);
+  content: "";
+}
+
+.leaderboard-bars__bar {
+  position: absolute;
+  top: 2px;
+  height: 12px;
+  border: 1.5px solid var(--rule);
+}
+
+.leaderboard-bars__bar--up {
+  left: 50%;
+  border-left: 0;
+  background: var(--lime);
+}
+
+.leaderboard-bars__bar--down {
+  right: 50%;
+  border-right: 0;
+  background: var(--pink);
+}
+
+.leaderboard-bars__value {
+  white-space: nowrap;
+}
+
+.leaderboard-bars__inline-value {
+  display: none;
+}
+
+.leaderboard-bars__map {
+  width: 36px;
+}
+
+.leaderboard-bars tr.is-current > * {
+  background: var(--quiet-purple-2);
+}
+
+.leaderboard-bars tr.is-current > :first-child {
+  box-shadow: inset 3px 0 0 var(--purple);
+}
+
+/* A narrow panel (the right-hand rail) moves the value under the team
+   name so the bar keeps its room; a very narrow one drops the bar. */
+.leaderboard-section .table-scroll {
+  container-type: inline-size;
+}
+
+@container (max-width: 520px) {
+  .leaderboard-bars thead th:nth-child(4),
+  .leaderboard-bars__value {
+    display: none;
+  }
+
+  .leaderboard-bars__inline-value {
+    display: inline;
+  }
+
+  .leaderboard-bars__trades {
+    display: none;
+  }
+
+  .leaderboard-bars__return {
+    width: 46%;
+  }
+}
+
+@container (max-width: 330px) {
+  .leaderboard-bars__track {
+    display: none;
+  }
+
+  .leaderboard-bars__return,
+  .leaderboard-bars thead th:nth-child(3) {
+    width: auto;
+    text-align: right;
+  }
+
+  .leaderboard-bars__return .change {
+    width: auto;
+  }
+}
+
+/* Your team below the top five: a labelled break, then its row. */
+.leaderboard-bars__gap td {
+  padding: 10px 10px 6px;
+  border-top: 1.5px dashed var(--purple);
+  border-bottom: 0;
+  color: var(--purple-deep);
+  font-size: var(--type-meta);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.leaderboard-bars tr.is-pinned > * {
+  background: var(--quiet-purple);
+  border-bottom: 0;
 }
 
 .snapshot-note {
   margin: 9px 12px 15px;
   color: var(--muted);
-  font-size: 9.5px;
+  font-size: 10.5px;
 }
 
 .host-section .rail-section__content-inner {
@@ -2155,7 +2364,7 @@ a {
 .host-actions .button {
   min-height: 44px;
   padding: 8px 10px;
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .host-teams {
@@ -2186,7 +2395,7 @@ a {
   border-radius: 3px;
   background: var(--paper);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: 9px;
   text-transform: uppercase;
 }
 
@@ -2252,7 +2461,7 @@ a {
   margin-top: 2px;
   overflow: hidden;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2323,7 +2532,7 @@ a {
 .host-team__cash label > span {
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 7.5px;
+  font-size: 8.5px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
@@ -2339,7 +2548,7 @@ a {
   background: var(--paper);
   color: var(--ink);
   font-family: var(--font-data);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .host-team__create input:focus-visible,
@@ -2359,7 +2568,7 @@ a {
   background: var(--purple);
   color: var(--paper);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: 9px;
   text-transform: uppercase;
 }
 
@@ -2383,7 +2592,7 @@ a {
   border-radius: 3px;
   background: var(--paper);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: 9px;
   text-transform: uppercase;
 }
 
@@ -2413,7 +2622,7 @@ a {
   gap: 18px;
   padding: 8px 18px;
   border-top: 2px solid var(--rule);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .status-footer > div {
@@ -2538,15 +2747,27 @@ a {
 }
 
 .route-state__brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   color: var(--purple-deep);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
+}
+
+/* The logo bridge ahead of "Luban Market Lab" on every standalone page. */
+.route-state__brand::before {
+  width: 38px;
+  height: 26px;
+  flex: none;
+  background: url("/brand/luban-mark.svg") center / contain no-repeat;
+  content: "";
 }
 
 .route-state h1 {
   max-width: 13ch;
   margin-top: 22px;
-  font-size: clamp(32px, 7vw, 58px);
+  font-size: clamp(33px, 7vw, 59px);
   font-weight: 500;
   letter-spacing: -0.04em;
   line-height: 0.98;
@@ -2628,14 +2849,11 @@ a {
   }
 
   .quote-summary {
-    min-height: 104px;
-    padding-block: 10px;
+    padding-block: 10px 12px;
   }
 
-  .quote-facts > div {
-    min-height: 54px;
-    padding-top: 9px;
-    padding-bottom: 9px;
+  .quote-band {
+    padding-block: 7px;
   }
 
   .quote-chart {
@@ -2837,60 +3055,34 @@ a {
   }
 
   .portfolio-total > strong {
-    font-size: clamp(27px, 9vw, 38px);
+    font-size: clamp(28px, 9vw, 39px);
   }
 
   .quote-summary {
-    grid-template-columns: 54px 1fr;
-    gap: 11px;
+    grid-template-columns: 48px minmax(0, 1fr) auto;
+    gap: 10px 12px;
     padding-inline: 14px;
   }
 
   .quote-symbol-block {
-    width: 52px;
-    height: 52px;
-    font-size: 15px;
+    width: 48px;
+    height: 48px;
+    font-size: 16px;
   }
 
-  .quote-identity {
-    grid-template-columns: 1fr;
-  }
-
-  .source-tag {
-    grid-row: 3;
-    justify-self: start;
-  }
-
+  /* The price gets a row of its own under the symbol. */
   .quote-price {
-    grid-column: 1;
-  }
-
-  .quote-identity > small {
-    grid-column: 1;
-  }
-
-  .quote-facts {
-    grid-template-columns: repeat(2, 1fr);
-  }
-
-  .quote-facts > div {
-    border-bottom: 1px solid var(--hairline);
-  }
-
-  .quote-facts > div:nth-child(odd) {
-    border-left: 0;
-  }
-
-  .quote-facts > div:nth-child(odd) {
-    padding-left: 14px;
-  }
-
-  .quote-facts > div:nth-child(even) {
-    padding-right: 14px;
-  }
-
-  .quote-facts > div:last-child {
+    grid-row: 3;
     grid-column: 1 / -1;
+  }
+
+  .quote-band {
+    padding-inline: 14px;
+  }
+
+  .quote-band__meta {
+    flex-basis: 100%;
+    margin-left: 0;
   }
 
 
@@ -2918,7 +3110,7 @@ a {
 
 @media (max-width: 560px) {
   body {
-    font-size: 13px;
+    font-size: 14px;
   }
 
   .identity-switcher {
@@ -2958,7 +3150,7 @@ a {
   }
 
   .metric-grid dd {
-    font-size: 16px;
+    font-size: 17px;
   }
 
   .subheading-row {
@@ -3016,7 +3208,7 @@ a {
     display: block;
     margin-bottom: 3px;
     color: var(--muted);
-    font-size: 8px;
+    font-size: 9px;
     letter-spacing: 0.03em;
     text-transform: uppercase;
   }
@@ -3038,14 +3230,9 @@ a {
   }
 
 
-  .quote-identity > div:first-child {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .quote-price {
-    flex-wrap: wrap;
+  .quote-meta__status {
+    flex-basis: 100%;
+    margin-left: 0;
   }
 
   .chart__plot > svg {
@@ -3097,12 +3284,16 @@ a {
     min-height: calc(100vh - 10px);
   }
 
+  .brand-lockup__mark {
+    height: 27px;
+  }
+
   .brand-lockup__luban {
-    font-size: 20px;
+    height: 16px;
   }
 
   .brand-lockup__product {
-    font-size: 17px;
+    font-size: 18px;
   }
 
   .panel-heading {
@@ -3131,35 +3322,17 @@ a {
   }
 
   .portfolio-total > strong {
-    font-size: 27px;
+    font-size: 28px;
   }
 
   .quote-summary {
-    grid-template-columns: 1fr;
+    grid-template-columns: 40px minmax(0, 1fr) auto;
   }
 
   .quote-symbol-block {
-    width: 100%;
-    height: 44px;
-    justify-content: start;
-    padding-inline: 12px;
-  }
-
-  .quote-facts {
-    grid-template-columns: 1fr;
-  }
-
-  .quote-facts > div,
-  .quote-facts > div:nth-child(odd),
-  .quote-facts > div:nth-child(even),
-  .quote-facts > div:last-child {
-    grid-column: auto;
-    padding: 10px 14px;
-    border-left: 0;
-  }
-
-  .quote-facts > div:last-child {
-    border-bottom: 0;
+    width: 40px;
+    height: 40px;
+    font-size: 14px;
   }
 
   .range-tabs button {
@@ -3294,7 +3467,7 @@ a {
 
 .auth-page__intro h1 {
   margin-top: 18px;
-  font-size: clamp(28px, 4.5vw, 44px);
+  font-size: clamp(29px, 4.5vw, 45px);
   font-weight: 500;
   letter-spacing: -0.035em;
   line-height: 1.02;
@@ -3354,7 +3527,7 @@ a {
 
 .accounts-header h1 {
   margin-top: 6px;
-  font-size: clamp(24px, 3.4vw, 36px);
+  font-size: clamp(25px, 3.4vw, 37px);
   font-weight: 500;
   letter-spacing: -0.03em;
   line-height: 1.05;
@@ -3447,7 +3620,7 @@ a {
   border-radius: 4px;
   background: var(--paper);
   font-family: var(--font-data);
-  font-size: 10.5px;
+  font-size: 11.5px;
   word-break: break-all;
 }
 
@@ -3562,7 +3735,7 @@ a {
   color: var(--on-bright);
   background: var(--lime);
   font-family: var(--font-data);
-  font-size: 10.5px;
+  font-size: 11.5px;
   font-weight: 600;
 }
 
@@ -3699,7 +3872,7 @@ a {
   border-radius: 4px;
   background: var(--paper);
   font-family: var(--font-data);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .host-schedule__note {
@@ -3798,7 +3971,7 @@ a {
   border-radius: 4px;
   background: var(--quiet-purple-2);
   font-family: var(--font-data);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
 }
 
@@ -3817,7 +3990,7 @@ a {
   background: var(--paper);
   color: var(--purple-deep);
   font-family: var(--font-data);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   line-height: 1;
 }
@@ -3839,7 +4012,7 @@ a {
 .help-tip .help-tip__line {
   color: var(--ink);
   font-family: var(--font-ui);
-  font-size: 11.5px;
+  font-size: 12.5px;
   font-weight: 400;
   letter-spacing: 0;
   line-height: 1.45;
@@ -3861,7 +4034,7 @@ a {
   box-shadow: 4px 4px 0 var(--purple);
   color: var(--ink);
   font-family: var(--font-ui);
-  font-size: 11.5px;
+  font-size: 12.5px;
   font-weight: 400;
   letter-spacing: 0;
   line-height: 1.45;
@@ -3964,7 +4137,7 @@ a {
   border-radius: 4px;
   background: var(--quiet-purple-2);
   font-family: var(--font-data);
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
@@ -4005,7 +4178,7 @@ a {
 .button--compact {
   min-height: 32px;
   padding: 4px 10px;
-  font-size: 9.5px;
+  font-size: 10.5px;
 }
 
 .working-orders-feedback {
@@ -4080,7 +4253,7 @@ a {
     display: block;
     margin-bottom: 3px;
     color: var(--muted);
-    font-size: 8px;
+    font-size: 9px;
     letter-spacing: 0.03em;
     text-transform: uppercase;
   }
@@ -4304,7 +4477,7 @@ a {
   background: var(--paper);
   color: var(--purple-deep);
   font-family: var(--font-data);
-  font-size: 9.5px;
+  font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.035em;
   text-transform: uppercase;
@@ -4384,7 +4557,7 @@ html:has(dialog[open]) {
 }
 
 .chart-dialog__price strong {
-  font-size: 20px;
+  font-size: 21px;
   font-weight: 600;
 }
 
@@ -4449,7 +4622,7 @@ html:has(dialog[open]) {
 .chart--expanded .chart__badge,
 .chart--expanded .chart__y-sizer,
 .chart--expanded .chart__x-axis {
-  font-size: 10.5px;
+  font-size: 11.5px;
 }
 
 .chart--expanded .chart__x-axis {
@@ -4493,7 +4666,7 @@ html:has(dialog[open]) {
   border-radius: 4px;
   background: color-mix(in srgb, var(--paper) 92%, transparent);
   font-family: var(--font-data);
-  font-size: 14px;
+  font-size: 15px;
   font-variant-numeric: tabular-nums;
   line-height: 1.2;
 }
@@ -4516,7 +4689,7 @@ html:has(dialog[open]) {
 
 .chart__readout .chart__readout-currency dt {
   color: var(--purple-deep);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .chart__readout .chart__readout-currency dt::after {
@@ -4526,7 +4699,7 @@ html:has(dialog[open]) {
 .chart__study {
   gap: 10px;
   padding-right: 4px;
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .chart__study span {
@@ -4598,7 +4771,7 @@ html:has(dialog[open]) {
   background: var(--paper);
   color: var(--ink);
   font-family: var(--font-data);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .chart-dates input[aria-invalid="true"] {
@@ -4639,7 +4812,7 @@ html:has(dialog[open]) {
   background: var(--paper);
   color: var(--ink);
   font-family: var(--font-data);
-  font-size: 11px;
+  font-size: 12px;
   cursor: pointer;
 }
 
@@ -4665,7 +4838,7 @@ html:has(dialog[open]) {
   gap: 8px;
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 /* Confirmation before filling the ticket with the whole buying power. */
@@ -4690,13 +4863,13 @@ html:has(dialog[open]) {
 }
 
 .confirm-dialog p {
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.5;
 }
 
 .confirm-dialog p strong {
   font-family: var(--font-data);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -4737,7 +4910,7 @@ html:has(dialog[open]) {
   background: transparent;
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.035em;
   text-transform: uppercase;
@@ -4804,26 +4977,19 @@ html:has(dialog[open]) {
   margin-left: auto;
 }
 
-.leaderboard-team {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-}
-
 .leaderboard-map-button {
-  min-height: 24px;
-  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  display: inline-grid;
   flex: none;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 6px;
-  border: 1px solid var(--purple);
-  border-radius: 3px;
+  place-items: center;
+  padding: 0;
+  border: 1.5px solid var(--purple);
+  border-radius: 4px;
   background: var(--paper);
   color: var(--purple-deep);
   font-family: var(--font-data);
-  font-size: 8.5px;
+  font-size: 9.5px;
   font-weight: 600;
   letter-spacing: 0.035em;
   text-transform: uppercase;
@@ -4835,7 +5001,11 @@ html:has(dialog[open]) {
   background: var(--quiet-purple);
 }
 
-.leaderboard-map-button svg,
+.leaderboard-map-button svg {
+  width: 15px;
+  height: 15px;
+}
+
 .portfolio-map-open svg {
   width: 13px;
   height: 13px;
@@ -4906,7 +5076,7 @@ html:has(dialog[open]) {
   background: var(--paper);
   color: var(--ink);
   font: inherit;
-  font-size: 10.5px;
+  font-size: 11.5px;
   cursor: pointer;
 }
 
@@ -4934,7 +5104,7 @@ html:has(dialog[open]) {
   align-items: center;
   gap: 8px;
   min-height: 32px;
-  font-size: 10.5px;
+  font-size: 11.5px;
   cursor: pointer;
 }
 
@@ -4952,7 +5122,7 @@ html:has(dialog[open]) {
   background: var(--paper);
   color: var(--purple-deep);
   font-family: var(--font-data);
-  font-size: 9.5px;
+  font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.035em;
   text-transform: uppercase;
@@ -5032,7 +5202,7 @@ html:has(dialog[open]) {
   /* Its own ink, so the strip stays legible over the cash backdrop. */
   background: var(--ink);
   color: var(--paper);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -5042,7 +5212,7 @@ html:has(dialog[open]) {
 .portfolio-map__industry {
   background: color-mix(in oklab, var(--muted) 45%, var(--ink));
   color: var(--paper);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .portfolio-map__tile {
@@ -5113,7 +5283,7 @@ html:has(dialog[open]) {
 
 .portfolio-map__card-head strong {
   font-family: var(--font-data);
-  font-size: 15px;
+  font-size: 16px;
 }
 
 .portfolio-map__card-head span {
@@ -5136,7 +5306,7 @@ html:has(dialog[open]) {
   display: flex;
   justify-content: space-between;
   gap: 10px;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .portfolio-map__card dt {
@@ -5180,7 +5350,7 @@ html:has(dialog[open]) {
 .portfolio-map__table th,
 .portfolio-map__table td {
   padding: 8px 10px;
-  font-size: 10.5px;
+  font-size: 11.5px;
 }
 
 .portfolio-map__legend {
@@ -5205,7 +5375,7 @@ html:has(dialog[open]) {
 .portfolio-map__legend li {
   min-width: 42px;
   padding: 4px 6px;
-  font-size: 9.5px;
+  font-size: 10.5px;
   font-weight: 600;
   text-align: center;
 }
@@ -5270,7 +5440,7 @@ html:has(dialog[open]) {
   background: var(--quiet-purple);
   color: var(--purple-deep);
   font-family: var(--font-data);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.035em;
   text-decoration: none;
@@ -5345,7 +5515,7 @@ html:has(dialog[open]) {
   background: var(--red);
   color: var(--paper);
   font-family: var(--font-data);
-  font-size: 9.5px;
+  font-size: 10.5px;
   font-weight: 700;
   line-height: 1;
 }
@@ -5468,7 +5638,7 @@ html:has(dialog[open]) {
   .chart__readout,
   .chart__study {
     gap: 2px 10px;
-    font-size: 12px;
+    font-size: 13px;
   }
 }
 
@@ -5485,17 +5655,6 @@ html:has(dialog[open]) {
   }
 }
 
-@media (max-width: 560px) {
-  .leaderboard-table th,
-  .leaderboard-table td {
-    font-size: 10px;
-  }
-
-  .leaderboard-table th:nth-child(2),
-  .leaderboard-table td:nth-child(2) {
-    text-align: left;
-  }
-}
 
 /* ── Feedback: the header dialog, the /feedback page, and admin review ── */
 
@@ -5580,7 +5739,7 @@ html:has(dialog[open]) {
 
 .feedback-topic__option span {
   font-family: var(--font-data);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
 }
@@ -5654,7 +5813,7 @@ html:has(dialog[open]) {
 
 .feedback-form__note {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .feedback-form__error {
@@ -5663,7 +5822,7 @@ html:has(dialog[open]) {
   border-radius: 4px;
   color: var(--red);
   background: var(--negative-wash);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .feedback-form__actions {
@@ -5688,7 +5847,7 @@ html:has(dialog[open]) {
 }
 
 .feedback-form__done-title {
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 600;
 }
 
@@ -5736,7 +5895,7 @@ html:has(dialog[open]) {
   padding: 0 14px;
   background: var(--paper);
   font-family: var(--font-data);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   text-decoration: none;
   text-transform: uppercase;
@@ -5797,7 +5956,7 @@ html:has(dialog[open]) {
 }
 
 .feedback-entry__message {
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.55;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
@@ -5872,7 +6031,7 @@ html:has(dialog[open]) {
   background: var(--paper);
   color: var(--purple-deep);
   font-family: var(--font-data);
-  font-size: 9.5px;
+  font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.035em;
   text-transform: uppercase;
@@ -5895,6 +6054,20 @@ html:has(dialog[open]) {
 
 .watch-toggle[aria-pressed="true"] svg {
   color: var(--purple);
+}
+
+/* In the quote header the toggle is a round star; its name comes from aria-label. */
+.quote-summary .watch-toggle {
+  width: 36px;
+  height: 36px;
+  justify-content: center;
+  margin-left: 0;
+  padding: 0;
+}
+
+.quote-summary .watch-toggle svg {
+  width: 17px;
+  height: 17px;
 }
 
 .watchlist-table th,
@@ -6017,7 +6190,7 @@ html:has(dialog[open]) {
   min-width: 34px;
   padding: 1px 5px;
   border-radius: 3px;
-  font-size: 8.5px;
+  font-size: 9.5px;
   letter-spacing: 0.04em;
   text-align: center;
   text-transform: uppercase;
@@ -6054,7 +6227,7 @@ html:has(dialog[open]) {
 
 .sandbox-reset small {
   color: var(--callout-text);
-  font-size: 10.5px;
+  font-size: 11.5px;
   line-height: 1.45;
 }
 
@@ -6099,7 +6272,7 @@ html:has(dialog[open]) {
     display: block;
     margin-bottom: 3px;
     color: var(--muted);
-    font-size: 8px;
+    font-size: 9px;
     letter-spacing: 0.03em;
     text-transform: uppercase;
   }
@@ -6132,7 +6305,7 @@ html:has(dialog[open]) {
 .changelog__intro {
   padding: 18px clamp(18px, 3vw, 28px) 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.55;
 }
 
@@ -6164,7 +6337,7 @@ html:has(dialog[open]) {
   gap: 8px 12px;
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .changelog-release__version {
@@ -6190,7 +6363,7 @@ html:has(dialog[open]) {
 
 .changelog-release h2 {
   margin-top: 10px;
-  font-size: 19px;
+  font-size: 20px;
   font-weight: 500;
   letter-spacing: -0.015em;
 }
@@ -6204,7 +6377,7 @@ html:has(dialog[open]) {
   padding: 2px 7px;
   border-radius: 3px;
   font-family: var(--font-data);
-  font-size: 9.5px;
+  font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -6235,7 +6408,7 @@ html:has(dialog[open]) {
   gap: 6px;
   margin-top: 8px;
   padding-left: 18px;
-  font-size: 13.5px;
+  font-size: 14.5px;
   line-height: 1.55;
 }
 
@@ -6356,7 +6529,7 @@ html:has(dialog[open]) {
   padding-top: 12px;
   border-top: 1px solid var(--hairline);
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 11.5px;
   line-height: 1.5;
 }
 
@@ -6403,7 +6576,7 @@ html:has(dialog[open]) {
 
 .display-name-form__status {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .display-name-form__status--saved {
@@ -6460,7 +6633,7 @@ html:has(dialog[open]) {
   border-radius: 4px;
   background: var(--quiet-purple-2);
   font-family: var(--font-data);
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
@@ -6481,7 +6654,7 @@ html:has(dialog[open]) {
   border-radius: 4px;
   background: transparent;
   color: var(--purple-deep);
-  font-size: 11.5px;
+  font-size: 12.5px;
   font-weight: 500;
   text-align: left;
 }
@@ -6538,7 +6711,7 @@ html:has(dialog[open]) {
 
 .ticket-receipt dd {
   font-family: var(--font-data);
-  font-size: 13px;
+  font-size: 14px;
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
@@ -6551,13 +6724,13 @@ html:has(dialog[open]) {
 
 .ticket-receipt__total dt {
   color: var(--ink);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   white-space: nowrap;
 }
 
 .ticket-receipt__total dd {
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 600;
 }
 
@@ -6567,7 +6740,7 @@ html:has(dialog[open]) {
   color: var(--muted);
   font-family: var(--font-ui);
   text-align: left;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.4;
 }
 
@@ -6581,7 +6754,7 @@ html:has(dialog[open]) {
   grid-column: 1 / -1;
   color: var(--muted);
   font-family: var(--font-ui);
-  font-size: 10px;
+  font-size: 11px;
   text-align: left;
 }
 
@@ -6604,7 +6777,7 @@ html:has(dialog[open]) {
   border: 0;
   background: transparent;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .ticket-receipt__clear:hover {
@@ -6619,5 +6792,65 @@ html:has(dialog[open]) {
 @container (max-width: 400px) {
   .ticket-layout {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/*
+ * Safe areas. The viewport is viewport-fit=cover (app/layout.tsx), so the
+ * installed web app can draw under the status bar, notch, and home
+ * indicator; these insets keep content clear of them. env() is 0 in an
+ * ordinary browser tab, so nothing moves there. --safe-area-inset-* win
+ * when something sets them.
+ */
+:root {
+  --safe-top: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
+  --safe-right: var(--safe-area-inset-right, env(safe-area-inset-right, 0px));
+  --safe-bottom: var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px));
+  --safe-left: var(--safe-area-inset-left, env(safe-area-inset-left, 0px));
+}
+
+/* Every page sits in <body>; the canvas shows behind the system bars. */
+body {
+  padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
+}
+
+/* Full-height pages fill the space between the insets, not the screen. */
+.app-frame,
+.route-state,
+.auth-page,
+.accounts-page {
+  min-height: calc(100vh - var(--safe-top) - var(--safe-bottom));
+}
+
+.skip-link {
+  top: calc(14px + var(--safe-top));
+  left: calc(20px + var(--safe-left));
+}
+
+/* Modal dialogs centre within the safe area and keep their margins. */
+:where(dialog:modal) {
+  inset: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
+  max-width: calc(100vw - 6px - 2em - var(--safe-left) - var(--safe-right));
+  max-height: calc(100dvh - 6px - 2em - var(--safe-top) - var(--safe-bottom));
+}
+
+.chart-dialog {
+  width: calc(100vw - 32px - var(--safe-left) - var(--safe-right));
+  height: calc(100dvh - 32px - var(--safe-top) - var(--safe-bottom));
+}
+
+.confirm-dialog {
+  width: min(400px, calc(100vw - 32px - var(--safe-left) - var(--safe-right)));
+}
+
+.feedback-dialog {
+  width: min(480px, calc(100vw - 32px - var(--safe-left) - var(--safe-right)));
+  max-height: calc(100dvh - 32px - var(--safe-top) - var(--safe-bottom));
+}
+
+@media (max-width: 720px) {
+  .chart-dialog {
+    width: calc(100vw - 16px - var(--safe-left) - var(--safe-right));
+    height: calc(100dvh - 16px - var(--safe-top) - var(--safe-bottom));
   }
 }

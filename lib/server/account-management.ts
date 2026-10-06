@@ -5,14 +5,15 @@ import { canHostCompetitions } from "../contracts";
 import { AppError } from "../errors";
 import { recordAuthAuditEvent } from "./audit";
 import { getSessionUser } from "./auth";
-import { ADVISORY_LOCK_ACCOUNTS, acquireAdvisoryLock } from "./database";
+import { ADVISORY_LOCK_ACCOUNTS, acquireAdvisoryLock, type DbExecutor } from "./database";
 import { getDb } from "./db";
 import { invitationRolesIssuableBy } from "./invitations";
 
 /**
  * Admin user management. Rules that hold everywhere:
  * - Hosts see and manage students only; platform administrators manage all.
- * - Nobody acts on their own account.
+ * - Nobody acts on their own account from here, with one exception:
+ *   deleteOwnAccount() lets a person delete themselves.
  * - The last active platform administrator can never be suspended, demoted,
  *   or deleted — the deployment must always have a working admin.
  * - Deleting a user with trading history anonymizes instead: the team's
@@ -163,6 +164,7 @@ async function revokeInvitationsBeyondAuthority(
   target: AccountRow,
   stillIssuable: readonly UserRole[],
   reason: string,
+  options: { selfService?: boolean } = {},
 ): Promise<number> {
   const nowIso = new Date().toISOString();
   const keep = stillIssuable.length
@@ -181,9 +183,13 @@ async function revokeInvitationsBeyondAuthority(
       type: "INVITATION_REVOKED",
       actorUserId: actor.id,
       subjectUserId: target.id,
-      detail: `${actor.name}'s change revoked ${count} unused invitation${
-        count === 1 ? "" : "s"
-      } issued by ${target.name} (${reason}).`,
+      detail: options.selfService
+        ? `A ${target.role} deleting their own account revoked ${count} unused invitation${
+            count === 1 ? "" : "s"
+          } they had issued.`
+        : `${actor.name}'s change revoked ${count} unused invitation${
+            count === 1 ? "" : "s"
+          } issued by ${target.name} (${reason}).`,
       metadata: { count, reason, createdBy: target.id },
     });
   }
@@ -396,6 +402,89 @@ export interface DeleteAccountResult {
   mode: "deleted" | "anonymized";
 }
 
+/**
+ * The deletion itself, shared by the admin action and self-service deletion.
+ * Runs inside the caller's transaction after the caller's own guards:
+ * revokes the account's unused invitations, then deletes the users row when
+ * there is no trading history, or anonymizes it when there is so the team's
+ * ledger and order attribution stay coherent. Sessions, the team seat, and everything else keyed to the user go with the
+ * row (ON DELETE CASCADE) or are removed explicitly when the row is kept. A self-service deletion also
+ * removes the person's feedback when the row is kept; an administrator's
+ * keeps it, attributed to "Deleted user".
+ *
+ * Self-service audit entries name neither the person nor their email: the
+ * person asked for their data to be removed, so the record keeps only what
+ * happened and the account's role.
+ */
+async function eraseAccount(
+  tx: DbExecutor,
+  actor: SessionUser,
+  target: AccountRow,
+  initiatedBy: "admin" | "self",
+): Promise<DeleteAccountResult> {
+  const userId = target.id;
+  const self = initiatedBy === "self";
+
+  // Before any delete: once the users row is gone, created_by is NULL and
+  // the invitations would look operator-issued.
+  await revokeInvitationsBeyondAuthority(tx, actor, target, [], "account deleted", {
+    selfService: self,
+  });
+
+  if (Number(target.order_count) === 0) {
+    // No trading history: the row can go entirely. The audit entry is
+    // written first; its subject reference becomes NULL on delete while
+    // the detail keeps the human-readable record.
+    await recordAuthAuditEvent({
+      type: "ACCOUNT_DELETED",
+      actorUserId: actor.id,
+      subjectUserId: null,
+      detail: self
+        ? `A ${target.role} deleted their own account.`
+        : `${actor.name} deleted ${target.name}'s account (${target.email}).`,
+      metadata: { mode: "deleted", role: target.role, ...(self ? { selfService: true } : {}) },
+    });
+
+    await tx.run("DELETE FROM users WHERE id = ?", [userId]);
+
+    return { id: userId, mode: "deleted" as const };
+  }
+
+  // Trading history exists: the ledger and order attribution must stay
+  // coherent, so the person is anonymized instead — identity gone,
+  // sign-in unlinked, seat freed.
+  await tx.run(
+    `UPDATE users
+     SET name = 'Deleted user',
+         email = ?,
+         status = 'deleted',
+         auth_subject = NULL,
+         email_verified_at = NULL,
+         last_login_at = NULL
+     WHERE id = ?`,
+    [`deleted-${userId}@users.luban.invalid`, userId],
+  );
+  await tx.run("DELETE FROM team_members WHERE user_id = ?", [userId]);
+  await tx.run("DELETE FROM sessions WHERE user_id = ?", [userId]);
+  if (self) {
+    // Feedback is the person's own writing, not team state; a self-service
+    // deletion removes it, as the hard-delete path does by cascade.
+    await tx.run("DELETE FROM feedback WHERE user_id = ?", [userId]);
+  }
+
+  await recordAuthAuditEvent({
+    type: "ACCOUNT_DELETED",
+    actorUserId: actor.id,
+    subjectUserId: userId,
+    detail: self
+      ? `A ${target.role} deleted their own account (anonymized; trading history retained).`
+      : `${actor.name} deleted ${target.name}'s account (anonymized; trading history retained).`,
+    metadata: { mode: "anonymized", role: target.role, ...(self ? { selfService: true } : {}) },
+  });
+
+  return { id: userId, mode: "anonymized" as const };
+}
+
 export async function deleteAccount(
   actorUserId: string,
   userId: string,
@@ -412,52 +501,56 @@ export async function deleteAccount(
     assertActorMayTouch(actor, target);
     await assertNotLastAdmin(tx, target);
 
-    // Before any delete: once the users row is gone, created_by is NULL and
-    // the invitations would look operator-issued.
-    await revokeInvitationsBeyondAuthority(tx, actor, target, [], "account deleted");
+    return eraseAccount(tx, actor, target, "admin");
+  });
+}
 
-    if (Number(target.order_count) === 0) {
-      // No trading history: the row can go entirely. The audit entry is
-      // written first; its subject reference becomes NULL on delete while
-      // the detail keeps the human-readable record.
-      await recordAuthAuditEvent({
-        type: "ACCOUNT_DELETED",
-        actorUserId: actor.id,
-        subjectUserId: null,
-        detail: `${actor.name} deleted ${target.name}'s account (${target.email}).`,
-        metadata: { mode: "deleted", role: target.role },
-      });
+/**
+ * Self-service deletion: the signed-in person deletes their own account,
+ * with the same outcome as an administrator's deletion (removed outright, or
+ * anonymized when they have trades on a team ledger). Guards:
+ * - Only an active account; a suspended one goes through its host.
+ * - Only an account that signs in through the identity provider. Seeded
+ *   demo identities have no sign-in of their own and are shared samples.
+ * - The last active platform administrator cannot leave the deployment
+ *   without an administrator.
+ * Team captains need no handover: the flag only orders the member list, and
+ * the team, its cash, and its holdings carry on with the remaining members.
+ *
+ * Removing the provider's sign-in record is the caller's job, after this
+ * transaction commits (see app/api/account/route.ts).
+ */
+export async function deleteOwnAccount(userId: string): Promise<DeleteAccountResult> {
+  const db = await getDb();
 
-      await tx.run("DELETE FROM users WHERE id = ?", [userId]);
+  return db.transaction(async (tx) => {
+    await acquireAdvisoryLock(tx, ADVISORY_LOCK_ACCOUNTS);
+    const actor = await getSessionUser(userId);
 
-      return { id: userId, mode: "deleted" as const };
+    if (!actor || actor.status === "deleted") {
+      throw new AppError("UNAUTHORIZED", "Sign in to continue.", 401);
     }
 
-    // Trading history exists: the ledger and order attribution must stay
-    // coherent, so the person is anonymized instead — identity gone,
-    // sign-in unlinked, seat freed.
-    await tx.run(
-      `UPDATE users
-       SET name = 'Deleted user',
-           email = ?,
-           status = 'deleted',
-           auth_subject = NULL,
-           email_verified_at = NULL,
-           last_login_at = NULL
-       WHERE id = ?`,
-      [`deleted-${userId}@users.luban.invalid`, userId],
-    );
-    await tx.run("DELETE FROM team_members WHERE user_id = ?", [userId]);
-    await tx.run("DELETE FROM sessions WHERE user_id = ?", [userId]);
+    if (actor.status !== "active") {
+      throw new AppError(
+        "ACCOUNT_SUSPENDED",
+        "This account is suspended. Ask your competition host to delete it.",
+        403,
+      );
+    }
 
-    await recordAuthAuditEvent({
-      type: "ACCOUNT_DELETED",
-      actorUserId: actor.id,
-      subjectUserId: userId,
-      detail: `${actor.name} deleted ${target.name}'s account (anonymized; trading history retained).`,
-      metadata: { mode: "anonymized", role: target.role },
-    });
+    const target = await loadTarget(tx, userId);
 
-    return { id: userId, mode: "anonymized" as const };
+    if (target.auth_subject === null) {
+      throw new AppError(
+        "DEMO_IDENTITY",
+        "Demo identities are shared sample accounts and can't be deleted.",
+        403,
+      );
+    }
+
+    await assertNotLastAdmin(tx, target);
+
+    return eraseAccount(tx, actor, target, "self");
   });
 }

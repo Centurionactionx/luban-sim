@@ -2,7 +2,7 @@
 
 import { useSyncExternalStore } from "react";
 
-import { THEME_STORAGE_KEY, type ThemeChoice } from "@/lib/theme";
+import { syncThemeColor, THEME_STORAGE_KEY, type ThemeChoice } from "@/lib/theme";
 
 import { MoonIcon, SunIcon } from "./simulator-icons";
 
@@ -24,6 +24,7 @@ function currentTheme(): ThemeChoice {
 
 function applyTheme(theme: ThemeChoice): void {
   document.documentElement.dataset.theme = theme;
+  syncThemeColor(theme);
   try {
     window.localStorage.setItem(THEME_STORAGE_KEY, theme);
   } catch {

@@ -269,8 +269,6 @@ async function shoot(page, name, { regions = [], targets, fullViewport = false, 
 const box = (...locators) => () => rectOf(...locators);
 /** A target hugging the text inside a locator. */
 const text = (locator) => () => textRectOf(locator);
-/** Several rings that share one number. */
-const rings = (...targets) => () => Promise.all(targets.map((target) => target()));
 
 /** Hover the chart plot at a fraction of its width. */
 async function hoverPlot(page, plot, fraction) {
@@ -310,6 +308,7 @@ const shots = {
       targets: [
         { rect: box(lockup.locator("strong"), lockup.locator(".state-tag")) },
         { rect: box(page.locator(".guide-link")) },
+        { rect: box(page.locator(".theme-toggle")), inflateX: 10, inflateY: 10 },
         { rect: box(page.getByRole("button", { name: "Send feedback" })), inflateX: 10, inflateY: 10 },
         // A fresh browser hasn't seen any activity, so the bell shows its bubble.
         { rect: box(page.locator(".activity-bell__button")), inflateX: 10, inflateY: 10 },
@@ -319,16 +318,17 @@ const shots = {
   },
 
   async "03-portfolio-summary"(page) {
-    const metric = (n) => page.locator(".metric-grid > div").nth(n);
+    const card = page.locator('section[aria-label="Portfolio value"]');
+    const term = (label) => card.locator("dt").filter({ hasText: label }).locator("..");
     return {
-      region: page.locator(".portfolio-total"),
-      extraRegion: page.locator(".metric-grid"),
+      region: card,
       targets: [
-        { rect: box(page.locator(".portfolio-total")), inflateX: 8, inflateY: 6, slack: 24 },
-        { rect: box(metric(0)), inflateX: 8, inflateY: 6, slack: 16 },
-        { rect: box(metric(1)), inflateX: 8, inflateY: 6, slack: 16 },
-        { rect: box(metric(2)), inflateX: 8, inflateY: 6, slack: 16 },
-        { rect: box(metric(3)), inflateX: 8, inflateY: 6, slack: 16 },
+        { rect: box(card.getByText("Total portfolio value (CAD)"), card.locator("strong").first()), inflateX: 10, inflateY: 8 },
+        { rect: box(term("Daily return")), inflateX: 8, inflateY: 6, badgeAngle: 0 },
+        { rect: box(term("Total return")), inflateX: 8, inflateY: 6, badgeAngle: 0 },
+        { rect: box(card.locator(":scope > div").nth(1)), inflateX: 10, inflateY: 8, slack: 12, badgeAngle: 0 },
+        { rect: box(term(/^Unrealized/)), inflateX: 6, inflateY: 6, slack: 12 },
+        { rect: box(term(/^Realized/)), inflateX: 6, inflateY: 6, slack: 12, badgeAngle: 45 },
       ],
     };
   },
@@ -365,10 +365,12 @@ const shots = {
   async "06-quote"(page) {
     return {
       region: page.locator(".quote-summary"),
-      extraRegion: page.locator(".quote-facts"),
+      extraRegion: page.locator(".quote-band"),
       targets: [
-        { rect: text(page.locator(".quote-price")), slack: 10, badgeAngle: 0 },
-        { rect: box(page.locator(".quote-facts")), inflateX: 10, inflateY: 8 },
+        { rect: text(page.locator(".quote-meta")), inflateX: 10, inflateY: 6, badgeAngle: 180 },
+        { rect: text(page.locator(".quote-price").locator("strong, span").first()), slack: 10, badgeAngle: 180 },
+        { rect: box(page.locator(".watch-toggle")), inflateX: 10, inflateY: 10, badgeAngle: 0 },
+        { rect: box(page.locator(".quote-band")), inflateX: 8, inflateY: 6, slack: 8, badgeAngle: 225 },
       ],
     };
   },
@@ -414,18 +416,17 @@ const shots = {
 
   async "09-order-ticket"(page) {
     const ticket = page.locator("#order-ticket");
-    const fields = ticket.locator(".ticket-fields > div");
-    const labelAndValue = (cell) => box(cell.locator(":scope > span"), cell.locator(":scope > strong"));
+    const receipt = ticket.locator(".ticket-receipt");
     return {
-      region: ticket,
+      region: ticket.locator(".ticket-layout"),
       targets: [
         { rect: box(ticket.locator(".side-control")) },
         { rect: box(ticket.locator(".order-type")), inflateX: 10, inflateY: 8 },
         { rect: box(ticket.locator("#order-quantity")), badgeAngle: 180 },
         { rect: box(ticket.locator(".ticket-max")), inflateX: 10, inflateY: 8 },
-        { rect: rings(labelAndValue(fields.nth(1)), labelAndValue(fields.nth(3))), inflateX: 10, inflateY: 6, slack: 0 },
-        { rect: box(ticket.locator(".ticket-actions button[type=submit]")) },
-        { rect: box(ticket.getByRole("button", { name: "Clear ticket" })) },
+        { rect: box(receipt.locator("dl")), inflateX: 8, inflateY: 6, fit: false, badgeAngle: 0 },
+        { rect: box(receipt.locator("button[type=submit]")) },
+        { rect: box(receipt.getByRole("button", { name: "Clear ticket" })), badgeAngle: 180 },
       ],
     };
   },
@@ -454,14 +455,18 @@ const shots = {
     await ticket.locator("#order-type-select").selectOption("LIMIT");
     await ticket.locator("#order-trigger-price").fill("210");
     await ticket.locator("#order-trigger-price").blur();
+    // Exits sit behind a button until someone asks for them.
+    await ticket.locator("#ticket-exits-add").click();
+    await ticket.locator(".ticket-bracket").waitFor();
+    await page.locator("#bracket-take-profit").blur();
     await page.mouse.move(0, 0);
     await page.waitForTimeout(300);
     return {
       region: ticket,
       targets: [
         { rect: box(ticket.locator(".order-type")), inflateX: 10, inflateY: 8 },
-        { rect: box(ticket.locator("#order-trigger-price")) },
-        { rect: box(ticket.locator("#order-time-in-force")) },
+        { rect: box(ticket.locator("#order-trigger-price")), badgeAngle: 0 },
+        { rect: box(ticket.locator("#order-time-in-force")), badgeAngle: 0 },
         { rect: box(ticket.locator(".ticket-bracket")), inflateX: 10, inflateY: 8, slack: 16 },
       ],
       reload: true,
@@ -475,10 +480,12 @@ const shots = {
       region: section,
       targets: [
         { rect: text(row.locator(".symbol-button")), inflateX: 8, inflateY: 6, slack: 0 },
-        { rect: text(row.locator("[data-label=Quantity]")), inflateX: 8, inflateY: 6, slack: 0 },
+        { rect: text(row.locator("td").nth(0)), inflateX: 8, inflateY: 6, slack: 0, badgeAngle: 270 },
+        { rect: text(row.locator('[data-label="Avg cost"]')), inflateX: 8, inflateY: 6, badgeAngle: 270 },
         { rect: text(row.locator('[data-label="Market value"]')), inflateX: 8, inflateY: 6, badgeAngle: 270 },
         { rect: text(row.locator('[data-label="Gain/loss"]')), inflateX: 8, inflateY: 6, badgeAngle: 270 },
-        { rect: box(section.locator(".portfolio-map-open")) },
+        { rect: box(section.getByRole("button", { name: "Export holdings as CSV" })) },
+        { rect: box(section.locator(".portfolio-map-open")), badgeAngle: 45 },
       ],
     };
   },
@@ -498,7 +505,7 @@ const shots = {
         { rect: box(control("Color by")), inflateX: 10, inflateY: 8, slack: 0 },
         { rect: box(control("Size by")), inflateX: 10, inflateY: 8, slack: 0 },
         { rect: box(dialog.locator(".portfolio-map__toggle")), inflateX: 10, inflateY: 8 },
-        { rect: box(tile), inflateX: 0, inflateY: 0 },
+        { rect: box(tile), inflateX: 0, inflateY: 0, fit: false, badgeAngle: 90 },
         { rect: box(dialog.locator(".portfolio-map__legend ol")), inflateX: 10, inflateY: 8 },
       ],
       reload: true,
@@ -540,15 +547,15 @@ const shots = {
 
   async "16-leaderboard"(page) {
     const section = page.locator(".leaderboard-section");
-    const head = section.locator("thead th");
     return {
       region: page.locator(".presence-section"),
       extraRegion: section,
       targets: [
         { rect: box(page.locator(".presence-list")), inflateX: 10, inflateY: 8, slack: 12 },
-        { rect: box(section.locator("tr.is-current")), inflateX: 8, inflateY: 8, slack: 12, badgeAngle: 180 },
-        { rect: text(head.filter({ hasText: "Value" })), inflateX: 12, inflateY: 8 },
-        { rect: text(head.filter({ hasText: "Return" })), inflateX: 12, inflateY: 8 },
+        { rect: text(section.locator("tr.is-current .leaderboard-bars__name")), inflateX: 8, inflateY: 6, badgeAngle: 180 },
+        // The value column folds under each team's name in the narrow rail.
+        { rect: text(section.locator("tr.is-current .leaderboard-bars__inline-value")), inflateX: 10, inflateY: 6, badgeAngle: 225 },
+        { rect: box(section.locator("tr.is-current .leaderboard-bars__return")), inflateX: 6, inflateY: 4, slack: 0, badgeAngle: 90 },
       ],
     };
   },
@@ -560,6 +567,35 @@ const shots = {
       targets: [
         { rect: box(footer.locator(".connection-state")) },
         { rect: text(footer.locator(":scope > div").filter({ hasText: "Last team sync" })) },
+        { rect: box(footer.locator(".status-footer__version")), inflateX: 10, inflateY: 8 },
+      ],
+    };
+  },
+
+  async "18-watchlist"(page) {
+    const section = page.locator(".watchlist-section");
+    const row = section.locator("tbody tr").first();
+    return {
+      region: section,
+      targets: [
+        { rect: box(section.locator(".panel-heading__aside")), inflateX: 10, inflateY: 8, badgeAngle: 180 },
+        { rect: box(section.locator("thead .sort-button").first()), inflateX: 10, inflateY: 8, badgeAngle: 180 },
+        { rect: box(row.locator(".watchlist-table__spark")), inflateX: 8, inflateY: 6 },
+        { rect: box(row.locator(".watchlist-table__remove button")), inflateX: 8, inflateY: 8, badgeAngle: 45 },
+      ],
+    };
+  },
+
+  async "19-trade-history"(page) {
+    const section = page.locator(".trade-history-section");
+    const sale = section.locator("tbody tr").filter({ has: page.locator(".side-tag--sell") }).first();
+    return {
+      region: section,
+      targets: [
+        { rect: text(sale.locator("[data-label=Trade]")), inflateX: 8, inflateY: 6 },
+        { rect: text(sale.locator("[data-label=Realized]")), inflateX: 8, inflateY: 6, badgeAngle: 270 },
+        { rect: box(section.getByRole("link", { name: "Export every trade as CSV" })) },
+        { rect: box(section.locator(".trade-history-toggle")), inflateX: 10, inflateY: 8 },
       ],
     };
   },

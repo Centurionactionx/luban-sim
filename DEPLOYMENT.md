@@ -52,6 +52,12 @@ Clerk's session `fva` claim distinguishes an enrolled account from a session tha
 
 Account deletion preserves trading attribution. Audit text and the upstream identity provider have separate retention behavior; this is not a complete personal-data erasure workflow.
 
+### Self-service deletion
+
+People delete their own account from **Account → Delete account** (`DELETE /api/account`, confirmed by typing `DELETE`). The Market Lab account is removed, or anonymized as above when it has trades, and then the Clerk user is deleted, which ends every session. If the Clerk step fails, the person is told to retry; the retry deletes only the Clerk user. The last active platform administrator and suspended accounts cannot delete themselves, and demo identities cannot be deleted at all. Unlike an administrator's deletion, a self-service one also removes the person's feedback and deletes their Clerk user. `/delete-account` is the public page that explains deletion, including for people who can't sign in.
+
+Clerk's own **Delete account** button is hidden on the account page because it would leave the Market Lab account behind. Also turn off **Allow users to delete their accounts** in the Clerk dashboard so no other Clerk surface offers it.
+
 ## Database backups
 
 `pnpm backup:db` writes a read-only JSON export of every application table to `backups/luban-db-<timestamp>.json` and prints row counts per table. It loads `.env*` files like the app, uses the same TLS rules, reads all tables in one `READ ONLY` snapshot, and never writes to the database. It refuses to run unless `LUBAN_DATABASE_PROVIDER=postgres` is set, so point `LUBAN_DATABASE_URL` at the database you mean to back up, for example only for that command. The `backups/` folder is gitignored. The file contains names and email addresses, so store it somewhere private. There is no restore command yet; the export is a record to rebuild from by hand.

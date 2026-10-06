@@ -1,0 +1,309 @@
+/*
+ * Portfolio summary: the total and its returns, a bar that splits the total
+ * into holdings, buying power, and cash set aside, then the two gains.
+ */
+
+.card {
+  display: grid;
+  gap: 16px;
+  margin: 16px 18px 14px;
+  padding: 16px;
+  border: 2px solid var(--rule);
+  border-radius: 4px;
+  background: var(--paper);
+}
+
+:global(:root[data-theme="dark"]) .card {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: var(--raised);
+}
+
+.label {
+  color: var(--muted);
+  font-family: var(--font-data);
+  font-size: 8.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.label :global(.help-tip) {
+  margin-left: 3px;
+  vertical-align: middle;
+}
+
+/* ── Total and returns ─────────────────────────────────────────────── */
+
+.head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.total {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.total > span {
+  color: var(--ink);
+  font-family: var(--font-data);
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.total > strong {
+  font-family: var(--font-data);
+  font-size: clamp(29px, 3vw, 41px);
+  font-weight: 500;
+  letter-spacing: -0.045em;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+
+/* The two returns stack on the right, beside the total. */
+.returns {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 0 auto;
+}
+
+.chip {
+  display: grid;
+  gap: 2px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: var(--positive-wash);
+}
+
+.chip[data-negative="true"] {
+  background: var(--negative-wash);
+}
+
+.chip dd {
+  display: flex;
+  gap: 6px;
+  font-family: var(--font-data);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.chip dd small {
+  font-size: inherit;
+}
+
+/* ── Split bar ─────────────────────────────────────────────────────── */
+
+.split {
+  display: grid;
+  gap: 8px;
+}
+
+.bar {
+  display: flex;
+  gap: 2px;
+  height: 12px;
+  overflow: hidden;
+  border-radius: 6px;
+  background: var(--neutral-wash);
+}
+
+.segment {
+  min-width: 0;
+  height: 100%;
+}
+
+.holdings {
+  background: var(--purple-deep);
+}
+
+.buyingPower {
+  background: var(--purple);
+  opacity: 0.45;
+}
+
+.setAside {
+  border: 1px dashed var(--purple);
+  border-radius: 0 6px 6px 0;
+  background: var(--quiet-purple);
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 0;
+}
+
+.legend > div {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend dt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend dt::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 2px;
+  background: var(--purple-deep);
+}
+
+.legend dt[data-swatch="buying-power"]::before {
+  background: var(--purple);
+  opacity: 0.45;
+}
+
+.legend dt[data-swatch="set-aside"]::before {
+  border: 1px dashed var(--purple);
+  background: var(--quiet-purple);
+}
+
+.legend dd {
+  font-family: var(--font-data);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+/* ── Gains ─────────────────────────────────────────────────────────── */
+
+.gains {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.gains > div {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 4px;
+  background: var(--quiet-purple-2);
+}
+
+.gains dd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 8px;
+  font-family: var(--font-data);
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.gains dd small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* ── Footer: snapshot time, and the admin's own test cash ──────────── */
+
+.foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+  color: var(--muted);
+  font-size: var(--type-description);
+}
+
+.cashForm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.cashForm input {
+  width: 128px;
+  min-height: 32px;
+  padding: 5px 7px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-data);
+  font-size: 11px;
+}
+
+.cashForm input:focus-visible {
+  outline: 2px solid var(--purple);
+  outline-offset: 1px;
+}
+
+.cashForm input[aria-invalid="true"] {
+  border-color: var(--red);
+}
+
+.cashForm button {
+  min-height: 32px;
+  padding: 5px 10px;
+  border: 1px solid var(--purple);
+  border-radius: 3px;
+  background: var(--purple);
+  color: var(--paper);
+  font-family: var(--font-data);
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0.025em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.cashForm button:hover:not(:disabled) {
+  background: var(--purple-hover);
+}
+
+.cashForm button:disabled {
+  border-color: var(--quiet-purple);
+  background: var(--quiet-purple);
+  color: var(--muted);
+}
+
+.feedback {
+  flex-basis: 100%;
+  font-size: 9px;
+}
+
+.feedback[data-kind="error"] {
+  color: var(--red);
+}
+
+.feedback[data-kind="success"] {
+  color: var(--green);
+}
+
+@media (min-width: 1261px) {
+  .card {
+    gap: 12px;
+    margin-top: 12px;
+    margin-bottom: 10px;
+    padding-block: 12px;
+  }
+}
+
+@media (max-width: 720px) {
+  .card {
+    margin-inline: 12px;
+  }
+
+  .total > strong {
+    font-size: clamp(26px, 9vw, 37px);
+  }
+}

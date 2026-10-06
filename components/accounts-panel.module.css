@@ -1,0 +1,494 @@
+/*
+ * Accounts & invitations: an invite bar, the open invitations as pills, a
+ * roster of team cards, and a drawer for the selected person.
+ */
+
+.label {
+  color: var(--muted);
+  font-family: var(--font-data);
+  font-size: var(--type-meta);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+/* ── Invite bar ─────────────────────────────────────────────────────── */
+
+.inviteBar {
+  padding: 16px clamp(18px, 3vw, 28px);
+  border-bottom: 1px solid var(--rule);
+  background: var(--quiet-purple-2);
+}
+
+/* Flex rather than grid: the team field only shows for students. */
+.inviteForm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.inviteForm h2 {
+  flex: none;
+  align-self: center;
+  margin-right: 4px;
+  font-size: var(--type-section-title);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.inviteForm label {
+  flex: 1 1 140px;
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.inviteForm label:has(input[type="email"]) {
+  flex-grow: 1.6;
+  flex-basis: 200px;
+}
+
+.inviteForm select,
+.inviteForm input {
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 10px;
+  border: 1.5px solid var(--rule);
+  border-radius: 4px;
+  background: var(--paper);
+}
+
+.inviteForm button {
+  flex: none;
+  min-height: 42px;
+}
+
+/* ── Waiting to join ────────────────────────────────────────────────── */
+
+.pending {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  padding: 12px clamp(18px, 3vw, 28px);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 5px 4px 11px;
+  border: 1.5px solid var(--purple);
+  border-radius: 999px;
+  background: var(--paper);
+  font-size: 13px;
+}
+
+.pillTag {
+  color: var(--muted);
+  font-family: var(--font-data);
+  font-size: var(--type-meta);
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.pillRevoke {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: var(--negative-wash);
+  color: var(--red);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.pillRevoke:hover:not(:disabled) {
+  background: var(--red);
+  color: var(--paper);
+}
+
+.noPending {
+  color: var(--muted);
+  font-size: 13.5px;
+}
+
+.historyToggle {
+  margin-left: auto;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: var(--purple-deep);
+  font-size: 13.5px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.history {
+  padding: 4px clamp(18px, 3vw, 28px) 18px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+/* ── Roster and drawer ──────────────────────────────────────────────── */
+
+.body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.body[data-drawer="open"] {
+  grid-template-columns: minmax(0, 1fr) 380px;
+}
+
+.roster {
+  padding: 20px clamp(18px, 3vw, 28px) 26px;
+}
+
+/* Columns rather than a grid, so short cards stack without row gaps. */
+.teams {
+  columns: 250px;
+  column-gap: 16px;
+}
+
+.team {
+  margin-bottom: 16px;
+  break-inside: avoid;
+  border: 1.5px solid var(--rule);
+  border-radius: 4px;
+  background: var(--paper);
+}
+
+.teamHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1.5px solid var(--rule);
+}
+
+.teamHead h3 {
+  font-size: 15.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.teamCount {
+  flex: none;
+  color: var(--muted);
+  font-family: var(--font-data);
+  font-size: 11.5px;
+}
+
+.teamFlag {
+  margin-left: 6px;
+  vertical-align: 2px;
+}
+
+.members {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.members li + li {
+  border-top: 1px solid var(--hairline);
+}
+
+.member {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 0;
+  background: none;
+  color: inherit;
+  text-align: left;
+}
+
+.member:hover {
+  background: var(--quiet-purple-2);
+}
+
+.member[aria-expanded="true"] {
+  background: var(--quiet-purple);
+  box-shadow: inset 3px 0 0 var(--purple);
+}
+
+.memberText {
+  min-width: 0;
+  flex: 1;
+}
+
+.memberText strong {
+  display: block;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memberText small {
+  display: block;
+  color: var(--muted);
+  font-family: var(--font-data);
+  font-size: 11.5px;
+}
+
+.emptyTeam {
+  padding: 10px 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.addToTeam {
+  width: 100%;
+  padding: 9px 12px;
+  border: 0;
+  border-top: 1px solid var(--hairline);
+  background: none;
+  color: var(--purple-deep);
+  font-family: var(--font-data);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.addToTeam:hover {
+  background: var(--quiet-purple-2);
+}
+
+.avatar {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border: 1.5px solid var(--rule);
+  border-radius: 50%;
+  background: var(--quiet-purple);
+  font-family: var(--font-data);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Quiet is an outline so it reads in both themes; the others are filled. */
+.dot {
+  width: 9px;
+  height: 9px;
+  flex: none;
+  border: 1.5px solid var(--muted);
+  border-radius: 50%;
+}
+
+.dotRecent {
+  border-color: var(--green);
+  background: var(--green);
+}
+
+.dotSuspended {
+  border-color: var(--red);
+  background: var(--red);
+}
+
+.role {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-family: var(--font-data);
+  font-size: var(--type-meta);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.roleHost {
+  background: var(--lime);
+  color: var(--on-bright);
+}
+
+.roleAdmin {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.note {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.drawer {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  padding: 20px 22px 24px;
+  border-left: 2px solid var(--rule);
+  background: var(--paper);
+  box-shadow: -10px 0 30px rgb(0 23 31 / 8%);
+}
+
+.drawerTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.close {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 1.5px solid var(--rule);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 17px;
+  line-height: 1;
+}
+
+.close:hover {
+  background: var(--quiet-purple);
+}
+
+.who {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.who .avatar {
+  width: 46px;
+  height: 46px;
+  font-size: 15px;
+}
+
+.who h3 {
+  font-size: 21px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  outline: none;
+}
+
+.who p {
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-data);
+  font-size: 12px;
+  text-overflow: ellipsis;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px 12px;
+  margin: 0;
+  padding: 14px 0;
+  border-top: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.facts dd {
+  margin: 0;
+  font-size: 14px;
+}
+
+.facts select {
+  width: 100%;
+  min-height: 40px;
+  padding: 6px 10px;
+  border: 1.5px solid var(--rule);
+  border-radius: 4px;
+  background: var(--paper);
+}
+
+.mono {
+  font-family: var(--font-data);
+  font-size: 12.5px;
+}
+
+.dangerZone {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  padding: 12px;
+  border: 1.5px solid var(--red);
+  border-radius: 4px;
+  background: var(--negative-wash);
+  color: var(--red);
+  font-size: 13px;
+}
+
+.dangerZone .label {
+  color: var(--red);
+}
+
+.drawerFeedback {
+  margin: 0;
+}
+
+/* Narrow screens: the drawer becomes a sheet over the roster. */
+@media (max-width: 860px) {
+  .body[data-drawer="open"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .drawer {
+    position: fixed;
+    z-index: 40;
+    inset: auto 0 0;
+    max-height: 85dvh;
+    overflow-y: auto;
+    padding-bottom: calc(24px + var(--safe-bottom, 0px));
+    border-top: 2px solid var(--rule);
+    border-left: 0;
+    border-radius: 8px 8px 0 0;
+    box-shadow: 0 -12px 40px rgb(0 23 31 / 25%);
+  }
+}
+
+@media (max-width: 560px) {
+  .inviteForm h2 {
+    flex-basis: 100%;
+  }
+
+  .inviteForm button {
+    flex-basis: 100%;
+  }
+}

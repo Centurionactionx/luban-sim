@@ -33,6 +33,28 @@ export const CHANGE_KIND_LABELS: Record<ChangeKind, string> = {
 
 export const CHANGELOG: readonly ChangelogRelease[] = [
   {
+    version: "1.40.0",
+    date: "2026-10-06",
+    title: "A clearer portfolio summary and leaderboard",
+    changes: [
+      { kind: "changed", text: "A redesigned portfolio summary. Today's and total return sit beside your total, a bar shows how it splits into holdings, buying power and cash set aside for waiting buys, and the ? buttons explain set aside, unrealized and realized gains." },
+      { kind: "changed", text: "The leaderboard shows each team's return as a bar on one shared scale. In the narrow side panel, a team's value moves under its name." },
+      { kind: "added", text: "If your team isn't in the top five, its row is pinned under the leaderboard so you can always see where you stand." },
+      { kind: "changed", text: "The Watch button beside a quote's price is now a round star." },
+      { kind: "changed", text: "Platform admins get a new Accounts page: an invite bar, a roster of team cards showing who signed in recently, and a panel with each person's details." },
+    ],
+  },
+  {
+    version: "1.39.0",
+    date: "2026-10-06",
+    title: "The Luban logo and account deletion",
+    changes: [
+      { kind: "added", text: "Delete your own account from the Account page. A public page at /delete-account explains what's removed, what your team keeps, and how to ask for deletion if you can't sign in." },
+      { kind: "added", text: "If your connection drops, you'll see a page saying you're offline instead of a browser error. It reloads by itself when you're back online." },
+      { kind: "changed", text: "The Luban bridge logo now appears in the header, on the sign-in and other standalone pages, in your browser tab, and in the preview when you share an invitation link." },
+    ],
+  },
+  {
     version: "1.38.0",
     date: "2026-10-05",
     title: "Ready for a full class",

@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#b0a7df">
+  <title>Offline · Luban Market Lab</title>
+  <link rel="icon" href="/favicon.ico" sizes="any">
+  <!--
+    Shown by /sw.js when a page can't load because the network is down. It
+    is the only file the worker caches, so it must stand alone: no app CSS,
+    no web fonts, nothing else fetched. Colours mirror app/globals.css.
+  -->
+  <script>
+    // Same rule as the app (lib/theme.ts): a saved dark choice, else light.
+    (function () {
+      try {
+        var theme = localStorage.getItem("luban:theme");
+        if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+        if (theme === "dark") document.querySelector('meta[name="theme-color"]').content = "#09090b";
+      } catch (error) {}
+    })();
+  </script>
+  <style>
+    :root {
+      --canvas: #b0a7df;
+      --paper: #ffffff;
+      --ink: #00171f;
+      --purple: #6757c3;
+      --purple-deep: #4e3ca5;
+      --muted: #59666b;
+      --lime: #96f550;
+      --sheet-border: #00171f;
+      --sheet-shadow: none;
+      --button-text: #ffffff;
+      --button-hover: #00171f;
+      color-scheme: light;
+    }
+
+    :root[data-theme="dark"] {
+      --canvas: #09090b;
+      --paper: #131316;
+      --ink: #ececf0;
+      --purple: #a99df2;
+      --purple-deep: #c6bff5;
+      --muted: #a1a1aa;
+      --sheet-border: rgba(255, 255, 255, 0.08);
+      --sheet-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045), 0 22px 44px -22px rgba(0, 0, 0, 0.9);
+      --button-text: #0d0a1a;
+      --button-hover: #bcb2f6;
+      color-scheme: dark;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html,
+    body {
+      min-height: 100%;
+      background: var(--canvas);
+    }
+
+    body {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding:
+        max(20px, env(safe-area-inset-top))
+        max(20px, env(safe-area-inset-right))
+        max(20px, env(safe-area-inset-bottom))
+        max(20px, env(safe-area-inset-left));
+      color: var(--ink);
+      font-family: "Space Grotesk", "Helvetica Neue", Arial, sans-serif;
+      font-size: 14px;
+      line-height: 1.45;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    main {
+      width: min(620px, 100%);
+      padding: clamp(28px, 7vw, 64px);
+      border: 2px solid var(--sheet-border);
+      border-radius: 4px;
+      background: var(--paper);
+      box-shadow: var(--sheet-shadow);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 0;
+      color: var(--purple-deep);
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.035em;
+      text-transform: uppercase;
+    }
+
+    .brand svg {
+      width: 38px;
+      height: 26px;
+      flex: none;
+    }
+
+    h1 {
+      max-width: 13ch;
+      margin-top: 22px;
+      font-size: clamp(32px, 7vw, 58px);
+      font-weight: 500;
+      letter-spacing: -0.04em;
+      line-height: 0.98;
+    }
+
+    p {
+      max-width: 55ch;
+      margin-top: 20px;
+      color: var(--muted);
+    }
+
+    button {
+      min-height: 48px;
+      margin-top: 28px;
+      padding: 10px 18px;
+      border: 1.5px solid transparent;
+      border-radius: 4px;
+      background: var(--purple);
+      color: var(--button-text);
+      font: 600 10.5px/1 "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      letter-spacing: 0.015em;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: var(--button-hover);
+    }
+
+    button:focus-visible {
+      outline: 3px solid var(--lime);
+      outline-offset: 2px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="brand">
+      <svg viewBox="6 14 180 124" aria-hidden="true"><g fill="none" stroke="#7b6cd3" stroke-linecap="round" stroke-linejoin="round"><path d="M65 88.5 V23 Q65 20.5 67.5 20.5 H72 Q74.5 20.5 74.5 23 V87.8 M126 88.5 V23 Q126 20.5 123.5 20.5 H119 Q116.5 20.5 116.5 23 V87.8" stroke-width="5.5"/><path d="M74.5 23 H116.5 M74.5 30.5 H116.5" stroke-width="4.5"/><path d="M65 27 Q38 60 10.5 82 M126 27 Q153 60 180.5 82" stroke-width="5.5"/><path d="M38.5 56.6 V91.9 M152.5 56.6 V91.9" stroke-width="5"/><path d="M12 98 Q95.5 78 179 98 L179 104.5 Q95.5 86.5 12 104.5 Z" stroke-width="4.5"/><path d="M24.5 133.5 V122.5 A12.5 12.5 0 0 1 49.5 122.5 V133.5 Z M166.5 133.5 V122.5 A12.5 12.5 0 0 0 141.5 122.5 V133.5 Z" stroke-width="5"/></g></svg>
+      Luban Market Lab
+    </p>
+    <h1>You're offline.</h1>
+    <p>Market Lab needs a connection for prices and your team's portfolio. Check your Wi-Fi or mobile data, then try again.</p>
+    <button type="button" id="retry">Try again</button>
+  </main>
+  <script>
+    document.getElementById("retry").addEventListener("click", function () {
+      location.reload();
+    });
+    // Back online: reload the page that failed.
+    window.addEventListener("online", function () {
+      location.reload();
+    });
+  </script>
+</body>
+</html>

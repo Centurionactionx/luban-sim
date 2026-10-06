@@ -35,7 +35,7 @@
 
 .titleLine h1 {
   max-width: 780px;
-  font-size: clamp(27px, 4vw, 48px);
+  font-size: clamp(28px, 4vw, 49px);
   font-weight: 550;
   letter-spacing: -0.035em;
   line-height: 1;
@@ -56,7 +56,7 @@
   border: 1px solid currentColor;
   border-radius: 3px;
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.035em;
   line-height: 1;
@@ -73,7 +73,7 @@
   max-width: 68ch;
   margin-top: 14px;
   color: var(--muted);
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.55;
 }
 
@@ -96,7 +96,7 @@
   border: 1.5px solid var(--rule);
   border-radius: 4px;
   font-family: var(--font-data);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.02em;
   line-height: 1.2;
@@ -165,7 +165,7 @@
   background: var(--quiet-purple-2);
   color: var(--muted);
   font-family: var(--font-data);
-  font-size: 9.5px;
+  font-size: 10.5px;
   letter-spacing: 0.02em;
   text-transform: uppercase;
 }
@@ -198,7 +198,7 @@
 }
 
 .loadingState strong {
-  font-size: 18px;
+  font-size: 19px;
   font-weight: 550;
 }
 
@@ -228,7 +228,7 @@
 .positionValue > span:first-child,
 .purchasePanel label > span {
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.035em;
   text-transform: uppercase;
@@ -241,7 +241,7 @@
 .summaryPrimary > strong {
   margin-top: 8px;
   font-family: var(--font-data);
-  font-size: clamp(30px, 5.2vw, 66px);
+  font-size: clamp(31px, 5.2vw, 67px);
   font-weight: 500;
   letter-spacing: -0.04em;
   line-height: 1;
@@ -256,7 +256,7 @@
   border: 1px solid currentColor;
   border-radius: 3px;
   font-family: var(--font-data);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
 }
 
@@ -287,7 +287,7 @@
   margin-top: 6px;
   overflow-wrap: anywhere;
   font-family: var(--font-data);
-  font-size: clamp(18px, 2vw, 25px);
+  font-size: clamp(19px, 2vw, 26px);
   font-weight: 500;
   letter-spacing: -0.025em;
   font-variant-numeric: tabular-nums;
@@ -329,7 +329,7 @@
 
 .purchasePanel h2,
 .ledger h2 {
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 650;
   letter-spacing: -0.015em;
 }
@@ -340,7 +340,7 @@
   max-width: 62ch;
   margin-top: 8px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.55;
 }
 
@@ -375,7 +375,7 @@
   background: #f2fbee;
   color: var(--green);
   font-family: var(--font-data);
-  font-size: 8px;
+  font-size: 9px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.025em;
@@ -421,7 +421,7 @@
   background: var(--paper);
   caret-color: var(--purple);
   font-family: var(--font-data);
-  font-size: 12px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -444,7 +444,7 @@
 
 .fieldError {
   color: var(--red);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.45;
 }
 
@@ -456,7 +456,7 @@
 
 .methodNote strong {
   font-family: var(--font-data);
-  font-size: 9px;
+  font-size: 10px;
   letter-spacing: 0.035em;
   text-transform: uppercase;
 }
@@ -464,7 +464,7 @@
 .methodNote p {
   margin-top: 7px;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 11.5px;
   line-height: 1.5;
 }
 
@@ -504,12 +504,12 @@
 }
 
 .clearConfirm strong {
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .clearConfirm span {
   color: var(--red);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .clearConfirm > div:last-child {
@@ -529,7 +529,7 @@
   padding: 10px 12px;
   border: 1px solid currentColor;
   border-radius: 4px;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.45;
 }
 
@@ -561,7 +561,7 @@
 }
 
 .emptyState strong {
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 600;
 }
 
@@ -569,7 +569,7 @@
   max-width: 48ch;
   margin-top: 7px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.55;
 }
 
@@ -599,7 +599,7 @@
 
 .instrument > strong {
   font-family: var(--font-data);
-  font-size: 20px;
+  font-size: 21px;
   font-weight: 600;
   letter-spacing: -0.02em;
 }
@@ -607,7 +607,7 @@
 .instrument > span {
   overflow: hidden;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 11.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -625,7 +625,7 @@
 .positionValue > strong {
   margin-top: 2px;
   font-family: var(--font-data);
-  font-size: 20px;
+  font-size: 21px;
   font-weight: 500;
   letter-spacing: -0.025em;
   font-variant-numeric: tabular-nums;
@@ -634,7 +634,7 @@
 .positionValue > span:last-child {
   margin-top: 2px;
   font-family: var(--font-data);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
 }
 
@@ -663,7 +663,7 @@
   align-items: center;
   margin-top: 4px;
   font-family: var(--font-data);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 550;
   font-variant-numeric: tabular-nums;
 }
@@ -673,7 +673,7 @@
   margin-top: 4px;
   overflow-wrap: anywhere;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.4;
 }
 
@@ -696,7 +696,7 @@
 .currentStatus,
 .staleStatus {
   min-height: 24px;
-  font-size: 8px;
+  font-size: 9px;
 }
 
 .currentStatus {
@@ -791,7 +791,7 @@
   }
 
   .summaryPrimary > strong {
-    font-size: clamp(28px, 10vw, 44px);
+    font-size: clamp(29px, 10vw, 45px);
   }
 
   .summaryLedger {
@@ -814,7 +814,7 @@
   }
 
   .purchasePanel input {
-    font-size: 16px;
+    font-size: 17px;
   }
 
   .cashEditorHeading {

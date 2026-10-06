@@ -51,6 +51,7 @@ export { resolveManagedSubject, resolveManagedUser } from "./server/accounts";
 
 export {
   deleteAccount,
+  deleteOwnAccount,
   listAccounts,
   setAccountRole,
   setAccountStatus,

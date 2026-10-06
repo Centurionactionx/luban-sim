@@ -102,7 +102,9 @@ import {
   UsersIcon,
 } from "./simulator-icons";
 import { FeedbackButton } from "./feedback-button";
+import { LubanMark, LubanWordmark } from "./luban-logo";
 import { PortfolioMap } from "./portfolio-map";
+import summaryStyles from "./portfolio-summary.module.css";
 import { ThemeToggle } from "./theme-toggle";
 
 type DashboardPayload = Omit<Dashboard, "leaderboard"> & {
@@ -2145,6 +2147,138 @@ function ChangeValue({ cents, percent }: { cents?: number; percent: number }) {
   );
 }
 
+
+/* ──────────────────────────── Leaderboard ──────────────────────────── */
+
+/** Teams listed before the leaderboard stops; your own team is added below. */
+const LEADERBOARD_SIZE = 5;
+
+const TEAM_STATUS_LABELS: Record<LeaderboardRow["teamStatus"], string> = {
+  active: "Active",
+  frozen: "Frozen",
+  disqualified: "Disqualified",
+};
+
+/**
+ * The ranked teams, each with a bar for its return since the start. Every
+ * bar shares one scale centred on 0%, so the gaps between teams read at a
+ * glance. If your team ranks below the top five, its row follows them, set
+ * apart. Hosts can open any team's map; a student only their own team's.
+ */
+function LeaderboardTable({
+  rows,
+  canOpenAnyMap,
+  onOpenMap,
+}: {
+  rows: LeaderboardRow[];
+  canOpenAnyMap: boolean;
+  onOpenMap: (row: LeaderboardRow) => void;
+}) {
+  const top = rows.slice(0, LEADERBOARD_SIZE);
+  const ownBelow = rows.slice(LEADERBOARD_SIZE).find((row) => row.isCurrentTeam) ?? null;
+  const shown = ownBelow ? [...top, ownBelow] : top;
+  const scale = Math.max(0, ...shown.map((row) => Math.abs(row.returnPercent)));
+  const canOpenMap = (row: LeaderboardRow) => canOpenAnyMap || row.isCurrentTeam;
+  const hasMapColumn = shown.some(canOpenMap);
+  const columnCount = hasMapColumn ? 5 : 4;
+
+  const renderRow = (row: LeaderboardRow, pinned: boolean) => {
+    const share = scale > 0 ? (Math.abs(row.returnPercent) / scale) * 50 : 0;
+    const classes = [
+      row.isCurrentTeam ? "is-current" : "",
+      pinned ? "is-pinned" : "",
+    ].filter(Boolean);
+
+    return (
+      <tr key={row.teamId} className={classes.join(" ") || undefined}>
+        <td className="leaderboard-bars__rank">
+          <span>{row.rank}</span>
+        </td>
+        <th scope="row" className="leaderboard-bars__team">
+          <span className="leaderboard-bars__name">
+            {row.teamName}
+            {row.isCurrentTeam ? <span className="leaderboard-bars__you">You</span> : null}
+          </span>
+          {/* A narrow panel shows the value here instead of the trade count. */}
+          <small>
+            <span className="leaderboard-bars__inline-value">
+              {formatMoney(row.totalValueCents)}
+            </span>
+            <span className="leaderboard-bars__trades">
+              {row.tradeCount} {row.tradeCount === 1 ? "trade" : "trades"}
+            </span>
+            {row.teamStatus !== "active" ? (
+              <span className="leaderboard-bars__status">
+                {" · "}
+                {TEAM_STATUS_LABELS[row.teamStatus]}
+              </span>
+            ) : null}
+          </small>
+        </th>
+        <td className="leaderboard-bars__return">
+          <span className="leaderboard-bars__track" aria-hidden="true">
+            {share > 0 ? (
+              <span
+                className={`leaderboard-bars__bar leaderboard-bars__bar--${row.returnPercent >= 0 ? "up" : "down"}`}
+                style={{ width: `max(${share}%, 3px)` }}
+              />
+            ) : null}
+          </span>
+          <ChangeValue percent={row.returnPercent} />
+        </td>
+        <td className="leaderboard-bars__value">
+          {formatMoney(row.totalValueCents)}
+          <small>
+            <ChangeValue cents={row.returnCents} percent={row.returnPercent} />
+          </small>
+        </td>
+        {hasMapColumn ? (
+          <td className="leaderboard-bars__map">
+            {canOpenMap(row) ? (
+              <button
+                type="button"
+                className="leaderboard-map-button"
+                aria-haspopup="dialog"
+                aria-label={`Open ${row.teamName} portfolio map`}
+                title="Portfolio map"
+                onClick={() => onOpenMap(row)}
+              >
+                <TreemapIcon />
+              </button>
+            ) : null}
+          </td>
+        ) : null}
+      </tr>
+    );
+  };
+
+  return (
+    <table className="leaderboard-bars">
+      <thead>
+        <tr>
+          <th scope="col">#</th>
+          <th scope="col">Team</th>
+          <th scope="col">Return since start</th>
+          <th scope="col">Value</th>
+          {hasMapColumn ? (
+            <th scope="col">
+              <span className="sr-only">Map</span>
+            </th>
+          ) : null}
+        </tr>
+      </thead>
+      <tbody>{top.map((row) => renderRow(row, false))}</tbody>
+      {ownBelow ? (
+        <tbody className="leaderboard-bars__pinned">
+          <tr className="leaderboard-bars__gap">
+            <td colSpan={columnCount}>Your team, outside the top {LEADERBOARD_SIZE}</td>
+          </tr>
+          {renderRow(ownBelow, true)}
+        </tbody>
+      ) : null}
+    </table>
+  );
+}
 
 /* ───────────────────────────── Watchlist ───────────────────────────── */
 
@@ -4479,7 +4613,8 @@ export function SimulatorApp({
       <div className="trading-room">
         <header className="app-header">
           <a className="brand-lockup" href="#top" aria-label="Luban Market Lab home">
-            <span className="brand-lockup__luban">Luban</span>
+            <LubanMark className="brand-lockup__mark" />
+            <LubanWordmark className="brand-lockup__luban" />
             <span className="brand-lockup__product">Market Lab</span>
           </a>
 
@@ -4637,60 +4772,164 @@ export function SimulatorApp({
               </span>
             </div>
 
-            <section className="portfolio-total" aria-label="Portfolio value">
-              <span>Total portfolio value (CAD)</span>
-              {/* Cash plus holdings: the same number the leaderboard ranks. */}
-              <strong>{formatMoney(portfolio.totalValueCents)}</strong>
-              <small>Price snapshot {formatTime(portfolio.asOf)}</small>
-            </section>
+            <section className={summaryStyles.card} aria-label="Portfolio value">
+              <div className={summaryStyles.head}>
+                <div className={summaryStyles.total}>
+                  <span>Total portfolio value (CAD)</span>
+                  {/* Cash plus holdings: the same number the leaderboard ranks. */}
+                  <strong>{formatMoney(portfolio.totalValueCents)}</strong>
+                </div>
+                <dl className={summaryStyles.returns}>
+                  <div
+                    className={summaryStyles.chip}
+                    data-negative={portfolio.dayChangeCents < 0}
+                  >
+                    <dt className={summaryStyles.label}>Daily return</dt>
+                    <dd>
+                      <ChangeValue cents={portfolio.dayChangeCents} percent={portfolio.dayChangePercent} />
+                      <small>
+                        <ChangeValue percent={portfolio.dayChangePercent} />
+                      </small>
+                    </dd>
+                  </div>
+                  <div
+                    className={summaryStyles.chip}
+                    data-negative={portfolio.totalReturnCents < 0}
+                  >
+                    <dt className={summaryStyles.label}>Total return</dt>
+                    <dd>
+                      <ChangeValue cents={portfolio.totalReturnCents} percent={portfolio.totalReturnPercent} />
+                      <small>
+                        <ChangeValue percent={portfolio.totalReturnPercent} />
+                      </small>
+                    </dd>
+                  </div>
+                </dl>
+              </div>
 
-            <dl className="metric-grid">
-              <div>
-                <dt>Cash (CAD)</dt>
-                {isPlatformAdmin ? (
-                  <dd className="admin-cash-editor">
-                    <form
-                      className="admin-cash-editor__form"
-                      onSubmit={(event) => void updateAdminCash(event)}
-                    >
-                      <label htmlFor="admin-test-cash" className="sr-only">
-                        Admin test cash (CAD)
-                      </label>
-                      <input
-                        id="admin-test-cash"
-                        aria-label="Admin test cash (CAD)"
-                        aria-describedby="admin-test-cash-feedback"
-                        aria-invalid={adminCashDraftError ? "true" : undefined}
-                        type="number"
-                        min="0"
-                        max="1000000000000"
-                        step="0.01"
-                        inputMode="decimal"
-                        value={adminCashInputValue}
-                        onChange={(event) => {
-                          setAdminCashDraft(event.target.value);
-                          setAdminCashFeedback(null);
-                        }}
-                        disabled={adminCashBusy}
+              {/* How the total splits: shares, cash free to spend, and cash
+                  held back for waiting buys. Negative parts draw as empty. */}
+              <div className={summaryStyles.split}>
+                <div className={summaryStyles.bar} aria-hidden="true">
+                  {[
+                    [summaryStyles.holdings, portfolio.holdingsValueCents],
+                    [summaryStyles.buyingPower, portfolio.buyingPowerCents],
+                    [summaryStyles.setAside, portfolio.reservedCashCents],
+                  ].map(([className, cents], index, parts) => {
+                    const whole = parts.reduce(
+                      (sum, [, part]) => sum + Math.max(0, Number(part)),
+                      0,
+                    );
+                    const share = whole > 0 ? Math.max(0, Number(cents)) / whole : 0;
+                    return share > 0 ? (
+                      <span
+                        key={index}
+                        className={`${summaryStyles.segment} ${className}`}
+                        style={{ flexBasis: `${share * 100}%` }}
                       />
-                      <button
-                        type="submit"
-                        disabled={
-                          adminCashBusy ||
-                          parsedAdminCash === null ||
-                          adminCashIsUnchanged
-                        }
-                      >
-                        {adminCashBusy ? "Saving…" : "Set admin cash"}
-                      </button>
-                    </form>
+                    ) : null;
+                  })}
+                </div>
+                <dl className={summaryStyles.legend}>
+                  <div>
+                    <dt className={summaryStyles.label}>Holdings</dt>
+                    <dd>{formatMoney(portfolio.holdingsValueCents)}</dd>
+                  </div>
+                  <div>
+                    <dt className={summaryStyles.label} data-swatch="buying-power">
+                      Buying power
+                    </dt>
+                    <dd>{formatSignedCash(portfolio.buyingPowerCents)}</dd>
+                  </div>
+                  {portfolio.reservedCashCents > 0 ? (
+                    <div>
+                      <dt className={summaryStyles.label} data-swatch="set-aside">
+                        Set aside
+                        <HelpTip id="help-set-aside" label="What set aside cash means">
+                          Cash held back for buys that are waiting to fill. It still
+                          counts toward your total, but you can&apos;t spend it until the
+                          order fills or is cancelled.
+                        </HelpTip>
+                      </dt>
+                      <dd>{formatMoney(portfolio.reservedCashCents)}</dd>
+                    </div>
+                  ) : null}
+                </dl>
+              </div>
+
+              <dl className={summaryStyles.gains}>
+                <div>
+                  <dt className={summaryStyles.label}>
+                    Unrealized
+                    <HelpTip id="help-unrealized" label="What unrealized gain means">
+                      The gain or loss on shares you still hold: what they are worth now
+                      minus what you paid for them. It changes with the price until you sell.
+                    </HelpTip>
+                  </dt>
+                  <dd>
+                    <ChangeValue cents={portfolio.unrealizedGainCents} percent={0} />
+                    <small>On holdings</small>
+                  </dd>
+                </div>
+                <div>
+                  <dt className={summaryStyles.label}>
+                    Realized
+                    <HelpTip id="help-realized" label="What realized gain means">
+                      The gain or loss locked in by selling: each sale&apos;s proceeds minus the
+                      average cost of the shares sold.
+                    </HelpTip>
+                  </dt>
+                  <dd>
+                    <ChangeValue cents={portfolio.realizedGainCents} percent={0} />
+                    <small>From sales</small>
+                  </dd>
+                </div>
+              </dl>
+
+              <div className={summaryStyles.foot}>
+                <small data-testid="price-snapshot">
+                  Cash {formatSignedCash(portfolio.cashCents)} · Price snapshot{" "}
+                  {formatTime(portfolio.asOf)}
+                </small>
+                {isPlatformAdmin ? (
+                  <form
+                    className={summaryStyles.cashForm}
+                    onSubmit={(event) => void updateAdminCash(event)}
+                  >
+                    <label htmlFor="admin-test-cash" className={summaryStyles.label}>
+                      Test cash
+                    </label>
+                    <input
+                      id="admin-test-cash"
+                      aria-label="Admin test cash (CAD)"
+                      aria-describedby="admin-test-cash-feedback"
+                      aria-invalid={adminCashDraftError ? "true" : undefined}
+                      type="number"
+                      min="0"
+                      max="1000000000000"
+                      step="0.01"
+                      inputMode="decimal"
+                      value={adminCashInputValue}
+                      onChange={(event) => {
+                        setAdminCashDraft(event.target.value);
+                        setAdminCashFeedback(null);
+                      }}
+                      disabled={adminCashBusy}
+                    />
+                    <button
+                      type="submit"
+                      disabled={
+                        adminCashBusy ||
+                        parsedAdminCash === null ||
+                        adminCashIsUnchanged
+                      }
+                    >
+                      {adminCashBusy ? "Saving…" : "Set admin cash"}
+                    </button>
                     <small
                       id="admin-test-cash-feedback"
-                      className={`admin-cash-editor__feedback${
-                        adminCashFeedback
-                          ? ` admin-cash-editor__feedback--${adminCashFeedback.kind}`
-                          : ""
-                      }`}
+                      className={summaryStyles.feedback}
+                      data-kind={adminCashDraftError ? "error" : adminCashFeedback?.kind}
                       role={
                         adminCashFeedback
                           ? adminCashFeedback.kind === "error"
@@ -4704,61 +4943,10 @@ export function SimulatorApp({
                         adminCashFeedback?.message ??
                         "Private test balance"}
                     </small>
-                  </dd>
-                ) : (
-                  <dd>{formatMoney(portfolio.cashCents)}</dd>
-                )}
+                  </form>
+                ) : null}
               </div>
-              <div>
-                <dt>Buying power</dt>
-                <dd>
-                  {formatMoney(portfolio.buyingPowerCents)}
-                  {portfolio.reservedCashCents > 0 ? (
-                    <small>{formatMoney(portfolio.reservedCashCents)} set aside</small>
-                  ) : null}
-                </dd>
-              </div>
-              <div>
-                <dt>Daily return</dt>
-                <dd>
-                  <ChangeValue cents={portfolio.dayChangeCents} percent={portfolio.dayChangePercent} />
-                  <small>{formatPercent(portfolio.dayChangePercent)}</small>
-                </dd>
-              </div>
-              <div>
-                <dt>Total return</dt>
-                <dd>
-                  <ChangeValue cents={portfolio.totalReturnCents} percent={portfolio.totalReturnPercent} />
-                  <small>{formatPercent(portfolio.totalReturnPercent)}</small>
-                </dd>
-              </div>
-              <div>
-                <dt>
-                  Unrealized
-                  <HelpTip id="help-unrealized" label="What unrealized gain means">
-                    The gain or loss on shares you still hold: what they are worth now
-                    minus what you paid for them. It changes with the price until you sell.
-                  </HelpTip>
-                </dt>
-                <dd>
-                  <ChangeValue cents={portfolio.unrealizedGainCents} percent={0} />
-                  <small>On holdings</small>
-                </dd>
-              </div>
-              <div>
-                <dt>
-                  Realized
-                  <HelpTip id="help-realized" label="What realized gain means">
-                    The gain or loss locked in by selling: each sale&apos;s proceeds minus the
-                    average cost of the shares sold.
-                  </HelpTip>
-                </dt>
-                <dd>
-                  <ChangeValue cents={portfolio.realizedGainCents} percent={0} />
-                  <small>From sales</small>
-                </dd>
-              </div>
-            </dl>
+            </section>
 
             <section className="portfolio-chart" aria-labelledby="portfolio-chart-title">
               <div className="chart-header">
@@ -5211,121 +5399,126 @@ export function SimulatorApp({
             />
 
             <section className="quote-summary" aria-labelledby="quote-heading">
+              <p className="quote-meta">
+                {selectedAssetTag ? <em className="asset-tag">{selectedAssetTag}</em> : null}
+                <span>{selectedIsCrypto ? "Crypto" : selectedQuote.exchange}</span>
+                <span aria-hidden="true">·</span>
+                <span>{selectedQuote.sector}</span>
+                <span className="quote-meta__status">
+                  <span
+                    className={`quote-meta__dot${
+                      selectedIsCrypto || selectedQuote.marketOpen ? " is-open" : ""
+                    }`}
+                    aria-hidden="true"
+                  />
+                  {selectedIsCrypto
+                    ? "Trades 24/7"
+                    : selectedQuote.marketOpen
+                      ? "Market open"
+                      : "Market closed"}
+                  {" · "}
+                  {quoteLoaded ? formatTime(selectedQuote.asOf) : "Loading…"}
+                </span>
+              </p>
               <div className="quote-symbol-block" aria-hidden="true">
                 {selectedQuote.symbol.slice(0, 2)}
               </div>
               <div className="quote-identity">
-                <div>
-                  <h2 id="quote-heading">{selectedQuote.symbol}</h2>
-                  {selectedAssetTag ? (
-                    <em className="asset-tag">{selectedAssetTag}</em>
-                  ) : null}
-                  <span>{selectedQuote.name}</span>
-                </div>
-                {!quoteLoaded ? (
-                  <span className="source-tag">Connecting to market data</span>
-                ) : selectedQuote.sourceUrl ? (
-                  <a
-                    className="source-tag"
-                    href={selectedQuote.sourceUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {marketSourceLabel(selectedQuote.source)}
-                    {selectedQuote.isStale ? " · stale" : " · market data"}
-                  </a>
-                ) : (
-                  <span className="source-tag">
-                    {marketSourceLabel(selectedQuote.source)}
-                  </span>
-                )}
-                <div className="quote-price">
-                  <strong>{quoteLoaded ? formatMoney(selectedQuote.priceCadCents) : "—"}</strong>
-                  <span>{selectedIsCrypto ? "CAD per lot" : "CAD"}</span>
-                  {quoteLoaded ? <ChangeValue percent={selectedQuote.changePercent} /> : null}
-                  {canKeepWatchlist && quoteLoaded ? (
-                    <button
-                      type="button"
-                      className="watch-toggle"
-                      aria-pressed={isWatched}
-                      disabled={watchBusy !== null || (!isWatched && watchlistFull)}
-                      title={
-                        !isWatched && watchlistFull
-                          ? `The watchlist is full (${MAX_WATCHLIST_ITEMS} symbols).`
-                          : undefined
-                      }
-                      onClick={() => void changeWatchlist(selectedQuote.symbol, !isWatched)}
-                    >
-                      <StarIcon filled={isWatched} />
-                      {isWatched ? "Watching" : "Watch"}
-                    </button>
-                  ) : null}
-                </div>
-                {selectedIsCrypto ? (
-                  <small className="quote-lot-note">
-                    1 lot = {tokenAmountLabel(1, selectedLotSize, selectedQuote.symbol)}
-                    {quoteLoaded
-                      ? ` · 1 ${selectedToken} ≈ ${formatPerTokenMoney(
-                          selectedQuote.priceCadCents,
-                          selectedLotSize,
-                          "CAD",
-                        )} CAD`
-                      : ""}
-                  </small>
-                ) : null}
-                {quoteLoaded && selectedQuote.listingCurrency === "USD" ? (
-                  <small>
-                    Native quote {formatNativeMoney(selectedQuote.priceCents, "USD")}
-                    {selectedIsCrypto ? " per lot" : ""} ·
-                    FX {(selectedQuote.fxRateBasisPoints / 10000).toFixed(4)}
-                  </small>
-                ) : null}
-                {tradingHaltReason ? (
-                  <p className="quote-halt" id="quote-halt">
-                    <PauseIcon />
-                    <span>
-                      <strong>Trading paused.</strong> {tradingHaltReason}
-                    </span>
-                  </p>
-                ) : null}
+                <h2 id="quote-heading">{selectedQuote.symbol}</h2>
+                <span>{selectedQuote.name}</span>
               </div>
+              <div className="quote-price">
+                <strong>{quoteLoaded ? formatMoney(selectedQuote.priceCadCents) : "—"}</strong>
+                <span>{selectedIsCrypto ? "CAD per lot" : "CAD"}</span>
+              </div>
+              {canKeepWatchlist && quoteLoaded ? (
+                <button
+                  type="button"
+                  className="watch-toggle"
+                  aria-pressed={isWatched}
+                  aria-label={isWatched ? "Watching" : "Watch"}
+                  disabled={watchBusy !== null || (!isWatched && watchlistFull)}
+                  title={
+                    !isWatched && watchlistFull
+                      ? `The watchlist is full (${MAX_WATCHLIST_ITEMS} symbols).`
+                      : isWatched
+                        ? "Remove from watchlist"
+                        : "Add to watchlist"
+                  }
+                  onClick={() => void changeWatchlist(selectedQuote.symbol, !isWatched)}
+                >
+                  <StarIcon filled={isWatched} />
+                </button>
+              ) : null}
+              {selectedIsCrypto ? (
+                <small className="quote-note quote-lot-note">
+                  1 lot = {tokenAmountLabel(1, selectedLotSize, selectedQuote.symbol)}
+                  {quoteLoaded
+                    ? ` · 1 ${selectedToken} ≈ ${formatPerTokenMoney(
+                        selectedQuote.priceCadCents,
+                        selectedLotSize,
+                        "CAD",
+                      )} CAD`
+                    : ""}
+                </small>
+              ) : null}
+              {quoteLoaded && selectedQuote.listingCurrency === "USD" ? (
+                <small className="quote-note">
+                  Native quote {formatNativeMoney(selectedQuote.priceCents, "USD")}
+                  {selectedIsCrypto ? " per lot" : ""} ·
+                  FX {(selectedQuote.fxRateBasisPoints / 10000).toFixed(4)}
+                </small>
+              ) : null}
+              {tradingHaltReason ? (
+                <p className="quote-halt" id="quote-halt">
+                  <PauseIcon />
+                  <span>
+                    <strong>Trading paused.</strong> {tradingHaltReason}
+                  </span>
+                </p>
+              ) : null}
             </section>
 
-            <dl className="quote-facts">
-              <div>
-                <dt>Previous close</dt>
-                <dd>
-                  {quoteLoaded ? formatMoney(selectedQuote.previousCloseCadCents) : "—"}
-                </dd>
-              </div>
-              <div>
-                <dt>Day change</dt>
-                <dd>
-                  {quoteLoaded ? (
-                    <ChangeValue
-                      cents={
-                        selectedQuote.priceCadCents - selectedQuote.previousCloseCadCents
-                      }
-                      percent={selectedQuote.changePercent}
-                    />
-                  ) : (
-                    "—"
-                  )}
-                </dd>
-              </div>
-              <div>
-                <dt>{selectedIsCrypto ? "Trading hours" : "Exchange"}</dt>
-                <dd>{selectedIsCrypto ? "Crypto · 24/7" : selectedQuote.exchange}</dd>
-              </div>
-              <div>
-                <dt>Sector</dt>
-                <dd>{selectedQuote.sector}</dd>
-              </div>
-              <div>
-                <dt>Quote time</dt>
-                <dd>{quoteLoaded ? formatTime(selectedQuote.asOf) : "Loading…"}</dd>
-              </div>
-            </dl>
+            {/* The day's move, tinted green or red, with where the quote came from. */}
+            <div
+              className={`quote-band${
+                !quoteLoaded
+                  ? ""
+                  : selectedQuote.priceCadCents >= selectedQuote.previousCloseCadCents
+                    ? " quote-band--up"
+                    : " quote-band--down"
+              }`}
+            >
+              {quoteLoaded ? (
+                <>
+                  <span className="quote-band__move">
+                    {selectedQuote.priceCadCents >= selectedQuote.previousCloseCadCents
+                      ? "▲"
+                      : "▼"}{" "}
+                    {formatSignedMoney(
+                      selectedQuote.priceCadCents - selectedQuote.previousCloseCadCents,
+                    )}{" "}
+                    today
+                  </span>
+                  <span>{formatPercent(selectedQuote.changePercent)}</span>
+                </>
+              ) : (
+                <span>Connecting to market data</span>
+              )}
+              <span className="quote-band__meta">
+                {quoteLoaded ? (
+                  <>Prev close {formatMoney(selectedQuote.previousCloseCadCents)} · </>
+                ) : null}
+                {selectedQuote.sourceUrl ? (
+                  <a href={selectedQuote.sourceUrl} target="_blank" rel="noreferrer">
+                    {marketSourceLabel(selectedQuote.source)}
+                  </a>
+                ) : (
+                  marketSourceLabel(selectedQuote.source)
+                )}
+                {quoteLoaded && selectedQuote.isStale ? " · stale" : ""}
+              </span>
+            </div>
 
             <section className="quote-chart" aria-label={`${selectedQuote.symbol} price chart`}>
               <div className="chart-header">
@@ -6318,49 +6511,15 @@ export function SimulatorApp({
               data-flash={syncFlash}
             >
               <div className="table-scroll">
-                <table className="data-table leaderboard-table">
-                  <thead>
-                    <tr>
-                      <th scope="col">Rank</th>
-                      <th scope="col">Team</th>
-                      <th scope="col">Value</th>
-                      <th scope="col">Return</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows.slice(0, 5).map((row) => (
-                      <tr key={row.teamId} className={row.isCurrentTeam ? "is-current" : ""}>
-                        <td data-label="Rank">{row.rank}</td>
-                        <th scope="row" data-label="Team">
-                          <span className="leaderboard-team">
-                            <span>
-                              {row.teamName}
-                              {row.isCurrentTeam ? <small> Your team</small> : null}
-                            </span>
-                            {canManageCompetition ? (
-                              <button
-                                type="button"
-                                className="leaderboard-map-button"
-                                aria-haspopup="dialog"
-                                aria-label={`Open ${row.teamName} portfolio map`}
-                                onClick={() =>
-                                  void openTeamPortfolioMap(row.teamId, row.teamName)
-                                }
-                              >
-                                <TreemapIcon />
-                                Map
-                              </button>
-                            ) : null}
-                          </span>
-                        </th>
-                        <td data-label="Value">{formatMoney(row.totalValueCents)}</td>
-                        <td data-label="Return">
-                          <ChangeValue percent={row.returnPercent} />
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                <LeaderboardTable
+                  rows={rows}
+                  canOpenAnyMap={canManageCompetition}
+                  onOpenMap={(row) =>
+                    canManageCompetition
+                      ? void openTeamPortfolioMap(row.teamId, row.teamName)
+                      : openOwnPortfolioMap()
+                  }
+                />
               </div>
               <p className="snapshot-note">
                 Every team is valued from the same cached market-data snapshot.

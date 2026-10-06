@@ -25,6 +25,16 @@ const nextConfig: NextConfig = {
         { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
         { key: "Content-Security-Policy", value: "frame-ancestors 'none'; object-src 'none'; base-uri 'self'" },
       ],
+    }, {
+      // The offline-page service worker (public/sw.js). Never cached, so a
+      // fix reaches everyone on their next visit; its CSP (which replaces the
+      // one above for this file) keeps the worker to this origin.
+      source: "/sw.js",
+      headers: [
+        { key: "Content-Type", value: "application/javascript; charset=utf-8" },
+        { key: "Cache-Control", value: "no-cache, no-store, must-revalidate" },
+        { key: "Content-Security-Policy", value: "default-src 'self'; script-src 'self'" },
+      ],
     }];
   },
 };

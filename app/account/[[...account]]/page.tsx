@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 
+import { DeleteAccountSection } from "@/components/delete-account-section";
 import { DisplayNameForm } from "@/components/display-name-form";
 import { isManagedAuthMode } from "@/lib/server/auth-mode";
 
@@ -51,9 +52,24 @@ export default async function AccountPage({
         <Link className="button button--secondary" href="/">
           Back to the trading room
         </Link>
+        {state.kind === "suspended" ? (
+          <p>
+            This account is suspended. To delete it, ask your competition
+            host, or see <Link href="/delete-account">how deletion works</Link>.
+          </p>
+        ) : (
+          <DeleteAccountSection hasMarketLabAccount={state.kind === "linked"} />
+        )}
       </section>
       <div className="auth-page__card">
-        <UserProfile path="/account" />
+        {/* Clerk's own "Delete account" would remove only the sign-in and
+            leave the Market Lab account behind, so it is hidden: the section
+            above is the one way to delete. Also turn off "Allow users to
+            delete their accounts" in the Clerk dashboard. */}
+        <UserProfile
+          path="/account"
+          appearance={{ elements: { profileSection__danger: { display: "none" } } }}
+        />
       </div>
     </main>
   );

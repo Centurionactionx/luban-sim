@@ -68,6 +68,33 @@ export async function getManagedUserId(): Promise<string | null> {
 }
 
 /**
+ * Deletes the provider's user record (profile, email addresses, sessions,
+ * second factors) for `subject`. Idempotent: a subject the provider no
+ * longer knows counts as already deleted. Any other failure throws, so the
+ * caller can tell the person to retry.
+ */
+export async function deleteManagedIdentity(subject: string): Promise<void> {
+  const client = await clerkClient();
+
+  try {
+    await client.users.deleteUser(subject);
+  } catch (error) {
+    const status =
+      typeof error === "object" && error !== null && "status" in error
+        ? (error as { status: unknown }).status
+        : undefined;
+
+    if (status === 404) {
+      return;
+    }
+
+    throw error;
+  }
+
+  unlinkedSubjectCache.delete(subject);
+}
+
+/**
  * Signed-in visitors who are not linked to a Luban account can call any
  * authenticated route in a loop (sign-up is open so invitees can register),
  * and each unlinked request would otherwise reach the Clerk Backend API. The
