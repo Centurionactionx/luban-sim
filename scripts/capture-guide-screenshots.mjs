@@ -324,8 +324,8 @@ const shots = {
       region: card,
       targets: [
         { rect: box(card.getByText("Total portfolio value (CAD)"), card.locator("strong").first()), inflateX: 10, inflateY: 8 },
-        { rect: box(term("Daily return")), inflateX: 8, inflateY: 6, badgeAngle: 0 },
-        { rect: box(term("Total return")), inflateX: 8, inflateY: 6, badgeAngle: 0 },
+        { rect: box(term("Daily return")), inflateX: 2, inflateY: 4, fit: false, badgeAngle: 160 },
+        { rect: box(term("Total return")), inflateX: 2, inflateY: 4, fit: false, badgeAngle: 20 },
         { rect: box(card.locator(":scope > div").nth(1)), inflateX: 10, inflateY: 8, slack: 12, badgeAngle: 0 },
         { rect: box(term(/^Unrealized/)), inflateX: 6, inflateY: 6, slack: 12 },
         { rect: box(term(/^Realized/)), inflateX: 6, inflateY: 6, slack: 12, badgeAngle: 45 },
