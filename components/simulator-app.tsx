@@ -2137,9 +2137,22 @@ function ActivityBell({
   );
 }
 
+/** Up, down, or flat, for tinting a figure's background. */
+function trendOf(cents: number): "up" | "down" | "flat" {
+  return cents > 0 ? "up" : cents < 0 ? "down" : "flat";
+}
+
 function ChangeValue({ cents, percent }: { cents?: number; percent: number }) {
-  const value = cents ?? percent;
-  const className = value >= 0 ? "change change--positive" : "change change--negative";
+  // Compare what is shown, so a +0.004% that displays as 0.00% reads as flat.
+  const shown = cents ?? Math.round(percent * 100);
+  if (shown === 0) {
+    return (
+      <span className="change change--flat">
+        {cents === undefined ? "0.00%" : formatMoney(0)}
+      </span>
+    );
+  }
+  const className = shown > 0 ? "change change--positive" : "change change--negative";
   return (
     <span className={className}>
       {cents === undefined ? formatPercent(percent) : formatSignedMoney(cents)}
@@ -2152,6 +2165,10 @@ function ChangeValue({ cents, percent }: { cents?: number; percent: number }) {
 
 /** Teams listed before the leaderboard stops; your own team is added below. */
 const LEADERBOARD_SIZE = 5;
+
+/** The smallest return, either way, that fills half a leaderboard bar, so a
+ * leader up 2% doesn't look like it has maxed out. */
+const LEADERBOARD_MIN_SCALE_PERCENT = 10;
 
 const TEAM_STATUS_LABELS: Record<LeaderboardRow["teamStatus"], string> = {
   active: "Active",
@@ -2177,7 +2194,10 @@ function LeaderboardTable({
   const top = rows.slice(0, LEADERBOARD_SIZE);
   const ownBelow = rows.slice(LEADERBOARD_SIZE).find((row) => row.isCurrentTeam) ?? null;
   const shown = ownBelow ? [...top, ownBelow] : top;
-  const scale = Math.max(0, ...shown.map((row) => Math.abs(row.returnPercent)));
+  const scale = Math.max(
+    LEADERBOARD_MIN_SCALE_PERCENT,
+    ...shown.map((row) => Math.abs(row.returnPercent)),
+  );
   const canOpenMap = (row: LeaderboardRow) => canOpenAnyMap || row.isCurrentTeam;
   const hasMapColumn = shown.some(canOpenMap);
   const columnCount = hasMapColumn ? 5 : 4;
@@ -4782,7 +4802,7 @@ export function SimulatorApp({
                 <dl className={summaryStyles.returns}>
                   <div
                     className={summaryStyles.chip}
-                    data-negative={portfolio.dayChangeCents < 0}
+                    data-trend={trendOf(portfolio.dayChangeCents)}
                   >
                     <dt className={summaryStyles.label}>Daily return</dt>
                     <dd>
@@ -4794,7 +4814,7 @@ export function SimulatorApp({
                   </div>
                   <div
                     className={summaryStyles.chip}
-                    data-negative={portfolio.totalReturnCents < 0}
+                    data-trend={trendOf(portfolio.totalReturnCents)}
                   >
                     <dt className={summaryStyles.label}>Total return</dt>
                     <dd>
@@ -4854,6 +4874,13 @@ export function SimulatorApp({
                       <dd>{formatMoney(portfolio.reservedCashCents)}</dd>
                     </div>
                   ) : null}
+                  {/* Not a slice of the bar: buying power and set aside together. */}
+                  <div className={summaryStyles.cash}>
+                    <dt className={summaryStyles.label} data-swatch="none">
+                      Cash
+                    </dt>
+                    <dd data-testid="portfolio-cash">{formatSignedCash(portfolio.cashCents)}</dd>
+                  </div>
                 </dl>
               </div>
 
@@ -4888,8 +4915,7 @@ export function SimulatorApp({
 
               <div className={summaryStyles.foot}>
                 <small data-testid="price-snapshot">
-                  Cash {formatSignedCash(portfolio.cashCents)} · Price snapshot{" "}
-                  {formatTime(portfolio.asOf)}
+                  Price snapshot {formatTime(portfolio.asOf)}
                 </small>
                 {isPlatformAdmin ? (
                   <form
@@ -5436,7 +5462,6 @@ export function SimulatorApp({
                   type="button"
                   className="watch-toggle"
                   aria-pressed={isWatched}
-                  aria-label={isWatched ? "Watching" : "Watch"}
                   disabled={watchBusy !== null || (!isWatched && watchlistFull)}
                   title={
                     !isWatched && watchlistFull
@@ -5448,6 +5473,7 @@ export function SimulatorApp({
                   onClick={() => void changeWatchlist(selectedQuote.symbol, !isWatched)}
                 >
                   <StarIcon filled={isWatched} />
+                  {isWatched ? "Watching" : "Watch"}
                 </button>
               ) : null}
               {selectedIsCrypto ? (

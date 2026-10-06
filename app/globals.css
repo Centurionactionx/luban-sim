@@ -1294,6 +1294,10 @@ a {
   color: var(--red);
 }
 
+.change--flat {
+  color: var(--muted);
+}
+
 .shared-callout {
   display: grid;
   grid-template-columns: 40px 1fr;
@@ -6056,18 +6060,25 @@ html:has(dialog[open]) {
   color: var(--purple);
 }
 
-/* In the quote header the toggle is a round star; its name comes from aria-label. */
+/* In the quote header the toggle sits beside the price, star and label. */
 .quote-summary .watch-toggle {
-  width: 36px;
-  height: 36px;
-  justify-content: center;
+  min-height: 34px;
   margin-left: 0;
-  padding: 0;
+  padding: 4px 12px 4px 10px;
 }
 
 .quote-summary .watch-toggle svg {
-  width: 17px;
-  height: 17px;
+  width: 16px;
+  height: 16px;
+}
+
+/* A narrow header keeps the price clear of the symbol: the button drops to
+   its own row, under the price. */
+@container (max-width: 540px) {
+  .quote-summary .watch-toggle {
+    grid-column: 1 / -1;
+    justify-self: end;
+  }
 }
 
 .watchlist-table th,

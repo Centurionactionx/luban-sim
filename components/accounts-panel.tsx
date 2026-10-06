@@ -473,7 +473,7 @@ export function AccountsPanel({
           ) : null}
         </h3>
         <span className={styles.teamCount}>
-          {members.length}
+          {members.length} {members.length === 1 ? "member" : "members"}
           {options.waiting ? ` · ${options.waiting} waiting` : ""}
         </span>
       </div>

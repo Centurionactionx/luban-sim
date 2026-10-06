@@ -4,6 +4,7 @@
  */
 
 .card {
+  container-type: inline-size;
   display: grid;
   gap: 16px;
   margin: 16px 18px 14px;
@@ -80,8 +81,12 @@
   background: var(--positive-wash);
 }
 
-.chip[data-negative="true"] {
+.chip[data-trend="down"] {
   background: var(--negative-wash);
+}
+
+.chip[data-trend="flat"] {
+  background: var(--neutral-wash);
 }
 
 .chip dd {
@@ -94,6 +99,12 @@
 
 .chip dd small {
   font-size: inherit;
+}
+
+.chip dd small::before {
+  content: "·";
+  margin-right: 6px;
+  color: var(--muted);
 }
 
 /* ── Split bar ─────────────────────────────────────────────────────── */
@@ -170,6 +181,16 @@
   background: var(--quiet-purple);
 }
 
+/* Cash is a total, not a slice: no swatch, and it keeps to the right
+   edge, on the same line or the next. */
+.legend .cash {
+  margin-left: auto;
+}
+
+.legend dt[data-swatch="none"]::before {
+  display: none;
+}
+
 .legend dd {
   font-family: var(--font-data);
   font-size: 11px;
@@ -195,10 +216,9 @@
 
 .gains dd {
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 2px 8px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
   font-family: var(--font-data);
   font-size: 16px;
   font-weight: 500;
@@ -305,5 +325,18 @@
 
   .total > strong {
     font-size: clamp(26px, 9vw, 37px);
+  }
+}
+
+/* Too narrow for the returns beside the total: they go under it, side by side. */
+@container (max-width: 440px) {
+  .head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .returns {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin: 0;
   }
 }

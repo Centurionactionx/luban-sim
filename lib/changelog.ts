@@ -37,11 +37,12 @@ export const CHANGELOG: readonly ChangelogRelease[] = [
     date: "2026-10-06",
     title: "A clearer portfolio summary and leaderboard",
     changes: [
-      { kind: "changed", text: "A redesigned portfolio summary. Today's and total return sit beside your total, a bar shows how it splits into holdings, buying power and cash set aside for waiting buys, and the ? buttons explain set aside, unrealized and realized gains." },
-      { kind: "changed", text: "The leaderboard shows each team's return as a bar on one shared scale. In the narrow side panel, a team's value moves under its name." },
+      { kind: "changed", text: "A redesigned portfolio summary. Today's and total return sit beside your total, a bar shows how it splits into holdings, buying power and cash set aside for waiting buys (with your cash total beside it), and the ? buttons explain set aside, unrealized and realized gains." },
+      { kind: "changed", text: "A change of exactly zero shows in grey without a plus sign, on the portfolio summary, the leaderboard and everywhere else gains appear." },
+      { kind: "changed", text: "The leaderboard shows each team's return as a bar on one shared scale, which runs to at least ±10% so small moves look small. In the narrow side panel, a team's value moves under its name." },
       { kind: "added", text: "If your team isn't in the top five, its row is pinned under the leaderboard so you can always see where you stand." },
-      { kind: "changed", text: "The Watch button beside a quote's price is now a round star." },
-      { kind: "changed", text: "Platform admins get a new Accounts page: an invite bar, a roster of team cards showing who signed in recently, and a panel with each person's details." },
+      { kind: "changed", text: "The Watch button beside a quote's price has a star." },
+      { kind: "changed", text: "Hosts and admins get a new Accounts page: an invite bar, a roster of team cards showing who signed in recently, and a panel with each person's details." },
     ],
   },
   {

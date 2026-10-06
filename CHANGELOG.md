@@ -13,10 +13,11 @@ Releases before v1.28.0 didn't have numbers, so they're listed by date.
 
 ### Improved
 
-- A redesigned portfolio summary. Today's and total return sit beside your total, a bar shows how it splits into holdings, buying power and cash set aside for waiting buys, and the ? buttons explain set aside, unrealized and realized gains.
-- The leaderboard shows each team's return as a bar on one shared scale. In the narrow side panel, a team's value moves under its name.
-- The Watch button beside a quote's price is now a round star.
-- Platform admins get a new Accounts page: an invite bar, a roster of team cards showing who signed in recently, and a panel with each person's details.
+- A redesigned portfolio summary. Today's and total return sit beside your total, a bar shows how it splits into holdings, buying power and cash set aside for waiting buys (with your cash total beside it), and the ? buttons explain set aside, unrealized and realized gains.
+- A change of exactly zero shows in grey without a plus sign, on the portfolio summary, the leaderboard and everywhere else gains appear.
+- The leaderboard shows each team's return as a bar on one shared scale, which runs to at least ±10% so small moves look small. In the narrow side panel, a team's value moves under its name.
+- The Watch button beside a quote's price has a star.
+- Hosts and admins get a new Accounts page: an invite bar, a roster of team cards showing who signed in recently, and a panel with each person's details.
 
 ## v1.39.0: The Luban logo and account deletion (2026-10-06)
 
