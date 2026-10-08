@@ -36,7 +36,6 @@ import type {
   SessionUser,
   TeamHoldingsView,
   TeamSummary,
-  TeamStatus,
   TimeInForce,
   TradeSide,
   WatchlistItemView,
@@ -78,7 +77,6 @@ import {
   ArrowIcon,
   BellIcon,
   BookIcon,
-  CashIcon,
   ChatIcon,
   ChevronDownIcon,
   DownloadIcon,
@@ -92,7 +90,6 @@ import {
   InfoIcon,
   LockIcon,
   PauseIcon,
-  PencilIcon,
   PlayIcon,
   PulseIcon,
   RefreshIcon,
@@ -115,7 +112,7 @@ type DashboardPayload = Omit<Dashboard, "leaderboard"> & {
   };
 };
 
-type RailSectionId = "watchlist" | "presence" | "leaderboard" | "host";
+type RailSectionId = "watchlist" | "presence" | "leaderboard";
 
 /** What the portfolio map dialog shows: this portfolio, or a team a host opened. */
 type MapDialogView =
@@ -128,13 +125,11 @@ type MapDialogView =
       holdings: TeamHoldingsView | null;
       error: string;
     };
-type TeamEditorField = "name" | "cash";
 
 const INITIAL_RAIL_SECTIONS: Record<RailSectionId, boolean> = {
   watchlist: true,
   presence: true,
   leaderboard: true,
-  host: true,
 };
 
 type OrderResult = {
@@ -441,7 +436,6 @@ const currency = new Intl.NumberFormat("en-CA", {
 });
 
 const number = new Intl.NumberFormat("en-CA");
-const TEAM_NAME_MAX_LENGTH = 80;
 const MAX_SUGGESTIONS = 8;
 /** The server's snapshot limit plus the start and live points. */
 const PORTFOLIO_HISTORY_KEEP = 722;
@@ -542,16 +536,6 @@ function rankLocalSuggestions(
 
 function formatMoney(cents: number): string {
   return currency.format(cents / 100);
-}
-
-function cashDraftsForOverview(overview: AdminOverview): Record<string, string> {
-  return Object.fromEntries(
-    overview.teams.map((team) => [team.id, (team.cashCents / 100).toFixed(2)]),
-  );
-}
-
-function nameDraftsForOverview(overview: AdminOverview): Record<string, string> {
-  return Object.fromEntries(overview.teams.map((team) => [team.id, team.name]));
 }
 
 function formatScheduleInstant(iso: string): string {
@@ -2020,6 +2004,69 @@ function subscribeActivitySeen(onChange: () => void): () => void {
   };
 }
 
+/**
+ * A labelled header button that opens a panel beneath it. Clicking outside
+ * or pressing Escape closes it, and Escape hands focus back to the button.
+ */
+function HeaderMenu({
+  label,
+  icon,
+  children,
+}: {
+  label: string;
+  icon: ReactNode;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const panelId = useId();
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setOpen(false);
+      buttonRef.current?.focus();
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
+  return (
+    <div className="header-menu" ref={rootRef}>
+      <button
+        ref={buttonRef}
+        type="button"
+        className="header-menu__button"
+        aria-expanded={open}
+        aria-controls={panelId}
+        onClick={() => setOpen((current) => !current)}
+      >
+        {icon}
+        <span>{label}</span>
+        <ChevronDownIcon className="header-menu__chevron" />
+      </button>
+      <div
+        className="header-menu__panel"
+        id={panelId}
+        role="region"
+        aria-label={label}
+        hidden={!open}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
 function ActivityBell({
   items,
   title,
@@ -2563,9 +2610,11 @@ const TRADE_HISTORY_PREVIEW = 8;
 function TradeHistoryTable({
   orders,
   showTeam,
+  onSelectSymbol,
 }: {
   orders: OrderView[];
   showTeam: boolean;
+  onSelectSymbol: (symbol: string) => void;
 }) {
   return (
     <div className="table-scroll">
@@ -2587,7 +2636,13 @@ function TradeHistoryTable({
                   <span className={`side-tag side-tag--${order.side.toLowerCase()}`}>
                     {order.side === "BUY" ? "Buy" : "Sell"}
                   </span>{" "}
-                  {order.symbol}
+                  <button
+                    type="button"
+                    className="symbol-link"
+                    onClick={() => onSelectSymbol(order.symbol)}
+                  >
+                    {order.symbol}
+                  </button>
                 </strong>
                 <small className="cell-note">
                   {formatTradeTime(order.createdAt)} ·{" "}
@@ -2739,21 +2794,11 @@ export function SimulatorApp({
   const [scheduleEndDraft, setScheduleEndDraft] = useState<string | null>(null);
   const [scheduleCashDraft, setScheduleCashDraft] = useState<string | null>(null);
   const [adminOverview, setAdminOverview] = useState<AdminOverview | null>(null);
-  const [teamCashDrafts, setTeamCashDrafts] = useState<Record<string, string>>({});
-  const [teamNameDrafts, setTeamNameDrafts] = useState<Record<string, string>>({});
-  const [newTeamName, setNewTeamName] = useState("");
-  const [teamEditor, setTeamEditor] = useState<{
-    teamId: string;
-    field: TeamEditorField;
-  } | null>(null);
-  const [teamActionBusy, setTeamActionBusy] = useState<string | null>(null);
   const [adminCashDraft, setAdminCashDraft] = useState<string | null>(null);
   const [adminCashBusy, setAdminCashBusy] = useState(false);
   const [adminCashFeedback, setAdminCashFeedback] = useState<TicketStatus | null>(
     null,
   );
-  const [disqualifyArmed, setDisqualifyArmed] = useState<string | null>(null);
-  const [removeTeamArmed, setRemoveTeamArmed] = useState<string | null>(null);
   const [hostFeedback, setHostFeedback] = useState("");
   const [resetArmed, setResetArmed] = useState(false);
   const [watchBusy, setWatchBusy] = useState<string | null>(null);
@@ -2783,14 +2828,6 @@ export function SimulatorApp({
       [section]: !current[section],
     }));
   }, []);
-
-  const toggleTeamEditor = (teamId: string, field: TeamEditorField) => {
-    setTeamEditor((current) =>
-      current?.teamId === teamId && current.field === field
-        ? null
-        : { teamId, field },
-    );
-  };
 
   useEffect(() => {
     const timer = window.setTimeout(async () => {
@@ -3062,15 +3099,7 @@ export function SimulatorApp({
       if (!response.ok) {
         throw new Error(extractError(payload, "The team controls could not be loaded."));
       }
-      const overview = payload as AdminOverview;
-      setAdminOverview(overview);
-      setTeamCashDrafts(cashDraftsForOverview(overview));
-      setTeamNameDrafts(nameDraftsForOverview(overview));
-      setTeamEditor((current) =>
-        current && overview.teams.some((team) => team.id === current.teamId)
-          ? current
-          : null,
-      );
+      setAdminOverview(payload as AdminOverview);
     } catch (error) {
       setHostFeedback(
         error instanceof Error ? error.message : "The team controls could not be loaded.",
@@ -4348,240 +4377,6 @@ export function SimulatorApp({
     }
   };
 
-  const updateTeamStatus = async (teamId: string, status: TeamStatus) => {
-    if (!canManageCompetition) return;
-    if (status === "disqualified" && disqualifyArmed !== teamId) {
-      setRemoveTeamArmed(null);
-      setDisqualifyArmed(teamId);
-      setHostFeedback(
-        "Disqualification removes the team from active standings but remains reversible. Confirm to continue.",
-      );
-      return;
-    }
-
-    setTeamActionBusy(teamId);
-    setHostFeedback(`Updating team status to ${status}…`);
-    try {
-      const response = await fetch(`/api/admin/teams/${encodeURIComponent(teamId)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
-      });
-      const payload = await readJson(response);
-      if (!response.ok) {
-        throw new Error(extractError(payload, "The team status did not change."));
-      }
-      const overview = payload as AdminOverview;
-      setAdminOverview(overview);
-      setTeamCashDrafts(cashDraftsForOverview(overview));
-      setTeamNameDrafts(nameDraftsForOverview(overview));
-      setDisqualifyArmed(null);
-      setHostFeedback(
-        status === "active"
-          ? "Team restored to active competition status."
-          : status === "frozen"
-            ? "Team frozen. Its portfolio is preserved and new trades are blocked."
-            : "Team disqualified from active standings. You can restore it at any time.",
-      );
-      await fetchDashboard(true);
-    } catch (error) {
-      setHostFeedback(
-        error instanceof Error ? error.message : "The team status did not change.",
-      );
-    } finally {
-      setTeamActionBusy(null);
-    }
-  };
-
-  const addCompetitionTeam = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!canManageCompetition) return;
-
-    const name = newTeamName.trim();
-    if (!name) {
-      setHostFeedback("Enter a team name before adding it.");
-      return;
-    }
-
-    setTeamActionBusy("create");
-    setHostFeedback(`Adding ${name}…`);
-    try {
-      const response = await fetch("/api/admin/teams", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify({ name }),
-      });
-      const payload = await readJson(response);
-      if (!response.ok) {
-        throw new Error(extractError(payload, "The team could not be added."));
-      }
-
-      const overview = payload as AdminOverview;
-      setAdminOverview(overview);
-      setTeamCashDrafts(cashDraftsForOverview(overview));
-      setTeamNameDrafts(nameDraftsForOverview(overview));
-      setNewTeamName("");
-      setHostFeedback(
-        `${name} was added with the competition's starting cash balance.`,
-      );
-      await fetchDashboard(true);
-    } catch (error) {
-      setHostFeedback(
-        error instanceof Error ? error.message : "The team could not be added.",
-      );
-    } finally {
-      setTeamActionBusy(null);
-    }
-  };
-
-  const renameCompetitionTeam = async (
-    event: FormEvent<HTMLFormElement>,
-    teamId: string,
-    currentName: string,
-  ) => {
-    event.preventDefault();
-    if (!canManageCompetition) return;
-
-    const name = (teamNameDrafts[teamId] ?? "").trim();
-    if (!name) {
-      setHostFeedback("Enter a team name before saving it.");
-      return;
-    }
-    if (name === currentName) return;
-
-    setTeamActionBusy(`rename:${teamId}`);
-    setHostFeedback(`Renaming ${currentName}…`);
-    try {
-      const response = await fetch(`/api/admin/teams/${encodeURIComponent(teamId)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify({ name }),
-      });
-      const payload = await readJson(response);
-      if (!response.ok) {
-        throw new Error(extractError(payload, "The team could not be renamed."));
-      }
-
-      const overview = payload as AdminOverview;
-      setAdminOverview(overview);
-      setTeamCashDrafts(cashDraftsForOverview(overview));
-      setTeamNameDrafts(nameDraftsForOverview(overview));
-      setTeamEditor(null);
-      setHostFeedback(`${currentName} is now ${name}.`);
-      await fetchDashboard(true);
-    } catch (error) {
-      setHostFeedback(
-        error instanceof Error ? error.message : "The team could not be renamed.",
-      );
-    } finally {
-      setTeamActionBusy(null);
-    }
-  };
-
-  const removeCompetitionTeam = async (
-    teamId: string,
-    teamName: string,
-    memberCount: number,
-  ) => {
-    if (!canManageCompetition) return;
-    if (removeTeamArmed !== teamId) {
-      setDisqualifyArmed(null);
-      setRemoveTeamArmed(teamId);
-      const memberImpact =
-        memberCount === 0
-          ? "It has no assigned members."
-          : memberCount === 1
-            ? "Its 1 member will become unassigned."
-            : `Its ${memberCount} members will become unassigned.`;
-      setHostFeedback(
-        `Removing ${teamName} permanently deletes its portfolio and trades. ${memberImpact} Confirm to continue.`,
-      );
-      return;
-    }
-
-    setTeamActionBusy(`remove:${teamId}`);
-    setHostFeedback(`Removing ${teamName}…`);
-    try {
-      const response = await fetch(`/api/admin/teams/${encodeURIComponent(teamId)}`, {
-        method: "DELETE",
-        credentials: "same-origin",
-      });
-      const payload = await readJson(response);
-      if (!response.ok) {
-        throw new Error(extractError(payload, "The team could not be removed."));
-      }
-
-      const overview = payload as AdminOverview;
-      setAdminOverview(overview);
-      setTeamCashDrafts(cashDraftsForOverview(overview));
-      setTeamNameDrafts(nameDraftsForOverview(overview));
-      setRemoveTeamArmed(null);
-      setTeamEditor(null);
-      setHostFeedback(
-        memberCount === 0
-          ? `${teamName} was removed.`
-          : `${teamName} was removed. ${memberCount === 1 ? "Its member is" : `Its ${memberCount} members are`} now unassigned.`,
-      );
-      await fetchDashboard(true);
-    } catch (error) {
-      setHostFeedback(
-        error instanceof Error ? error.message : "The team could not be removed.",
-      );
-    } finally {
-      setTeamActionBusy(null);
-    }
-  };
-
-  const updateTeamCash = async (
-    event: FormEvent<HTMLFormElement>,
-    teamId: string,
-    teamName: string,
-  ) => {
-    event.preventDefault();
-    if (!canManageCompetition) return;
-
-    const cashCents = parseCashDraft(teamCashDrafts[teamId] ?? "");
-    if (cashCents === null) {
-      setHostFeedback(
-        "Enter a non-negative CAD amount with no more than two decimal places.",
-      );
-      return;
-    }
-
-    setTeamActionBusy(`cash:${teamId}`);
-    setHostFeedback(`Updating ${teamName}'s cash balance…`);
-    try {
-      const response = await fetch(
-        `/api/admin/teams/${encodeURIComponent(teamId)}/cash`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ cashCents }),
-        },
-      );
-      const payload = await readJson(response);
-      if (!response.ok) {
-        throw new Error(extractError(payload, "The cash balance did not change."));
-      }
-
-      const overview = payload as AdminOverview;
-      setAdminOverview(overview);
-      setTeamCashDrafts(cashDraftsForOverview(overview));
-      setTeamNameDrafts(nameDraftsForOverview(overview));
-      setTeamEditor(null);
-      setHostFeedback(`${teamName}'s cash is now ${formatMoney(cashCents)}.`);
-      await fetchDashboard(true);
-    } catch (error) {
-      setHostFeedback(
-        error instanceof Error ? error.message : "The cash balance did not change.",
-      );
-    } finally {
-      setTeamActionBusy(null);
-    }
-  };
-
   const memberRows = isPlatformAdmin
     ? [
         {
@@ -4657,6 +4452,131 @@ export function SimulatorApp({
           </div>
 
           <div className="header-tools">
+          {/* Hosts and admins only; students never see it. */}
+          {canManageCompetition ? (
+            <HeaderMenu label="Host controls" icon={<LockIcon />}>
+              <div className="host-menu">
+                <div className="host-status">
+                  <div>
+                    <span>Competition</span>
+                    <strong>{dashboard.competition.phase}</strong>
+                  </div>
+                  <div>
+                    <span>Your access</span>
+                    <strong>{isPlatformAdmin ? "Platform admin" : "Host"}</strong>
+                  </div>
+                </div>
+                <div className="host-actions">
+                  <button
+                    className="button button--secondary"
+                    type="button"
+                    onClick={() => void updateCompetition()}
+                    disabled={hostBusy || dashboard.competition.status === "ended"}
+                  >
+                    {dashboard.competition.status === "active" ? <PauseIcon /> : <PlayIcon />}
+                    {dashboard.competition.status === "active"
+                      ? "Pause trading"
+                      : "Resume trading"}
+                  </button>
+                  {!isManaged ? (
+                    <button
+                      className={`button button--secondary ${resetArmed ? "button--danger" : ""}`}
+                      type="button"
+                      onClick={() => void resetPrototype()}
+                      disabled={hostBusy}
+                    >
+                      <RefreshIcon />
+                      {resetArmed ? "Confirm reset" : "Reset demo data"}
+                    </button>
+                  ) : null}
+                </div>
+                <a className="button button--secondary host-accounts-link" href="/admin/accounts">
+                  <UsersIcon />
+                  Team &amp; user management
+                </a>
+                <form
+                  className="host-schedule"
+                  aria-label="Competition schedule"
+                  onSubmit={(event) => void saveCompetitionSchedule(event)}
+                >
+                  <div className="host-schedule__heading">
+                    <strong>Competition schedule</strong>
+                    <span>
+                      Trading is open between the start and end below. It
+                      starts and stops automatically.
+                    </span>
+                  </div>
+                  <label htmlFor="schedule-start">
+                    <span>Start date &amp; time (ET)</span>
+                    <input
+                      id="schedule-start"
+                      type="datetime-local"
+                      value={
+                        scheduleStartDraft ??
+                        isoToZonedInputValue(dashboard.competition.startsAt)
+                      }
+                      onChange={(event) => setScheduleStartDraft(event.target.value)}
+                      disabled={hostBusy}
+                    />
+                  </label>
+                  <label htmlFor="schedule-end">
+                    <span>End date &amp; time (ET)</span>
+                    <input
+                      id="schedule-end"
+                      type="datetime-local"
+                      value={
+                        scheduleEndDraft ?? isoToZonedInputValue(dashboard.competition.endsAt)
+                      }
+                      onChange={(event) => setScheduleEndDraft(event.target.value)}
+                      disabled={hostBusy}
+                    />
+                  </label>
+                  <label htmlFor="schedule-cash">
+                    <span>Team starting cash (CAD)</span>
+                    <input
+                      id="schedule-cash"
+                      type="number"
+                      min="0"
+                      max="1000000000000"
+                      step="0.01"
+                      inputMode="decimal"
+                      value={
+                        scheduleCashDraft ??
+                        (dashboard.competition.startingCashCents / 100).toFixed(2)
+                      }
+                      onChange={(event) => setScheduleCashDraft(event.target.value)}
+                      disabled={hostBusy || competitionHasTrades}
+                    />
+                  </label>
+                  {competitionHasTrades ? (
+                    <p className="host-schedule__note">
+                      Starting cash is locked once trading has begun. Set a
+                      team&apos;s cash in Team &amp; user management instead.
+                    </p>
+                  ) : null}
+                  <button className="button button--secondary" type="submit" disabled={hostBusy}>
+                    Save schedule
+                  </button>
+                </form>
+                {/* With real sign-in these live in the account menu instead. */}
+                {!isManaged && dashboard.currentUser.role === "platform_admin" ? (
+                  <a className="button button--secondary host-accounts-link" href="/admin/valuation-lab">
+                    <FlaskIcon />
+                    Past → Present valuation lab
+                  </a>
+                ) : null}
+                {!isManaged && dashboard.currentUser.role === "platform_admin" ? (
+                  <a className="button button--secondary host-accounts-link" href="/admin/feedback">
+                    <ChatIcon />
+                    User feedback
+                  </a>
+                ) : null}
+                <p className="host-feedback" role="status" aria-live="polite">
+                  {hostFeedback}
+                </p>
+              </div>
+            </HeaderMenu>
+          ) : null}
           <ThemeToggle />
           <FeedbackButton />
           <ActivityBell
@@ -5156,7 +5076,14 @@ export function SimulatorApp({
                               <th scope="row" data-label="Order">
                                 <strong>
                                   {attached ? <span aria-hidden="true">↳ </span> : null}
-                                  {name} · {order.symbol}
+                                  {name} ·{" "}
+                                  <button
+                                    type="button"
+                                    className="symbol-link"
+                                    onClick={() => openHoldingInWorkbench(order.symbol)}
+                                  >
+                                    {order.symbol}
+                                  </button>
                                 </strong>
                                 <small className="cell-note">
                                   {order.status === "PENDING_PARENT"
@@ -5245,7 +5172,11 @@ export function SimulatorApp({
                 ) : null}
               </div>
               {tradeRows.length > 0 ? (
-                <TradeHistoryTable orders={tradeRows} showTeam={isCompetitionHost} />
+                <TradeHistoryTable
+                  orders={tradeRows}
+                  showTeam={isCompetitionHost}
+                  onSelectSymbol={openHoldingInWorkbench}
+                />
               ) : (
                 <div className="empty-state">
                   <HistoryIcon />
@@ -6552,421 +6483,6 @@ export function SimulatorApp({
               </p>
             </AnimatedRailSection>
 
-            {/* Students never see host tools, not even a locked panel. */}
-            {canManageCompetition ? (
-            <AnimatedRailSection
-              className="host-section"
-              headingId="host-heading"
-              contentId="host-content"
-              title="Host controls"
-              icon={<LockIcon />}
-              isOpen={openRailSections.host}
-              onToggle={() => toggleRailSection("host")}
-            >
-              <>
-                  <div className="host-status">
-                    <div>
-                      <span>Competition</span>
-                      <strong>{dashboard.competition.phase}</strong>
-                    </div>
-                    <div>
-                      <span>Your access</span>
-                      <strong>{isPlatformAdmin ? "Platform admin" : "Host"}</strong>
-                    </div>
-                  </div>
-                  <p>
-                    Manage competition state and team cash balances. Every action is
-                    recorded.
-                  </p>
-                  <div className="host-actions">
-                    <button
-                      className="button button--secondary"
-                      type="button"
-                      onClick={() => void updateCompetition()}
-                      disabled={hostBusy || dashboard.competition.status === "ended"}
-                    >
-                      {dashboard.competition.status === "active" ? <PauseIcon /> : <PlayIcon />}
-                      {dashboard.competition.status === "active"
-                        ? "Pause trading"
-                        : "Resume trading"}
-                    </button>
-                    {!isManaged ? (
-                      <button
-                        className={`button button--secondary ${resetArmed ? "button--danger" : ""}`}
-                        type="button"
-                        onClick={() => void resetPrototype()}
-                        disabled={hostBusy}
-                      >
-                        <RefreshIcon />
-                        {resetArmed ? "Confirm reset" : "Reset demo data"}
-                      </button>
-                    ) : null}
-                  </div>
-                  <a className="button button--secondary host-accounts-link" href="/admin/accounts">
-                    <UsersIcon />
-                    Accounts &amp; invitations
-                  </a>
-                  <form
-                    className="host-schedule"
-                    aria-label="Competition schedule"
-                    onSubmit={(event) => void saveCompetitionSchedule(event)}
-                  >
-                    <div className="host-schedule__heading">
-                      <strong>Competition schedule</strong>
-                      <span>
-                        Trading is open between the start and end below. It
-                        starts and stops automatically.
-                      </span>
-                    </div>
-                    <label htmlFor="schedule-start">
-                      <span>Start date &amp; time (ET)</span>
-                      <input
-                        id="schedule-start"
-                        type="datetime-local"
-                        value={
-                          scheduleStartDraft ??
-                          isoToZonedInputValue(dashboard.competition.startsAt)
-                        }
-                        onChange={(event) =>
-                          setScheduleStartDraft(event.target.value)
-                        }
-                        disabled={hostBusy}
-                      />
-                    </label>
-                    <label htmlFor="schedule-end">
-                      <span>End date &amp; time (ET)</span>
-                      <input
-                        id="schedule-end"
-                        type="datetime-local"
-                        value={
-                          scheduleEndDraft ??
-                          isoToZonedInputValue(dashboard.competition.endsAt)
-                        }
-                        onChange={(event) =>
-                          setScheduleEndDraft(event.target.value)
-                        }
-                        disabled={hostBusy}
-                      />
-                    </label>
-                    <label htmlFor="schedule-cash">
-                      <span>Team starting cash (CAD)</span>
-                      <input
-                        id="schedule-cash"
-                        type="number"
-                        min="0"
-                        max="1000000000000"
-                        step="0.01"
-                        inputMode="decimal"
-                        value={
-                          scheduleCashDraft ??
-                          (dashboard.competition.startingCashCents / 100).toFixed(2)
-                        }
-                        onChange={(event) =>
-                          setScheduleCashDraft(event.target.value)
-                        }
-                        disabled={hostBusy || competitionHasTrades}
-                      />
-                    </label>
-                    {competitionHasTrades ? (
-                      <p className="host-schedule__note">
-                        Starting cash is locked once trading has begun. Adjust
-                        individual team balances below instead.
-                      </p>
-                    ) : null}
-                    <button
-                      className="button button--secondary"
-                      type="submit"
-                      disabled={hostBusy}
-                    >
-                      Save schedule
-                    </button>
-                  </form>
-                  {/* With real sign-in these live in the account menu instead. */}
-                  {!isManaged && dashboard.currentUser.role === "platform_admin" ? (
-                    <a className="button button--secondary host-accounts-link" href="/admin/valuation-lab">
-                      <FlaskIcon />
-                      Past → Present valuation lab
-                    </a>
-                  ) : null}
-                  {!isManaged && dashboard.currentUser.role === "platform_admin" ? (
-                    <a className="button button--secondary host-accounts-link" href="/admin/feedback">
-                      <ChatIcon />
-                      User feedback
-                    </a>
-                  ) : null}
-                  <div className="host-teams" aria-label="Manage competition teams">
-                    <div className="host-teams__heading">
-                      <strong>Competition teams</strong>
-                      <button
-                        type="button"
-                        onClick={() => void fetchAdminOverview()}
-                        disabled={hostBusy || teamActionBusy !== null}
-                      >
-                        <RefreshIcon />
-                        Refresh
-                      </button>
-                    </div>
-                    <form
-                      className="host-team__create"
-                      onSubmit={(event) => void addCompetitionTeam(event)}
-                    >
-                      <label htmlFor="new-team-name">
-                        <span>Add a team</span>
-                        <input
-                          id="new-team-name"
-                          type="text"
-                          maxLength={TEAM_NAME_MAX_LENGTH}
-                          autoComplete="off"
-                          value={newTeamName}
-                          onChange={(event) => setNewTeamName(event.target.value)}
-                          disabled={teamActionBusy !== null}
-                          placeholder="Team name"
-                        />
-                      </label>
-                      <button
-                        type="submit"
-                        disabled={teamActionBusy !== null || !newTeamName.trim()}
-                      >
-                        Add team
-                      </button>
-                    </form>
-                    {adminOverview?.teams.length ? (
-                      <ul>
-                        {adminOverview.teams.map((team) => (
-                          <li key={team.id}>
-                            <div className="host-team__summary">
-                              <div className="host-team__identity">
-                                <div className="host-team__name-line">
-                                  <strong>{team.name}</strong>
-                                  <span className="host-team__quick-actions">
-                                    <button
-                                      className="host-team__edit-trigger"
-                                      type="button"
-                                      aria-label={`Rename ${team.name}`}
-                                      aria-controls={`team-name-editor-${team.id}`}
-                                      aria-expanded={
-                                        teamEditor?.teamId === team.id &&
-                                        teamEditor.field === "name"
-                                      }
-                                      data-active={
-                                        teamEditor?.teamId === team.id &&
-                                        teamEditor.field === "name"
-                                      }
-                                      title="Rename team"
-                                      onClick={() => toggleTeamEditor(team.id, "name")}
-                                      disabled={teamActionBusy !== null}
-                                    >
-                                      <PencilIcon />
-                                    </button>
-                                    <button
-                                      className="host-team__edit-trigger"
-                                      type="button"
-                                      aria-label={`Set cash for ${team.name}`}
-                                      aria-controls={`team-cash-editor-${team.id}`}
-                                      aria-expanded={
-                                        teamEditor?.teamId === team.id &&
-                                        teamEditor.field === "cash"
-                                      }
-                                      data-active={
-                                        teamEditor?.teamId === team.id &&
-                                        teamEditor.field === "cash"
-                                      }
-                                      title="Set cash balance"
-                                      onClick={() => toggleTeamEditor(team.id, "cash")}
-                                      disabled={teamActionBusy !== null}
-                                    >
-                                      <CashIcon />
-                                    </button>
-                                  </span>
-                                </div>
-                                <small>{team.memberNames.join(", ") || "No members"}</small>
-                              </div>
-                              <span className={`team-state team-state--${team.status}`}>
-                                {team.status}
-                              </span>
-                            </div>
-                            {teamEditor?.teamId === team.id &&
-                            teamEditor.field === "name" ? (
-                              <form
-                                id={`team-name-editor-${team.id}`}
-                                className="host-team__name"
-                                onSubmit={(event) =>
-                                  void renameCompetitionTeam(event, team.id, team.name)
-                                }
-                              >
-                                <label htmlFor={`team-name-${team.id}`}>
-                                  <span>Team name</span>
-                                  <input
-                                    id={`team-name-${team.id}`}
-                                    type="text"
-                                    maxLength={TEAM_NAME_MAX_LENGTH}
-                                    autoComplete="off"
-                                    value={teamNameDrafts[team.id] ?? team.name}
-                                    onChange={(event) =>
-                                      setTeamNameDrafts((current) => ({
-                                        ...current,
-                                        [team.id]: event.target.value,
-                                      }))
-                                    }
-                                    disabled={teamActionBusy !== null}
-                                  />
-                                </label>
-                                <button
-                                  type="submit"
-                                  disabled={
-                                    teamActionBusy !== null ||
-                                    !teamNameDrafts[team.id]?.trim() ||
-                                    teamNameDrafts[team.id]?.trim() === team.name
-                                  }
-                                >
-                                  Rename
-                                </button>
-                              </form>
-                            ) : null}
-                            {teamEditor?.teamId === team.id &&
-                            teamEditor.field === "cash" ? (
-                              <form
-                                id={`team-cash-editor-${team.id}`}
-                                className="host-team__cash"
-                                onSubmit={(event) =>
-                                  void updateTeamCash(event, team.id, team.name)
-                                }
-                              >
-                                <label htmlFor={`team-cash-${team.id}`}>
-                                  <span>Cash balance (CAD)</span>
-                                  <input
-                                    id={`team-cash-${team.id}`}
-                                    aria-label={`Cash for ${team.name}`}
-                                    type="number"
-                                    min="0"
-                                    max="1000000000000"
-                                    step="0.01"
-                                    inputMode="decimal"
-                                    value={
-                                      teamCashDrafts[team.id] ??
-                                      (team.cashCents / 100).toFixed(2)
-                                    }
-                                    onChange={(event) =>
-                                      setTeamCashDrafts((current) => ({
-                                        ...current,
-                                        [team.id]: event.target.value,
-                                      }))
-                                    }
-                                    disabled={teamActionBusy !== null}
-                                  />
-                                </label>
-                                <button
-                                  type="submit"
-                                  disabled={
-                                    teamActionBusy !== null ||
-                                    parseCashDraft(teamCashDrafts[team.id] ?? "") ===
-                                      null ||
-                                    parseCashDraft(teamCashDrafts[team.id] ?? "") ===
-                                      team.cashCents
-                                  }
-                                >
-                                  Set cash
-                                </button>
-                              </form>
-                            ) : null}
-                            <div className="host-team__actions">
-                              {team.status === "active" ? (
-                                <button
-                                  type="button"
-                                  onClick={() => void updateTeamStatus(team.id, "frozen")}
-                                  disabled={teamActionBusy !== null}
-                                >
-                                  Freeze
-                                </button>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => void updateTeamStatus(team.id, "active")}
-                                  disabled={teamActionBusy !== null}
-                                >
-                                  Restore
-                                </button>
-                              )}
-                              {team.status !== "disqualified" ? (
-                                <button
-                                  type="button"
-                                  className={disqualifyArmed === team.id ? "is-danger" : ""}
-                                  onClick={() => void updateTeamStatus(team.id, "disqualified")}
-                                  disabled={teamActionBusy !== null}
-                                >
-                                  {disqualifyArmed === team.id
-                                    ? "Confirm disqualify"
-                                    : "Disqualify"}
-                                </button>
-                              ) : null}
-                              {disqualifyArmed === team.id ? (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setDisqualifyArmed(null);
-                                    setHostFeedback("Disqualification cancelled.");
-                                  }}
-                                  disabled={teamActionBusy !== null}
-                                >
-                                  Cancel
-                                </button>
-                              ) : null}
-                              <button
-                                type="button"
-                                className={removeTeamArmed === team.id ? "is-danger" : ""}
-                                onClick={() =>
-                                  void removeCompetitionTeam(
-                                    team.id,
-                                    team.name,
-                                    team.memberNames.length,
-                                  )
-                                }
-                                disabled={teamActionBusy !== null}
-                              >
-                                {removeTeamArmed === team.id
-                                  ? "Confirm remove"
-                                  : "Remove team"}
-                              </button>
-                              {removeTeamArmed === team.id ? (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setRemoveTeamArmed(null);
-                                    setHostFeedback("Team removal cancelled.");
-                                  }}
-                                  disabled={teamActionBusy !== null}
-                                >
-                                  Cancel
-                                </button>
-                              ) : null}
-                            </div>
-                          </li>
-                        ))}
-                      </ul>
-                    ) : adminOverview ? (
-                      <p className="host-teams__empty">
-                        No competition teams yet. Add the first team above.
-                      </p>
-                    ) : (
-                      <p>Loading team controls…</p>
-                    )}
-                    <div className="host-feedback" role="status" aria-live="polite">
-                      {teamActionBusy === "create"
-                        ? "Adding team…"
-                        : teamActionBusy?.startsWith("rename:")
-                          ? "Saving team name…"
-                          : teamActionBusy?.startsWith("remove:")
-                            ? "Removing team…"
-                            : teamActionBusy?.startsWith("cash:")
-                              ? "Saving cash balance…"
-                              : teamActionBusy
-                                ? "Saving team status…"
-                                : hostFeedback}
-                    </div>
-                  </div>
-              </>
-            </AnimatedRailSection>
-            ) : null}
           </aside>
         </div>
 

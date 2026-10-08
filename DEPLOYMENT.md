@@ -46,7 +46,7 @@ The explicit TLS object must not be overwritten by connection-string SSL options
 1. Configure the Clerk application with verified email addresses and a supported second-factor strategy. Make its keys available during both build and runtime.
 2. Bootstrap the first administrator with `pnpm bootstrap:admin -- --email you@example.ca`, run against the intended database. Alternatively, set `LUBAN_BOOTSTRAP_ADMIN_EMAIL`, sign in once using that verified email, and remove the variable.
 3. Complete second-factor enrollment and sign in with it. Host and administrator operations check both enrollment and the current session's verified second factor. Enrollment alone does not authorize an old session. `LUBAN_REQUIRE_ADMIN_MFA=false` is an explicit opt-out and removes this protection.
-4. Use **Accounts & invitations** to issue single-use invitations and manage roles, team membership, suspension, and deletion. Invitation links are copied by the host; automatic invitation email delivery is not implemented.
+4. Use **Team & user management** (in the Host controls menu) to issue single-use invitations and manage roles, team membership, suspension, and deletion. Invitation links are copied by the host; automatic invitation email delivery is not implemented.
 
 Clerk's session `fva` claim distinguishes an enrolled account from a session that verified a second factor. See [Clerk session tokens](https://clerk.com/docs/guides/sessions/session-tokens).
 

@@ -90,7 +90,7 @@ checked by the server on every protected operation.
 
 - **Invitation-only registration.** There is no open sign-up and no public
   "register as admin" path. A host creates a single-use, expiring invitation
-  from **Accounts & invitations** (also `POST /api/admin/invitations`); the
+  from **Team & user management** in the Host controls menu (also `POST /api/admin/invitations`); the
   student opens the `/join/<token>` link, registers with a verified email, and
   is placed on their assigned team. Tokens are stored only as SHA-256 hashes
   and are consumed transactionally, so a link can never be redeemed twice.

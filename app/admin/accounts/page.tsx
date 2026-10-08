@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
@@ -10,6 +11,10 @@ import {
 import { isManagedAuthMode } from "@/lib/server/auth-mode";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = {
+  title: "Team & user management · Luban Market Lab",
+};
 
 export default async function AccountsPage() {
   if (isManagedAuthMode()) {

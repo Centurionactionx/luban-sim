@@ -1274,6 +1274,26 @@ a {
   text-underline-offset: 3px;
 }
 
+/* A symbol named inside a row's label (waiting orders, trade history)
+   that loads it into the quote workbench. */
+.symbol-link {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--purple);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.symbol-link:hover {
+  color: var(--purple);
+}
+
 .symbol-button span {
   max-width: 105px;
   overflow: hidden;
@@ -2314,10 +2334,6 @@ a {
   font-size: 10.5px;
 }
 
-.host-section .rail-section__content-inner {
-  padding-bottom: 16px;
-}
-
 .host-status {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
@@ -2351,11 +2367,6 @@ a {
   text-transform: capitalize;
 }
 
-.host-section > p {
-  margin: 10px 12px 0;
-  color: var(--muted);
-  font-size: var(--type-description);
-}
 
 
 
@@ -2369,245 +2380,6 @@ a {
   min-height: 44px;
   padding: 8px 10px;
   font-size: 10px;
-}
-
-.host-teams {
-  margin: 14px 12px 0;
-  border-top: 1px solid var(--rule);
-  padding-top: 12px;
-}
-
-.host-teams__heading {
-  display: flex;
-  min-height: 38px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  font-family: var(--font-data);
-  font-size: var(--type-item-title);
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-}
-
-.host-teams__heading button {
-  min-height: 36px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 9px;
-  border: 1px solid var(--rule);
-  border-radius: 3px;
-  background: var(--paper);
-  font-family: var(--font-data);
-  font-size: 9px;
-  text-transform: uppercase;
-}
-
-.host-teams__heading button:hover:not(:disabled) {
-  background: var(--quiet-purple);
-}
-
-.host-teams__heading svg {
-  width: 14px;
-  height: 14px;
-}
-
-.host-teams > ul {
-  list-style: none;
-  border: 1px solid var(--hairline);
-}
-
-.host-teams > ul > li {
-  padding: 10px;
-}
-
-.host-teams > ul > li + li {
-  border-top: 1px solid var(--hairline);
-}
-
-.host-teams__empty {
-  margin: 0;
-  padding: 10px;
-  border: 1px solid var(--hairline);
-  color: var(--muted);
-  font-size: var(--type-description);
-  line-height: 1.45;
-}
-
-.host-team__summary {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.host-team__identity {
-  min-width: 0;
-}
-
-.host-team__name-line {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.host-team__summary strong {
-  min-width: 0;
-  overflow: hidden;
-  font-size: var(--type-item-title);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.host-team__summary small {
-  display: block;
-  margin-top: 2px;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.host-team__quick-actions {
-  display: inline-flex;
-  flex: 0 0 auto;
-  gap: 3px;
-}
-
-.host-team__edit-trigger {
-  width: 28px;
-  height: 28px;
-  display: inline-grid;
-  place-items: center;
-  border: 1px solid var(--hairline);
-  border-radius: 3px;
-  background: var(--paper);
-  color: var(--purple-deep);
-}
-
-.host-team__edit-trigger:hover:not(:disabled),
-.host-team__edit-trigger[data-active="true"] {
-  border-color: var(--purple);
-  background: var(--quiet-purple);
-}
-
-.host-team__edit-trigger:focus-visible {
-  outline: 2px solid var(--purple);
-  outline-offset: 1px;
-}
-
-.host-team__edit-trigger svg {
-  width: 13px;
-  height: 13px;
-}
-
-.host-team__create,
-.host-team__name,
-.host-team__cash {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
-  gap: 7px;
-}
-
-.host-team__create {
-  margin: 6px 0 10px;
-  padding: 10px;
-  border: 1px solid var(--hairline);
-}
-
-.host-team__name,
-.host-team__cash {
-  margin-top: 10px;
-}
-
-.host-team__create label,
-.host-team__name label,
-.host-team__cash label {
-  min-width: 0;
-  display: grid;
-  gap: 4px;
-}
-
-.host-team__create label > span,
-.host-team__name label > span,
-.host-team__cash label > span {
-  color: var(--muted);
-  font-family: var(--font-data);
-  font-size: 8.5px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.host-team__create input,
-.host-team__name input,
-.host-team__cash input {
-  width: 100%;
-  min-height: 36px;
-  padding: 6px 8px;
-  border: 1px solid var(--rule);
-  border-radius: 3px;
-  background: var(--paper);
-  color: var(--ink);
-  font-family: var(--font-data);
-  font-size: 11px;
-}
-
-.host-team__create input:focus-visible,
-.host-team__name input:focus-visible,
-.host-team__cash input:focus-visible {
-  outline: 2px solid var(--purple);
-  outline-offset: 1px;
-}
-
-.host-team__create button,
-.host-team__name button,
-.host-team__cash button {
-  min-height: 36px;
-  padding: 6px 10px;
-  border: 1px solid var(--purple);
-  border-radius: 3px;
-  background: var(--purple);
-  color: var(--paper);
-  font-family: var(--font-data);
-  font-size: 9px;
-  text-transform: uppercase;
-}
-
-.host-team__create button:hover:not(:disabled),
-.host-team__name button:hover:not(:disabled),
-.host-team__cash button:hover:not(:disabled) {
-  background: var(--purple-hover);
-}
-
-.host-team__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 9px;
-}
-
-.host-team__actions button {
-  min-height: 36px;
-  padding: 6px 9px;
-  border: 1px solid var(--rule);
-  border-radius: 3px;
-  background: var(--paper);
-  font-family: var(--font-data);
-  font-size: 9px;
-  text-transform: uppercase;
-}
-
-.host-team__actions button:hover:not(:disabled) {
-  background: var(--quiet-purple);
-}
-
-.host-team__actions button.is-danger {
-  border-color: var(--red);
-  background: var(--negative-wash);
-  color: var(--red);
 }
 
 .host-feedback {
@@ -2929,10 +2701,6 @@ a {
   .rail-section + .rail-section {
     border-top: 0;
     border-left: 2px solid var(--rule);
-  }
-
-  .host-section {
-    grid-column: 2;
   }
 
   .leaderboard-section[data-open="true"] {
@@ -3262,7 +3030,6 @@ a {
   .activity-list,
   .leaderboard-section .table-scroll,
   .host-status,
-  .host-section > p,
   .host-actions {
     margin-left: 10px;
     margin-right: 10px;
@@ -5462,6 +5229,91 @@ html:has(dialog[open]) {
   height: 15px;
 }
 
+/* Host controls: a labelled header button that opens the competition
+   tools in a panel. Only hosts and platform admins get it. */
+.header-menu {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.header-menu__button {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px 0 12px;
+  border: 1.5px solid var(--rule);
+  border-radius: 6px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-data);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.header-menu__button:hover,
+.header-menu__button:focus-visible,
+.header-menu__button[aria-expanded="true"] {
+  background: var(--quiet-purple);
+}
+
+.header-menu__button svg {
+  width: 17px;
+  height: 17px;
+}
+
+.header-menu__button .header-menu__chevron {
+  width: 14px;
+  height: 14px;
+  transition: transform 160ms ease;
+}
+
+.header-menu__button[aria-expanded="true"] .header-menu__chevron {
+  transform: rotate(180deg);
+}
+
+.header-menu__panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  width: min(380px, calc(100vw - 24px));
+  max-height: min(80vh, 720px);
+  overflow-y: auto;
+  padding: 14px;
+  border: 2px solid var(--rule);
+  border-radius: var(--tile-radius, 10px);
+  background: var(--paper);
+  box-shadow: 0 10px 28px rgba(0, 23, 31, 0.18);
+}
+
+.header-menu__panel[hidden] {
+  display: none;
+}
+
+.host-menu .host-status,
+.host-menu .host-actions {
+  margin: 0;
+}
+
+.host-menu .host-actions {
+  margin-top: 12px;
+}
+
+.host-menu .host-feedback:empty {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .header-menu__button .header-menu__chevron {
+    transition: none;
+  }
+}
+
 /* Activity feed behind a bell in the header, with a bubble for new entries. */
 .header-tools {
   display: flex;
@@ -6457,6 +6309,7 @@ html:has(dialog[open]) {
 :root[data-theme="dark"] .chart-dialog,
 :root[data-theme="dark"] .confirm-dialog,
 :root[data-theme="dark"] .activity-bell__panel,
+:root[data-theme="dark"] .header-menu__panel,
 :root[data-theme="dark"] .account-controls__menu ul {
   border-color: var(--tile-edge);
   background: var(--tile-sheen), var(--paper);

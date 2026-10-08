@@ -1,15 +1,25 @@
 "use client";
 
 import Link from "next/link";
-import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import {
+  type FormEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from "react";
 
 import { DISPLAY_TIME_ZONE } from "@/lib/time";
 
 import type {
   AccountView,
   AdminOverview,
+  AdminTeamSummary,
   CreatedInvitation,
   InvitationSummary,
+  TeamStatus,
   UserRole,
 } from "@/lib/contracts";
 
@@ -39,9 +49,6 @@ const ROLE_LABELS: Record<UserRole, string> = {
   host: "Competition host",
   platform_admin: "Platform admin",
 };
-
-/** Someone who signed in within this many days counts as recently active. */
-const RECENT_DAYS = 7;
 
 /** Two letters for the avatar, skipping brackets and other punctuation. */
 function initials(name: string): string {
@@ -80,38 +87,156 @@ function shortSignIn(iso: string | null): string {
   });
 }
 
-function fullDateTime(iso: string): string {
-  return (
-    new Date(iso).toLocaleString("en-CA", {
-      dateStyle: "medium",
-      timeStyle: "short",
-      timeZone: DISPLAY_TIME_ZONE,
-    }) + " ET"
-  );
-}
-
-function signedInRecently(iso: string | null): boolean {
-  return (
-    iso !== null && Date.now() - new Date(iso).getTime() < RECENT_DAYS * 86_400_000
-  );
-}
-
-/** The roster dot: suspended, signed in this week, or quiet. */
-function presence(account: AccountView): { className: string; label: string } {
-  if (account.status === "suspended") {
-    return { className: `${styles.dot} ${styles.dotSuspended}`, label: "Suspended" };
-  }
-  return signedInRecently(account.lastLoginAt)
-    ? { className: `${styles.dot} ${styles.dotRecent}`, label: "Signed in this week" }
-    : { className: styles.dot, label: "Not signed in this week" };
+/** "Oct. 13", in Eastern time. */
+function shortDate(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-CA", {
+    month: "short",
+    day: "numeric",
+    timeZone: DISPLAY_TIME_ZONE,
+  });
 }
 
 function invitationFor(invitation: InvitationSummary): string {
   return invitation.invitedName ?? invitation.email ?? "Anyone with the link";
 }
 
-const memberButtonId = (accountId: string) => `account-${accountId}`;
+/** Mirrors the server's limits in lib/server/admin.ts. */
+const TEAM_NAME_MAX_LENGTH = 80;
+const MAX_TEAM_CASH_CENTS = 100_000_000_000_000;
+
+const currency = new Intl.NumberFormat("en-CA", {
+  style: "currency",
+  currency: "CAD",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+function formatMoney(cents: number): string {
+  return currency.format(cents / 100);
+}
+
+/** Dollars typed by a host, as cents; null unless it is a valid amount. */
+function parseCashDraft(value: string): number | null {
+  const normalized = value.trim();
+  if (!/^\d+(?:\.\d{0,2})?$/.test(normalized)) return null;
+  const [wholeDollars, fractionalDollars = ""] = normalized.split(".");
+  const cents = Number(wholeDollars) * 100 + Number(fractionalDollars.padEnd(2, "0"));
+  return Number.isSafeInteger(cents) && cents >= 0 && cents <= MAX_TEAM_CASH_CENTS
+    ? cents
+    : null;
+}
+
+const memberRowId = (accountId: string) => `account-${accountId}`;
+const editButtonId = (teamId: string, field: "name" | "cash") => `team-${field}-${teamId}`;
+
+const SHORT_ROLE_LABELS: Record<UserRole, string> = {
+  student: "Student",
+  host: "Host",
+  platform_admin: "Admin",
+};
+
+function roleClass(role: UserRole): string {
+  return role === "platform_admin" ? styles.pillAdmin : role === "host" ? styles.pillHost : "";
+}
+
+/** Focuses an inline editor's input once, when it opens. */
+function focusOnMount(node: HTMLInputElement | null) {
+  if (!node) return;
+  node.focus();
+  node.select();
+}
+
+function PencilGlyph() {
+  return (
+    <svg className={styles.pencil} viewBox="0 0 24 24" aria-hidden="true">
+      <path d="m4 20 4.1-1 10.7-10.7a2.1 2.1 0 0 0-3-3L5.1 16 4 20Z" />
+    </svg>
+  );
+}
 const INVITE_EMAIL_ID = "invite-email";
+/** How long the undo notice stays up. */
+const TOAST_MS = 8_000;
+
+/**
+ * A small panel under a button: the ··· menus. Clicking outside or pressing
+ * Escape closes it, and Escape hands focus back to the button.
+ */
+function Popover({
+  open,
+  onOpenChange,
+  label,
+  buttonClassName,
+  buttonContent,
+  align = "end",
+  children,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  label: string;
+  buttonClassName?: string;
+  buttonContent: ReactNode;
+  align?: "start" | "end";
+  children: ReactNode;
+}) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const panelId = useId();
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) onOpenChange(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      onOpenChange(false);
+      buttonRef.current?.focus();
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open, onOpenChange]);
+
+  return (
+    <div className={styles.popover} ref={rootRef}>
+      <button
+        ref={buttonRef}
+        type="button"
+        className={buttonClassName}
+        aria-label={label}
+        aria-expanded={open}
+        aria-controls={panelId}
+        onClick={() => onOpenChange(!open)}
+      >
+        {buttonContent}
+      </button>
+      <div
+        id={panelId}
+        className={styles.popoverPanel}
+        data-align={align}
+        role="group"
+        aria-label={label}
+        hidden={!open}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+type Toast = {
+  id: number;
+  message: string;
+  tone: "info" | "error";
+  undo?: () => Promise<void>;
+};
+
+type Confirm = { kind: "delete" | "remove" | "disqualify"; id: string };
+
+type Editing = { teamId: string; field: "name" | "cash"; draft: string };
 
 export function AccountsPanel({
   managed,
@@ -127,8 +252,6 @@ export function AccountsPanel({
   );
   const [accounts, setAccounts] = useState<AccountView[] | null>(null);
   const [accountBusy, setAccountBusy] = useState<string | null>(null);
-  const [deleteArmed, setDeleteArmed] = useState<string | null>(null);
-  const [accountFeedback, setAccountFeedback] = useState("");
   const [teams, setTeams] = useState<AdminOverview["teams"]>([]);
   const [role, setRole] = useState<UserRole>("student");
   const [teamId, setTeamId] = useState("");
@@ -139,9 +262,17 @@ export function AccountsPanel({
   const [feedback, setFeedback] = useState("");
   const [created, setCreated] = useState<CreatedInvitation & { joinUrl?: string } | null>(null);
   const [copied, setCopied] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
-  const drawerHeading = useRef<HTMLHeadingElement>(null);
+  const [query, setQuery] = useState("");
+  const [newTeamName, setNewTeamName] = useState("");
+  const [teamBusy, setTeamBusy] = useState<string | null>(null);
+  const [addTeamFeedback, setAddTeamFeedback] = useState("");
+  // Inline editing: at most one ··· menu, one edited field, and one
+  // confirmation open at a time; quick changes report in an undo notice.
+  const [menuOpen, setMenuOpen] = useState<string | null>(null);
+  const [editing, setEditing] = useState<Editing | null>(null);
+  const [confirm, setConfirm] = useState<Confirm | null>(null);
+  const [toast, setToast] = useState<Toast | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -275,85 +406,6 @@ export function AccountsPanel({
     }
   };
 
-  const patchAccount = async (
-    userId: string,
-    body: Record<string, unknown>,
-    workingLabel: string,
-  ) => {
-    setAccountBusy(userId);
-    setAccountFeedback(workingLabel);
-
-    try {
-      const response = await fetch(`/api/admin/accounts/${userId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify(body),
-      });
-      const payload = await readJson(response);
-
-      if (!response.ok) {
-        throw new Error(extractError(payload, "The account could not be updated."));
-      }
-
-      const { account } = payload as { account: AccountView };
-      setAccounts((current) =>
-        (current ?? []).map((row) => (row.id === account.id ? account : row)),
-      );
-      setAccountFeedback("");
-    } catch (error) {
-      setAccountFeedback(
-        error instanceof Error ? error.message : "The account could not be updated.",
-      );
-    } finally {
-      setAccountBusy(null);
-    }
-  };
-
-  const removeAccount = async (userId: string) => {
-    if (deleteArmed !== userId) {
-      setDeleteArmed(userId);
-      setAccountFeedback(
-        "Deleting removes this person's access permanently. Click again to confirm.",
-      );
-      return;
-    }
-
-    setDeleteArmed(null);
-    setAccountBusy(userId);
-    setAccountFeedback("Deleting account…");
-
-    try {
-      const response = await fetch(`/api/admin/accounts/${userId}`, {
-        method: "DELETE",
-        credentials: "same-origin",
-      });
-      const payload = await readJson(response);
-
-      if (!response.ok) {
-        throw new Error(extractError(payload, "The account could not be deleted."));
-      }
-
-      const { result } = payload as {
-        result: { id: string; mode: "deleted" | "anonymized" };
-      };
-      setAccounts((current) =>
-        (current ?? []).filter((row) => row.id !== result.id),
-      );
-      setAccountFeedback(
-        result.mode === "anonymized"
-          ? "Account deleted. Their past trades remain on the team ledger, attributed to “Deleted user”."
-          : "Account deleted.",
-      );
-    } catch (error) {
-      setAccountFeedback(
-        error instanceof Error ? error.message : "The account could not be deleted.",
-      );
-    } finally {
-      setAccountBusy(null);
-    }
-  };
-
   const copyLink = async () => {
     if (!created?.joinUrl) return;
 
@@ -366,136 +418,745 @@ export function AccountsPanel({
     }
   };
 
-  const selected = accounts?.find((account) => account.id === selectedId) ?? null;
-
-  const selectAccount = (accountId: string) => {
-    setSelectedId((current) => (current === accountId ? null : accountId));
-    setDeleteArmed(null);
-    setAccountFeedback("");
+  const showToast = (message: string, tone: Toast["tone"] = "info", undo?: Toast["undo"]) => {
+    // A fresh id restarts the notice's timer even for a repeated message.
+    setToast((current) => ({ id: (current?.id ?? 0) + 1, message, tone, undo }));
   };
 
-  const closeDrawer = useCallback(() => {
-    const returnTo = selectedId;
-    setSelectedId(null);
-    setDeleteArmed(null);
-    setAccountFeedback("");
-    if (returnTo) document.getElementById(memberButtonId(returnTo))?.focus();
-  }, [selectedId]);
-
-  // Opening someone moves focus into the drawer; Escape closes it again.
+  // The notice clears itself; a newer one restarts the clock.
   useEffect(() => {
-    if (!selectedId) return;
-    drawerHeading.current?.focus();
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") closeDrawer();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [selectedId, closeDrawer]);
+    if (!toast) return;
+    const timer = window.setTimeout(
+      () => setToast((current) => (current?.id === toast.id ? null : current)),
+      TOAST_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [toast]);
 
-  /** Prefills the invite bar for a team (or a staff role) and jumps to it. */
+  const undoToast = async () => {
+    const undo = toast?.undo;
+    setToast(null);
+    if (undo) await undo();
+  };
+
+  /** Re-reads accounts after a team change renames or unassigns people. */
+  const refreshAccounts = async () => {
+    const response = await fetch("/api/admin/accounts", {
+      cache: "no-store",
+      credentials: "same-origin",
+    });
+    if (!response.ok) return;
+    const payload = (await readJson(response)) as { accounts: AccountView[] };
+    setAccounts(payload.accounts);
+  };
+
+  /** One account change; returns the updated account, or null after an error notice. */
+  const patchAccount = async (
+    userId: string,
+    body: Record<string, unknown>,
+  ): Promise<AccountView | null> => {
+    setAccountBusy(userId);
+    try {
+      const response = await fetch(`/api/admin/accounts/${userId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify(body),
+      });
+      const payload = await readJson(response);
+      if (!response.ok) {
+        throw new Error(extractError(payload, "The account could not be updated."));
+      }
+      const { account } = payload as { account: AccountView };
+      setAccounts((current) =>
+        (current ?? []).map((row) => (row.id === account.id ? account : row)),
+      );
+      return account;
+    } catch (error) {
+      showToast(
+        error instanceof Error ? error.message : "The account could not be updated.",
+        "error",
+      );
+      return null;
+    } finally {
+      setAccountBusy(null);
+    }
+  };
+
+  /** A reversible account change: applies it, then offers Undo. */
+  const changeAccount = async (
+    account: AccountView,
+    body: Record<string, unknown>,
+    undoBody: Record<string, unknown>,
+    message: string,
+  ) => {
+    setMenuOpen(null);
+    const updated = await patchAccount(account.id, body);
+    if (!updated) return;
+    showToast(message, "info", async () => {
+      if (await patchAccount(account.id, undoBody)) showToast("Undone.");
+    });
+  };
+
+  const teamName = (id: string | null) =>
+    teams.find((team) => team.id === id)?.name ?? "no team";
+
+  const moveAccount = (account: AccountView, nextTeamId: string | null) => {
+    if (nextTeamId === account.teamId) {
+      setMenuOpen(null);
+      return;
+    }
+    void changeAccount(
+      account,
+      { teamId: nextTeamId },
+      { teamId: account.teamId },
+      nextTeamId
+        ? `${account.name} moved to ${teamName(nextTeamId)}.`
+        : `${account.name} has no team now.`,
+    );
+  };
+
+  const deleteAccount = async (account: AccountView) => {
+    setConfirm(null);
+    setAccountBusy(account.id);
+    try {
+      const response = await fetch(`/api/admin/accounts/${account.id}`, {
+        method: "DELETE",
+        credentials: "same-origin",
+      });
+      const payload = await readJson(response);
+      if (!response.ok) {
+        throw new Error(extractError(payload, "The account could not be deleted."));
+      }
+      const { result } = payload as {
+        result: { id: string; mode: "deleted" | "anonymized" };
+      };
+      setAccounts((current) => (current ?? []).filter((row) => row.id !== result.id));
+      showToast(
+        result.mode === "anonymized"
+          ? `${account.name}'s account was deleted. Their trades stay on the team ledger as “Deleted user”.`
+          : `${account.name}'s account was deleted.`,
+      );
+    } catch (error) {
+      showToast(
+        error instanceof Error ? error.message : "The account could not be deleted.",
+        "error",
+      );
+    } finally {
+      setAccountBusy(null);
+    }
+  };
+
+  const copyEmail = async (account: AccountView) => {
+    setMenuOpen(null);
+    try {
+      await navigator.clipboard.writeText(account.email);
+      showToast(`Copied ${account.email}.`);
+    } catch {
+      showToast("Copy failed — select the email and copy it yourself.", "error");
+    }
+  };
+
+  /**
+   * Sends one team change. Every team route answers with the fresh overview,
+   * so the list updates from the server's own view of the teams.
+   */
+  const teamRequest = async (
+    busyKey: string,
+    path: string,
+    init: RequestInit,
+    fallback: string,
+  ): Promise<boolean> => {
+    setTeamBusy(busyKey);
+    try {
+      const response = await fetch(path, {
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        ...init,
+      });
+      const payload = await readJson(response);
+      if (!response.ok) throw new Error(extractError(payload, fallback));
+      const overview = payload as AdminOverview;
+      setTeams(overview.teams);
+      setTeamId((current) =>
+        overview.teams.some((team) => team.id === current)
+          ? current
+          : (overview.teams[0]?.id ?? ""),
+      );
+      void refreshAccounts();
+      return true;
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : fallback, "error");
+      return false;
+    } finally {
+      setTeamBusy(null);
+    }
+  };
+
+  const patchTeam = (team: AdminTeamSummary, body: Record<string, unknown>, fallback: string) =>
+    teamRequest(
+      `${team.id}`,
+      `/api/admin/teams/${encodeURIComponent(team.id)}`,
+      { method: "PATCH", body: JSON.stringify(body) },
+      fallback,
+    );
+
+  const putTeamCash = (team: AdminTeamSummary, cashCents: number) =>
+    teamRequest(
+      `${team.id}`,
+      `/api/admin/teams/${encodeURIComponent(team.id)}/cash`,
+      { method: "PATCH", body: JSON.stringify({ cashCents }) },
+      "The cash balance did not change.",
+    );
+
+  const addTeam = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const name = newTeamName.trim();
+    if (!name) return;
+    setAddTeamFeedback("");
+    const added = await teamRequest(
+      "create",
+      "/api/admin/teams",
+      { method: "POST", body: JSON.stringify({ name }) },
+      "The team could not be added.",
+    );
+    if (added) {
+      setNewTeamName("");
+      setAddTeamFeedback(`${name} was added with the competition's starting cash.`);
+    }
+  };
+
+  const startEditing = (team: AdminTeamSummary, field: Editing["field"]) => {
+    setMenuOpen(null);
+    setConfirm(null);
+    setEditing({
+      teamId: team.id,
+      field,
+      draft: field === "name" ? team.name : (team.cashCents / 100).toFixed(2),
+    });
+  };
+
+  const stopEditing = (team: AdminTeamSummary, field: Editing["field"]) => {
+    setEditing(null);
+    // Back to the value the edit started from.
+    window.setTimeout(() => document.getElementById(editButtonId(team.id, field))?.focus(), 0);
+  };
+
+  const saveEdit = async (event: FormEvent<HTMLFormElement>, team: AdminTeamSummary) => {
+    event.preventDefault();
+    if (!editing) return;
+    if (editing.field === "name") {
+      const name = editing.draft.trim();
+      if (!name) return;
+      if (name === team.name) return stopEditing(team, "name");
+      if (await patchTeam(team, { name }, "The team could not be renamed.")) {
+        stopEditing(team, "name");
+        showToast(`${team.name} is now ${name}.`, "info", async () => {
+          if (await patchTeam(team, { name: team.name }, "The team could not be renamed.")) {
+            showToast("Undone.");
+          }
+        });
+      }
+      return;
+    }
+    const cashCents = parseCashDraft(editing.draft);
+    if (cashCents === null) {
+      showToast("Enter a non-negative CAD amount with no more than two decimal places.", "error");
+      return;
+    }
+    if (cashCents === team.cashCents) return stopEditing(team, "cash");
+    if (await putTeamCash(team, cashCents)) {
+      stopEditing(team, "cash");
+      showToast(`${team.name}'s cash is now ${formatMoney(cashCents)}.`, "info", async () => {
+        if (await putTeamCash(team, team.cashCents)) showToast("Undone.");
+      });
+    }
+  };
+
+  const changeStanding = async (team: AdminTeamSummary, status: TeamStatus) => {
+    if (status === team.status) return;
+    if (status === "disqualified" && !(confirm?.kind === "disqualify" && confirm.id === team.id)) {
+      setConfirm({ kind: "disqualify", id: team.id });
+      return;
+    }
+    setConfirm(null);
+    if (await patchTeam(team, { status }, "The team's standing did not change.")) {
+      const message =
+        status === "active"
+          ? `${team.name} is active again.`
+          : status === "frozen"
+            ? `${team.name} is frozen. Its portfolio is kept and new trades are blocked.`
+            : `${team.name} is disqualified and out of the standings.`;
+      showToast(message, "info", async () => {
+        if (await patchTeam(team, { status: team.status }, "The team's standing did not change.")) {
+          showToast("Undone.");
+        }
+      });
+    }
+  };
+
+  const removeTeam = async (team: AdminTeamSummary) => {
+    setConfirm(null);
+    const memberCount = team.memberNames.length;
+    const removed = await teamRequest(
+      team.id,
+      `/api/admin/teams/${encodeURIComponent(team.id)}`,
+      { method: "DELETE" },
+      "The team could not be removed.",
+    );
+    if (removed) {
+      showToast(
+        memberCount === 0
+          ? `${team.name} was removed.`
+          : memberCount === 1
+            ? `${team.name} was removed. Its member has no team now.`
+            : `${team.name} was removed. Its ${memberCount} members have no team now.`,
+      );
+    }
+  };
+
+  /** Prefills the invite panel for a team (or a staff role) and jumps to it. */
   const inviteTo = (nextRole: UserRole, nextTeamId?: string) => {
     setRole(nextRole);
     if (nextTeamId) setTeamId(nextTeamId);
     document.getElementById(INVITE_EMAIL_ID)?.focus();
   };
 
+  const search = query.trim().toLowerCase();
+  const matches = (account: AccountView) =>
+    !search ||
+    account.name.toLowerCase().includes(search) ||
+    account.email.toLowerCase().includes(search);
+
   const teamIds = new Set(teams.map((team) => team.id));
-  const students = (accounts ?? []).filter((account) => account.role === "student");
-  const staff = (accounts ?? []).filter((account) => account.role !== "student");
+  const people = accounts ?? [];
+  const students = people.filter((account) => account.role === "student");
+  const staff = people.filter((account) => account.role !== "student");
   const unassigned = students.filter(
     (account) => !account.teamId || !teamIds.has(account.teamId),
   );
   const openInvitations = (invitations ?? []).filter(
     (invitation) => invitation.state === "active",
   );
+  const closedInvitations = (invitations ?? []).filter(
+    (invitation) => invitation.state !== "active",
+  );
+  const shownCount = people.filter(matches).length;
 
-  const renderMember = (account: AccountView) => {
-    const isSelf = account.id === actorId;
-    const dot = presence(account);
-
-    return (
-      <li key={account.id}>
+  const renderConfirm = (
+    label: string,
+    detail: string,
+    action: string,
+    onConfirm: () => void,
+  ) => (
+    <div className={styles.confirm} role="alertdialog" aria-label={label}>
+      <div>
+        <strong>{label}</strong>
+        <p>{detail}</p>
+      </div>
+      <div className={styles.confirmActions}>
         <button
           type="button"
-          id={memberButtonId(account.id)}
-          className={styles.member}
-          aria-expanded={account.id === selectedId}
-          aria-controls="account-drawer"
-          onClick={() => selectAccount(account.id)}
+          className="button button--secondary button--compact"
+          onClick={() => setConfirm(null)}
         >
-          <span className={styles.avatar} aria-hidden="true">
-            {initials(account.name)}
+          Cancel
+        </button>
+        <button
+          type="button"
+          className={`button button--compact ${styles.dangerButton}`}
+          onClick={onConfirm}
+        >
+          {action}
+        </button>
+      </div>
+    </div>
+  );
+
+  const renderPerson = (account: AccountView) => {
+    const isSelf = account.id === actorId;
+    const rowBusy = accountBusy === account.id;
+    const first = firstName(account.name);
+    const menuKey = `person:${account.id}`;
+    const canChangeRole = canInviteAdmins && !isSelf;
+    const canDelete = canInviteAdmins && !isSelf;
+
+    return (
+      <li key={account.id} id={memberRowId(account.id)}>
+        <div className={styles.person} data-busy={rowBusy || undefined}>
+          <span className={styles.personCell}>
+            <span className={styles.avatar} aria-hidden="true">
+              {initials(account.name)}
+            </span>
+            <span className={styles.who}>
+              <strong>{account.name}</strong>
+              <small>
+                {account.email}
+                {isSelf ? " · you" : ""}
+              </small>
+            </span>
           </span>
-          <span className={styles.memberText}>
-            <strong>
-              {account.name}
-              {isSelf ? " (you)" : ""}
-            </strong>
-            <small>
-              {account.role !== "student"
-                ? ROLE_LABELS[account.role]
-                : account.status === "suspended"
-                  ? "Suspended"
-                  : shortSignIn(account.lastLoginAt)}
-            </small>
+
+          <span className={styles.cell}>
+            {canChangeRole ? (
+              <select
+                className={`${styles.pill} ${roleClass(account.role)}`}
+                aria-label={`Role for ${account.name}`}
+                value={account.role}
+                disabled={rowBusy}
+                onChange={(event) => {
+                  const next = event.target.value as UserRole;
+                  void changeAccount(
+                    account,
+                    { role: next },
+                    { role: account.role },
+                    `${account.name} is now a ${ROLE_LABELS[next].toLowerCase()}.`,
+                  );
+                }}
+              >
+                <option value="student">Student</option>
+                <option value="host">Host</option>
+                <option value="platform_admin">Admin</option>
+              </select>
+            ) : (
+              <span className={`${styles.pill} ${styles.pillStatic} ${roleClass(account.role)}`}>
+                <span className="sr-only">Role: </span>
+                {SHORT_ROLE_LABELS[account.role]}
+              </span>
+            )}
           </span>
-          <span className={dot.className} title={dot.label}>
-            {/* A suspended person's line already says so. */}
-            {account.status !== "suspended" ? (
-              <span className="sr-only">{dot.label}</span>
+
+          <span className={styles.cell}>
+            {isSelf ? (
+              <span className={`${styles.pill} ${styles.pillStatic} ${styles.pillActive}`}>
+                <span className="sr-only">Status: </span>Active
+              </span>
+            ) : (
+              <select
+                className={`${styles.pill} ${account.status === "active" ? styles.pillActive : styles.pillWarn}`}
+                aria-label={`Status for ${account.name}`}
+                value={account.status}
+                disabled={rowBusy}
+                onChange={(event) => {
+                  const next = event.target.value as AccountView["status"];
+                  void changeAccount(
+                    account,
+                    { status: next },
+                    { status: account.status },
+                    next === "suspended"
+                      ? `${account.name} is suspended and can't sign in.`
+                      : `${account.name} is active again.`,
+                  );
+                }}
+              >
+                <option value="active">Active</option>
+                <option value="suspended">Suspended</option>
+              </select>
+            )}
+          </span>
+
+          <span className={`${styles.cell} ${styles.num} ${styles.colTrades}`}>
+            <span className="sr-only">Trades: </span>
+            {account.orderCount}
+          </span>
+          <span className={`${styles.cell} ${styles.mono} ${styles.colJoined}`}>
+            <span className="sr-only">Joined </span>
+            {shortDate(account.createdAt)}
+          </span>
+          <span className={`${styles.cell} ${styles.mono} ${styles.colSignIn}`}>
+            <span className="sr-only">Last sign-in: </span>
+            {account.lastLoginAt ? shortSignIn(account.lastLoginAt) : "Never"}
+          </span>
+
+          <span className={styles.cellEnd}>
+            {!isSelf ? (
+              <Popover
+                open={menuOpen === menuKey}
+                onOpenChange={(open) => {
+                  setMenuOpen(open ? menuKey : null);
+                  if (open) setConfirm(null);
+                }}
+                label={`More actions for ${account.name}`}
+                buttonClassName={styles.more}
+                buttonContent={<span aria-hidden="true">···</span>}
+              >
+                {account.role === "student" ? (
+                  <>
+                    <p className={styles.menuHeading}>Move {first} to</p>
+                    {[...teams.map((team) => ({ id: team.id as string | null, name: team.name })), { id: null, name: "No team" }].map(
+                      (option) => (
+                        <button
+                          key={option.id ?? "none"}
+                          type="button"
+                          className={styles.menuItem}
+                          aria-pressed={option.id === account.teamId}
+                          disabled={rowBusy}
+                          onClick={() => moveAccount(account, option.id)}
+                        >
+                          <span className={styles.menuBadge} aria-hidden="true">
+                            {option.id ? initials(option.name) : "–"}
+                          </span>
+                          {option.name}
+                          {option.id === account.teamId ? (
+                            <span className={styles.check} aria-hidden="true">
+                              ✓
+                            </span>
+                          ) : null}
+                        </button>
+                      ),
+                    )}
+                    <hr className={styles.menuRule} />
+                  </>
+                ) : null}
+                <button
+                  type="button"
+                  className={styles.menuItem}
+                  onClick={() => void copyEmail(account)}
+                >
+                  Copy email
+                </button>
+                {canDelete ? (
+                  <button
+                    type="button"
+                    className={`${styles.menuItem} ${styles.menuDanger}`}
+                    onClick={() => {
+                      setMenuOpen(null);
+                      setConfirm({ kind: "delete", id: account.id });
+                    }}
+                  >
+                    Delete {first}…
+                    <small>
+                      {account.orderCount > 0
+                        ? `${account.orderCount} ${account.orderCount === 1 ? "trade stays" : "trades stay"} as “Deleted user”`
+                        : "No trades · removes the account"}
+                    </small>
+                  </button>
+                ) : null}
+              </Popover>
             ) : null}
           </span>
-        </button>
+        </div>
+        {confirm?.kind === "delete" && confirm.id === account.id
+          ? renderConfirm(
+              `Delete ${account.name}?`,
+              (account.orderCount > 0
+                ? `Their ${account.orderCount} ${account.orderCount === 1 ? "trade stays" : "trades stay"} on ${account.teamName ?? "the team"}'s ledger as “Deleted user”.`
+                : `${first} has no trades, so the account is removed completely.`) +
+                (managed
+                  ? " Their sign-in at the identity provider isn't touched, so they can be invited again."
+                  : ""),
+              `Delete ${first}`,
+              () => void deleteAccount(account),
+            )
+          : null}
       </li>
     );
   };
 
-  const renderTeamCard = (
+  const renderEditable = (team: AdminTeamSummary, field: Editing["field"]) => {
+    const isEditing = editing?.teamId === team.id && editing.field === field;
+    const working = teamBusy === team.id;
+
+    if (isEditing && editing) {
+      return (
+        <form
+          className={`${styles.inlineEdit} ${field === "cash" ? styles.inlineCash : ""}`}
+          onSubmit={(event) => void saveEdit(event, team)}
+        >
+          {field === "cash" ? (
+            <span className={styles.cashPrefix} aria-hidden="true">
+              $
+            </span>
+          ) : null}
+          <input
+            ref={focusOnMount}
+            type={field === "cash" ? "number" : "text"}
+            aria-label={field === "cash" ? `Cash for ${team.name}` : `New name for ${team.name}`}
+            {...(field === "cash"
+              ? { min: "0", max: "1000000000000", step: "0.01", inputMode: "decimal" as const }
+              : { maxLength: TEAM_NAME_MAX_LENGTH, autoComplete: "off" })}
+            value={editing.draft}
+            onChange={(event) => setEditing({ ...editing, draft: event.target.value })}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.stopPropagation();
+                stopEditing(team, field);
+              }
+            }}
+            disabled={working}
+          />
+          <button
+            type="submit"
+            className={styles.saveEdit}
+            aria-label={field === "cash" ? "Save cash" : "Save name"}
+            disabled={working}
+          >
+            ✓
+          </button>
+          <button
+            type="button"
+            className={styles.cancelEdit}
+            aria-label="Cancel"
+            onClick={() => stopEditing(team, field)}
+            disabled={working}
+          >
+            ✕
+          </button>
+        </form>
+      );
+    }
+
+    return (
+      <button
+        type="button"
+        id={editButtonId(team.id, field)}
+        className={field === "cash" ? styles.editCash : styles.editName}
+        aria-label={field === "cash" ? `Set cash for ${team.name}` : `Rename ${team.name}`}
+        title={field === "cash" ? "Set cash" : "Rename"}
+        onClick={() => startEditing(team, field)}
+        disabled={teamBusy !== null}
+      >
+        <span>{field === "cash" ? formatMoney(team.cashCents) : team.name}</span>
+        <PencilGlyph />
+      </button>
+    );
+  };
+
+  const renderGroup = (
     key: string,
     title: string,
     members: AccountView[],
     options: {
-      waiting?: number;
-      flag?: string;
+      detail?: string;
+      badge?: "team" | "staff" | "none";
       invite?: { label: string; onClick: () => void };
-      empty?: string;
-    },
-  ) => (
-    <section key={key} className={styles.team} aria-label={title}>
-      <div className={styles.teamHead}>
-        <h3>
-          {title}
-          {options.flag ? (
-            <span className={`invite-state invite-state--revoked ${styles.teamFlag}`}>
-              {options.flag}
-            </span>
-          ) : null}
-        </h3>
-        <span className={styles.teamCount}>
-          {members.length} {members.length === 1 ? "member" : "members"}
-          {options.waiting ? ` · ${options.waiting} waiting` : ""}
-        </span>
-      </div>
-      {members.length > 0 ? (
-        <ul className={styles.members}>{members.map(renderMember)}</ul>
-      ) : (
-        <p className={styles.emptyTeam}>
-          {options.empty ?? "No members yet."}
-          {options.waiting === 1
-            ? " An invitation is waiting."
-            : options.waiting
-              ? ` ${options.waiting} invitations are waiting.`
-              : ""}
-        </p>
-      )}
-      {options.invite ? (
-        <button type="button" className={styles.addToTeam} onClick={options.invite.onClick}>
-          ＋ {options.invite.label}
-        </button>
-      ) : null}
-    </section>
-  );
+      team?: AdminTeamSummary;
+    } = {},
+  ) => {
+    const visible = members.filter(matches);
+    // A search hides groups with nobody matching.
+    if (search && visible.length === 0) return null;
+    const team = options.team;
+    const menuKey = `team:${key}`;
+
+    return (
+      <section key={key} className={styles.group} aria-label={title}>
+        <div className={styles.groupHead}>
+          <span
+            className={`${styles.badge} ${options.badge === "staff" ? styles.badgeStaff : options.badge === "none" ? styles.badgeNone : ""}`}
+            aria-hidden="true"
+          >
+            {options.badge === "none" ? "–" : initials(title)}
+          </span>
+          <div className={styles.groupTitle}>
+            {team ? (
+              <h3>{renderEditable(team, "name")}</h3>
+            ) : (
+              <h3>{title}</h3>
+            )}
+            {team ? (
+              <select
+                className={`${styles.pill} ${team.status === "active" ? styles.pillActive : styles.pillWarn}`}
+                aria-label={`Standing for ${team.name}`}
+                value={team.status}
+                disabled={teamBusy !== null}
+                onChange={(event) => void changeStanding(team, event.target.value as TeamStatus)}
+              >
+                <option value="active">Active</option>
+                <option value="frozen">Frozen</option>
+                <option value="disqualified">Disqualified</option>
+              </select>
+            ) : null}
+            {options.detail ? <span className={styles.groupDetail}>{options.detail}</span> : null}
+          </div>
+          <div className={styles.groupTools}>
+            {team ? (
+              <span className={styles.cashTool}>
+                <span className={styles.label}>Cash</span>
+                {renderEditable(team, "cash")}
+              </span>
+            ) : null}
+            {options.invite ? (
+              <button
+                type="button"
+                className={styles.groupInvite}
+                onClick={options.invite.onClick}
+              >
+                ＋ {options.invite.label}
+              </button>
+            ) : null}
+            {team ? (
+              <Popover
+                open={menuOpen === menuKey}
+                onOpenChange={(open) => setMenuOpen(open ? menuKey : null)}
+                label={`More team actions for ${team.name}`}
+                buttonClassName={styles.more}
+                buttonContent={<span aria-hidden="true">···</span>}
+              >
+                <button
+                  type="button"
+                  className={styles.menuItem}
+                  onClick={() => startEditing(team, "name")}
+                >
+                  Rename team
+                </button>
+                <button
+                  type="button"
+                  className={styles.menuItem}
+                  onClick={() => startEditing(team, "cash")}
+                >
+                  Set cash
+                </button>
+                <hr className={styles.menuRule} />
+                <button
+                  type="button"
+                  className={`${styles.menuItem} ${styles.menuDanger}`}
+                  onClick={() => {
+                    setMenuOpen(null);
+                    setConfirm({ kind: "remove", id: team.id });
+                  }}
+                >
+                  Remove team…
+                  <small>Deletes its portfolio and trades</small>
+                </button>
+              </Popover>
+            ) : null}
+          </div>
+        </div>
+
+        {team && confirm?.kind === "disqualify" && confirm.id === team.id
+          ? renderConfirm(
+              `Disqualify ${team.name}?`,
+              "It leaves the standings and can't trade. You can restore it later.",
+              `Disqualify ${team.name}`,
+              () => void changeStanding(team, "disqualified"),
+            )
+          : null}
+        {team && confirm?.kind === "remove" && confirm.id === team.id
+          ? renderConfirm(
+              `Remove ${team.name}?`,
+              `Deletes its portfolio and ${team.tradeCount} ${team.tradeCount === 1 ? "trade" : "trades"} for good. ${
+                team.memberNames.length === 0
+                  ? "It has no members."
+                  : `Its ${team.memberNames.length} ${team.memberNames.length === 1 ? "member stays" : "members stay"}, with no team.`
+              }`,
+              `Remove ${team.name}`,
+              () => void removeTeam(team),
+            )
+          : null}
+
+        {visible.length > 0 ? (
+          <ul className={styles.people}>{visible.map(renderPerson)}</ul>
+        ) : (
+          <p className={styles.empty}>No members yet.</p>
+        )}
+      </section>
+    );
+  };
+
+  const teamDetail = (memberCount: number, waiting: number) =>
+    `${memberCount} ${memberCount === 1 ? "member" : "members"}` +
+    (waiting ? ` · ${waiting} ${waiting === 1 ? "invite" : "invites"} waiting` : "");
 
   return (
     <main className="accounts-page">
@@ -503,7 +1164,7 @@ export function AccountsPanel({
         <header className="accounts-header">
           <div>
             <p className="route-state__brand">Luban Market Lab</p>
-            <h1>Accounts &amp; invitations</h1>
+            <h1>Team &amp; user management</h1>
           </div>
           <Link className="button button--secondary" href="/">
             Back to the trading room
@@ -518,419 +1179,299 @@ export function AccountsPanel({
           </p>
         ) : null}
 
-        <section className={styles.inviteBar} aria-labelledby="invite-heading">
-          <form className={styles.inviteForm} onSubmit={(event) => void createInvitation(event)}>
-            <h2 id="invite-heading">Invite</h2>
-            <label>
-              <span className={styles.label}>Role</span>
-              <select
-                value={role}
-                onChange={(event) => setRole(event.target.value as UserRole)}
-                disabled={busy}
-              >
-                <option value="student">Student</option>
-                {canInviteAdmins ? (
-                  <>
-                    <option value="host">Competition host</option>
-                    <option value="platform_admin">Platform admin</option>
-                  </>
+        <div className={styles.layout}>
+          <aside className={styles.side}>
+            <section className={styles.sideSection} aria-labelledby="invite-heading">
+              <h2 id="invite-heading">Invite someone</h2>
+              <form className={styles.inviteForm} onSubmit={(event) => void createInvitation(event)}>
+                <label>
+                  <span className={styles.label}>Role</span>
+                  <select
+                    value={role}
+                    onChange={(event) => setRole(event.target.value as UserRole)}
+                    disabled={busy}
+                  >
+                    <option value="student">Student</option>
+                    {canInviteAdmins ? (
+                      <>
+                        <option value="host">Competition host</option>
+                        <option value="platform_admin">Platform admin</option>
+                      </>
+                    ) : null}
+                  </select>
+                </label>
+                {role === "student" ? (
+                  <label>
+                    <span className={styles.label}>Team</span>
+                    <select
+                      value={teamId}
+                      onChange={(event) => setTeamId(event.target.value)}
+                      disabled={busy || teams.length === 0}
+                      required
+                    >
+                      {teams.length === 0 ? (
+                        <option value="">No teams available</option>
+                      ) : null}
+                      {teams.map((team) => (
+                        <option key={team.id} value={team.id}>
+                          {team.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                 ) : null}
-              </select>
-            </label>
-            {role === "student" ? (
-              <label>
-                <span className={styles.label}>Team</span>
-                <select
-                  value={teamId}
-                  onChange={(event) => setTeamId(event.target.value)}
-                  disabled={busy || teams.length === 0}
-                  required
+                <label>
+                  <span className={styles.label}>Email · locks the invite</span>
+                  <input
+                    id={INVITE_EMAIL_ID}
+                    type="email"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                    placeholder="student@example.ca"
+                    maxLength={254}
+                    disabled={busy}
+                  />
+                </label>
+                <label>
+                  <span className={styles.label}>Name · optional</span>
+                  <input
+                    type="text"
+                    value={invitedName}
+                    onChange={(event) => setInvitedName(event.target.value)}
+                    placeholder="Jordan Lee"
+                    maxLength={80}
+                    disabled={busy}
+                  />
+                </label>
+                <button
+                  className="button button--primary"
+                  type="submit"
+                  disabled={busy || (role === "student" && !teamId)}
                 >
-                  {teams.length === 0 ? (
-                    <option value="">No teams available</option>
-                  ) : null}
-                  {teams.map((team) => (
-                    <option key={team.id} value={team.id}>
-                      {team.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : null}
-            <label>
-              <span className={styles.label}>Email · optional, locks the invite</span>
-              <input
-                id={INVITE_EMAIL_ID}
-                type="email"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-                placeholder="student@example.ca"
-                maxLength={254}
-                disabled={busy}
-              />
-            </label>
-            <label>
-              <span className={styles.label}>Name · optional</span>
-              <input
-                type="text"
-                value={invitedName}
-                onChange={(event) => setInvitedName(event.target.value)}
-                placeholder="Jordan Lee"
-                maxLength={80}
-                disabled={busy}
-              />
-            </label>
-            <button
-              className="button button--primary"
-              type="submit"
-              disabled={busy || (role === "student" && !teamId)}
-            >
-              {busy ? "Creating…" : "Create link"}
-            </button>
-          </form>
+                  {busy ? "Creating…" : "Create invitation link"}
+                </button>
+              </form>
 
-          {created ? (
-            <div className="accounts-created" role="status">
-              <strong>
-                Invitation created. This link is shown once — copy it now and
-                send it to the {ROLE_LABELS[created.invitation.role]}.
-              </strong>
-              <div className="accounts-created__link">
-                <code>{created.joinUrl ?? created.joinPath}</code>
+              {created ? (
+                <div className={styles.created} role="status">
+                  <span className={styles.label}>Link ready · shown once</span>
+                  <p>
+                    Copy it now and send it to the{" "}
+                    {ROLE_LABELS[created.invitation.role].toLowerCase()}.
+                  </p>
+                  <code>{created.joinUrl ?? created.joinPath}</code>
+                  <button
+                    className="button button--secondary button--compact"
+                    type="button"
+                    onClick={() => void copyLink()}
+                  >
+                    {copied ? "Copied" : "Copy link"}
+                  </button>
+                </div>
+              ) : null}
+
+              {feedback ? (
+                <p className="accounts-feedback" role="alert">
+                  {feedback}
+                </p>
+              ) : null}
+            </section>
+
+            <section className={styles.sideSection} aria-labelledby="add-team-heading">
+              <h2 id="add-team-heading">Add a team</h2>
+              <form className={styles.inviteForm} onSubmit={(event) => void addTeam(event)}>
+                <label>
+                  <span className={styles.label}>Team name</span>
+                  <input
+                    type="text"
+                    maxLength={TEAM_NAME_MAX_LENGTH}
+                    autoComplete="off"
+                    value={newTeamName}
+                    onChange={(event) => setNewTeamName(event.target.value)}
+                    placeholder="Bay St Bulls"
+                    disabled={teamBusy !== null}
+                  />
+                </label>
                 <button
                   className="button button--secondary"
-                  type="button"
-                  onClick={() => void copyLink()}
+                  type="submit"
+                  disabled={teamBusy !== null || !newTeamName.trim()}
                 >
-                  {copied ? "Copied" : "Copy link"}
+                  {teamBusy === "create" ? "Adding…" : "Add team"}
                 </button>
-              </div>
-            </div>
-          ) : null}
+              </form>
+              <p className={styles.sideFeedback} role="status" aria-live="polite">
+                {addTeamFeedback}
+              </p>
+            </section>
 
-          {feedback ? (
-            <p className="accounts-feedback" role="alert">
-              {feedback}
-            </p>
-          ) : null}
-        </section>
+            <section className={styles.sideSection} aria-labelledby="open-invitations-heading">
+              <h2 id="open-invitations-heading">
+                Open invitations · {openInvitations.length}
+              </h2>
+              {invitations === null ? (
+                <p className={styles.empty}>Loading invitations…</p>
+              ) : openInvitations.length === 0 ? (
+                <p className={styles.empty}>No open invitations.</p>
+              ) : (
+                <ul className={styles.invites}>
+                  {openInvitations.map((invitation) => (
+                    <li key={invitation.id}>
+                      <div>
+                        <strong>{invitationFor(invitation)}</strong>
+                        <small>
+                          {ROLE_LABELS[invitation.role]}
+                          {invitation.teamName ? ` · ${invitation.teamName}` : ""} · expires{" "}
+                          {shortDate(invitation.expiresAt)}
+                        </small>
+                      </div>
+                      <button
+                        type="button"
+                        className="button button--danger accounts-revoke"
+                        aria-label={`Revoke the invitation for ${invitationFor(invitation)}`}
+                        onClick={() => void revoke(invitation.id)}
+                        disabled={revokeBusy === invitation.id}
+                      >
+                        {revokeBusy === invitation.id ? "Revoking…" : "Revoke"}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
 
-        <section className={styles.pending} aria-labelledby="pending-heading">
-          <h2 id="pending-heading" className={styles.label}>
-            Waiting to join
-          </h2>
-          {invitations === null ? (
-            <span className={styles.noPending}>Loading invitations…</span>
-          ) : openInvitations.length === 0 ? (
-            <span className={styles.noPending}>No open invitations.</span>
-          ) : (
-            <ul className={styles.pills}>
-              {openInvitations.map((invitation) => (
-                <li
-                  key={invitation.id}
-                  className={styles.pill}
-                  title={`Expires ${fullDateTime(invitation.expiresAt)}`}
-                >
-                  {invitationFor(invitation)}
-                  <span className={styles.pillTag}>
-                    {invitation.teamName ?? ROLE_LABELS[invitation.role]}
-                  </span>
+              {closedInvitations.length > 0 ? (
+                <>
                   <button
                     type="button"
-                    className={styles.pillRevoke}
-                    aria-label={`Revoke the invitation for ${invitationFor(invitation)}`}
-                    title="Revoke"
-                    onClick={() => void revoke(invitation.id)}
-                    disabled={revokeBusy === invitation.id}
+                    className={styles.historyToggle}
+                    aria-expanded={showHistory}
+                    aria-controls="invitation-history"
+                    onClick={() => setShowHistory((open) => !open)}
                   >
-                    ×
+                    {showHistory ? "Hide" : "Show"} used &amp; expired ({closedInvitations.length})
                   </button>
-                </li>
-              ))}
-            </ul>
-          )}
-          <button
-            type="button"
-            className={styles.historyToggle}
-            aria-expanded={showHistory}
-            aria-controls="invitation-history"
-            onClick={() => setShowHistory((open) => !open)}
-          >
-            {showHistory ? "Hide invitation history" : "Invitation history"}
-          </button>
-        </section>
-
-        {showHistory ? (
-          <section
-            id="invitation-history"
-            className={styles.history}
-            aria-labelledby="invitations-heading"
-          >
-            <h2 id="invitations-heading" className="sr-only">
-              Invitation history
-            </h2>
-            {invitations === null || invitations.length === 0 ? (
-              <p className={styles.note}>No invitations yet.</p>
-            ) : (
-              <div className="accounts-table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th scope="col">Role</th>
-                      <th scope="col">For</th>
-                      <th scope="col">Team</th>
-                      <th scope="col">State</th>
-                      <th scope="col">Expires</th>
-                      <th scope="col">Created by</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {invitations.map((invitation) => (
-                      <tr key={invitation.id}>
-                        <td>{ROLE_LABELS[invitation.role]}</td>
-                        <td>{invitationFor(invitation)}</td>
-                        <td>{invitation.teamName ?? "—"}</td>
-                        <td>
-                          <span
-                            className={`invite-state invite-state--${invitation.state}`}
-                          >
+                  {showHistory ? (
+                    <ul
+                      id="invitation-history"
+                      className={`${styles.invites} ${styles.history}`}
+                      aria-label="Invitation history"
+                    >
+                      {closedInvitations.map((invitation) => (
+                        <li key={invitation.id}>
+                          <div>
+                            <strong>{invitationFor(invitation)}</strong>
+                            <small>
+                              {ROLE_LABELS[invitation.role]}
+                              {invitation.teamName ? ` · ${invitation.teamName}` : ""}
+                              {invitation.state === "used" && invitation.usedByName
+                                ? ` · joined as ${invitation.usedByName}`
+                                : ""}
+                            </small>
+                          </div>
+                          <span className={`invite-state invite-state--${invitation.state}`}>
                             {stateLabel(invitation.state)}
                           </span>
-                          {invitation.state === "used" && invitation.usedByName
-                            ? ` by ${invitation.usedByName}`
-                            : null}
-                        </td>
-                        <td>{fullDateTime(invitation.expiresAt)}</td>
-                        <td>{invitation.createdByName ?? "System"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
-        ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </>
+              ) : null}
+            </section>
+          </aside>
 
-        <div className={styles.body} data-drawer={selected ? "open" : "closed"}>
-          <section className={styles.roster} aria-labelledby="roster-heading">
-            <h2 id="roster-heading" className="sr-only">
-              People by team
-            </h2>
+          <section className={styles.main} aria-labelledby="people-heading">
+            <div className={styles.mainHead}>
+              <h2 id="people-heading">
+                People · {search ? `${shownCount} of ${people.length}` : people.length}
+              </h2>
+              <label className={styles.search}>
+                <span className="sr-only">Search people</span>
+                <input
+                  type="search"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="Search name or email"
+                />
+              </label>
+            </div>
+
+            <div className={styles.columns} aria-hidden="true">
+              <span>Person</span>
+              <span>Role</span>
+              <span>Status</span>
+              <span className={`${styles.num} ${styles.colTrades}`}>Trades</span>
+              <span className={styles.colJoined}>Joined</span>
+              <span className={styles.colSignIn}>Last sign-in</span>
+              <span />
+            </div>
+
             {accounts === null ? (
-              <p className={styles.note}>Loading accounts…</p>
+              <p className={styles.empty}>Loading accounts…</p>
             ) : (
-              <div className={styles.teams}>
-                {teams.map((team) =>
-                  renderTeamCard(
-                    team.id,
-                    team.name,
-                    students.filter((account) => account.teamId === team.id),
-                    {
-                      waiting: openInvitations.filter(
-                        (invitation) => invitation.teamId === team.id,
-                      ).length,
-                      flag: team.status === "active" ? undefined : team.status,
-                      invite: {
-                        label: "Invite to team",
-                        onClick: () => inviteTo("student", team.id),
-                      },
-                    },
-                  ),
-                )}
+              <>
+                {/* Teams with people first, then the empty ones. */}
+                {[...teams]
+                  .sort(
+                    (left, right) =>
+                      Number(!students.some((account) => account.teamId === left.id)) -
+                      Number(!students.some((account) => account.teamId === right.id)),
+                  )
+                  .map((team) => {
+                    const members = students.filter((account) => account.teamId === team.id);
+                    const waiting = openInvitations.filter(
+                      (invitation) => invitation.teamId === team.id,
+                    ).length;
+                    return renderGroup(team.id, team.name, members, {
+                      detail: teamDetail(members.length, waiting),
+                      badge: "team",
+                      invite: { label: "Invite", onClick: () => inviteTo("student", team.id) },
+                      team,
+                    });
+                  })}
                 {unassigned.length > 0
-                  ? renderTeamCard("no-team", "No team", unassigned, {})
+                  ? renderGroup("no-team", "No team", unassigned, {
+                      detail: teamDetail(unassigned.length, 0),
+                      badge: "none",
+                    })
                   : null}
-                {staff.length > 0 || canInviteAdmins
-                  ? renderTeamCard("staff", "Staff", staff, {
-                      empty: "No hosts or admins yet.",
+                {staff.length > 0
+                  ? renderGroup("staff", "Staff", staff, {
+                      detail: "Hosts & admins",
+                      badge: "staff",
                       invite: canInviteAdmins
                         ? { label: "Invite a host", onClick: () => inviteTo("host") }
                         : undefined,
                     })
                   : null}
-              </div>
+                {search && shownCount === 0 ? (
+                  <p className={styles.empty}>Nobody matches “{query.trim()}”.</p>
+                ) : null}
+              </>
             )}
-            {accounts !== null ? (
-              <div className={styles.legend} aria-hidden="true">
-                <span>
-                  <i className={`${styles.dot} ${styles.dotRecent}`} />
-                  Signed in this week
-                </span>
-                <span>
-                  <i className={styles.dot} />
-                  Not recently
-                </span>
-                <span>
-                  <i className={`${styles.dot} ${styles.dotSuspended}`} />
-                  Suspended
-                </span>
-              </div>
-            ) : null}
-            {!selected && accountFeedback ? (
-              <p className="accounts-feedback" role="alert">
-                {accountFeedback}
-              </p>
-            ) : null}
           </section>
-
-          {selected ? (
-            <aside
-              id="account-drawer"
-              className={styles.drawer}
-              aria-labelledby="account-drawer-name"
-            >
-              <div className={styles.drawerTop}>
-                <span className={styles.label}>Account</span>
-                <button
-                  type="button"
-                  className={styles.close}
-                  aria-label="Close account details"
-                  onClick={closeDrawer}
-                >
-                  ×
-                </button>
-              </div>
-              {(() => {
-                const isSelf = selected.id === actorId;
-                const rowBusy = accountBusy === selected.id;
-                const first = firstName(selected.name);
-
-                return (
-                  <>
-                    <div className={styles.who}>
-                      <span className={styles.avatar} aria-hidden="true">
-                        {initials(selected.name)}
-                      </span>
-                      <div>
-                        <h3 id="account-drawer-name" ref={drawerHeading} tabIndex={-1}>
-                          {selected.name}
-                          {isSelf ? " (you)" : ""}
-                        </h3>
-                        <p>{selected.email}</p>
-                      </div>
-                    </div>
-
-                    <dl className={styles.facts}>
-                      <dt className={styles.label}>Role</dt>
-                      <dd>
-                        {canInviteAdmins && !isSelf ? (
-                          <select
-                            aria-label={`Role for ${selected.name}`}
-                            value={selected.role}
-                            disabled={rowBusy}
-                            onChange={(event) =>
-                              void patchAccount(
-                                selected.id,
-                                { role: event.target.value },
-                                "Changing role…",
-                              )
-                            }
-                          >
-                            <option value="student">Student</option>
-                            <option value="host">Host</option>
-                            <option value="platform_admin">Platform admin</option>
-                          </select>
-                        ) : (
-                          ROLE_LABELS[selected.role]
-                        )}
-                      </dd>
-                      <dt className={styles.label}>Team</dt>
-                      <dd>
-                        {selected.role === "student" && !isSelf ? (
-                          <select
-                            aria-label={`Team for ${selected.name}`}
-                            value={selected.teamId ?? ""}
-                            disabled={rowBusy}
-                            onChange={(event) =>
-                              void patchAccount(
-                                selected.id,
-                                { teamId: event.target.value || null },
-                                "Moving team…",
-                              )
-                            }
-                          >
-                            <option value="">No team</option>
-                            {teams.map((team) => (
-                              <option key={team.id} value={team.id}>
-                                {team.name}
-                              </option>
-                            ))}
-                          </select>
-                        ) : (
-                          selected.teamName ?? "—"
-                        )}
-                      </dd>
-                      <dt className={styles.label}>Status</dt>
-                      <dd>
-                        <span
-                          className={`invite-state invite-state--${selected.status === "active" ? "active" : "revoked"}`}
-                        >
-                          {selected.status}
-                        </span>
-                      </dd>
-                      <dt className={styles.label}>Last sign-in</dt>
-                      <dd className={styles.mono}>
-                        {selected.lastLoginAt ? fullDateTime(selected.lastLoginAt) : "Never"}
-                      </dd>
-                      <dt className={styles.label}>Joined</dt>
-                      <dd className={styles.mono}>{fullDateTime(selected.createdAt)}</dd>
-                      <dt className={styles.label}>Trades</dt>
-                      <dd className={styles.mono}>{selected.orderCount}</dd>
-                    </dl>
-
-                    {!isSelf ? (
-                      <button
-                        type="button"
-                        className="button button--secondary"
-                        disabled={rowBusy}
-                        onClick={() =>
-                          void patchAccount(
-                            selected.id,
-                            {
-                              status:
-                                selected.status === "active" ? "suspended" : "active",
-                            },
-                            selected.status === "active" ? "Suspending…" : "Restoring…",
-                          )
-                        }
-                      >
-                        {selected.status === "active" ? "Suspend account" : "Restore account"}
-                      </button>
-                    ) : null}
-
-                    {canInviteAdmins && !isSelf ? (
-                      <div className={styles.dangerZone}>
-                        <span className={styles.label}>Delete account</span>
-                        <p>
-                          {selected.orderCount > 0
-                            ? `${first}'s ${selected.orderCount} ${selected.orderCount === 1 ? "trade stays" : "trades stay"} on ${selected.teamName ?? "the team"}'s ledger as “Deleted user”.`
-                            : `${first} has no trades, so the account is removed completely.`}
-                          {managed
-                            ? " Their sign-in at the identity provider isn't touched, so they can be invited again later."
-                            : ""}
-                        </p>
-                        <button
-                          type="button"
-                          className="button button--danger accounts-revoke"
-                          disabled={rowBusy}
-                          onClick={() => void removeAccount(selected.id)}
-                        >
-                          {deleteArmed === selected.id ? `Confirm: delete ${first}` : `Delete ${first}`}
-                        </button>
-                      </div>
-                    ) : null}
-
-                    {accountFeedback ? (
-                      <p className={`accounts-feedback ${styles.drawerFeedback}`} role="alert">
-                        {accountFeedback}
-                      </p>
-                    ) : null}
-                  </>
-                );
-              })()}
-            </aside>
-          ) : null}
         </div>
+      </div>
+
+      <div className={styles.toastRegion} role="status" aria-live="polite">
+        {toast ? (
+          <div className={`${styles.toast} ${toast.tone === "error" ? styles.toastError : ""}`}>
+            <span>{toast.message}</span>
+            {toast.undo ? (
+              <button type="button" className={styles.toastUndo} onClick={() => void undoToast()}>
+                Undo
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className={styles.toastClose}
+              aria-label="Dismiss"
+              onClick={() => setToast(null)}
+            >
+              ✕
+            </button>
+          </div>
+        ) : null}
       </div>
     </main>
   );
