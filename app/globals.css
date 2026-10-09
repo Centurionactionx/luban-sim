@@ -2549,6 +2549,16 @@ a {
   line-height: 0.98;
 }
 
+.route-state h1.route-state__title--lines {
+  max-width: none;
+  font-size: clamp(24px, 6vw, 44px);
+}
+
+.route-state__title--lines span {
+  display: block;
+  white-space: nowrap;
+}
+
 .route-state p:not(.route-state__brand) {
   max-width: 55ch;
   margin-top: 20px;
