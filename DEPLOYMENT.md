@@ -100,7 +100,7 @@ All prices, including crypto and the USD to CAD rate, come from Yahoo Finance's 
 
 Waiting orders are off for students until `LUBAN_ENABLE_WORKING_ORDERS=true`. Platform admins can always use them in their private sandbox, which is the way to try them on production before opening them up.
 
-A buy can be a market or limit order; a sell can be market, limit, stop loss, or take profit. Buys can carry an optional take profit and stop loss (a bracket); with both, whichever fills first cancels the other. A waiting buy sets aside its cost at the limit (plus 2% on USD listings) and a waiting sell sets aside its shares, so nothing can be spent twice. Each team can have 20 waiting orders. Day orders end at the 4:00 p.m. ET close (midnight ET for crypto); Good until cancelled orders last until they fill, a teammate cancels them, or the competition ends.
+A buy can be a market or limit order; a sell can be market, limit, stop loss, or take profit. Buys can carry an optional take profit and stop loss (a bracket); with both, whichever fills first cancels the other. A waiting buy sets aside its cost at the limit (plus 2% on USD listings) and a waiting sell sets aside its shares, so nothing can be spent twice. Each team can have 20 waiting orders. Day orders end at the 4:00 p.m. ET close of the next session, skipping TSX holidays for CAD listings and US market holidays for USD ones (midnight ET for crypto; holiday lists in `lib/server/working-order-book.ts` cover 2026–2027); Good until cancelled orders last until they fill, a teammate cancels them, or the competition ends.
 
 The price checker (`lib/server/working-order-engine.ts`) runs from two places:
 

@@ -678,6 +678,10 @@ const ORDER_TYPE_LABELS: Record<TicketOrderType, string> = {
 };
 const BUY_ORDER_TYPES: TicketOrderType[] = ["MARKET", "LIMIT"];
 const SELL_ORDER_TYPES: TicketOrderType[] = ["MARKET", "LIMIT", "STOP_LOSS", "TAKE_PROFIT"];
+const STALE_SNAPSHOT_MESSAGE =
+  "Showing the last real market snapshot. Trading waits for a fresh quote.";
+/** How long an order request may hang before the ticket offers a retry. */
+const ORDER_REQUEST_TIMEOUT_MS = 20_000;
 const MAX_WAITING_ORDERS = 20;
 const MAX_ORDER_PRICE_CENTS = 10_000_000_000;
 
@@ -2754,6 +2758,10 @@ export function SimulatorApp({
   const [connectionError, setConnectionError] = useState("");
   const [selectedSymbol, setSelectedSymbol] = useState("SHOP.TO");
   const [selectedQuote, setSelectedQuote] = useState<Quote>(fallbackQuotes[0]);
+  // The symbol on screen right now, and a counter that every new pick bumps,
+  // so a slow lookup for an earlier pick can't land on top of a later one.
+  const selectedSymbolRef = useRef(selectedSymbol);
+  const selectionRequest = useRef(0);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<InstrumentSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
@@ -2987,6 +2995,17 @@ export function SimulatorApp({
         );
         return liveQuote ?? current;
       });
+      // A fresh price retires the "waiting for a fresh quote" notice.
+      const liveSelected = nextDashboard.availableSymbols.find(
+        (quote) => quote.symbol === selectedSymbolRef.current,
+      );
+      if (liveSelected && !liveSelected.isStale) {
+        setTicketStatus((current) =>
+          current.message === STALE_SNAPSHOT_MESSAGE
+            ? { kind: "idle", message: "Ready for a simulated order." }
+            : current,
+        );
+      }
       setConnection("connected");
       setConnectionError("");
 
@@ -3092,7 +3111,7 @@ export function SimulatorApp({
         if (payload.quote.isStale || payload.history.isStale) {
           setTicketStatus({
             kind: "error",
-            message: "Showing the last real market snapshot. Trading waits for a fresh quote.",
+            message: STALE_SNAPSHOT_MESSAGE,
           });
         }
       } catch (error) {
@@ -3392,6 +3411,11 @@ export function SimulatorApp({
   const accountName = isPlatformAdmin ? "admin test account" : "team";
   // Why the order button is disabled, in plain words, or null when it isn't.
   // Shown live under the ticket so a greyed-out button always explains itself.
+  // A host can end the competition before its scheduled end; the scheduled
+  // date would then read as a future "ended" date.
+  const competitionEndedEarly =
+    dashboard.competition.status === "ended" &&
+    dashboard.competition.endsAt > dashboard.serverTime;
   const tradeBlockedReason: string | null =
     connection !== "connected"
       ? "Wait for the simulator to reconnect before trading."
@@ -3399,7 +3423,9 @@ export function SimulatorApp({
         ? "Trading waits for a fresh market quote."
         : tradingHaltReason
           ? tradingHaltReason
-          : isPlatformAdmin && !hasAdminTradingAccount
+          : side === "BUY" && selectedQuote.buyBlockedReason
+            ? selectedQuote.buyBlockedReason
+            : isPlatformAdmin && !hasAdminTradingAccount
             ? "Set your admin test cash before placing an order."
             : isCompetitionHost
               ? "Host accounts are view-only and cannot place orders."
@@ -3411,7 +3437,9 @@ export function SimulatorApp({
                     : dashboard.competition.phase === "scheduled"
                       ? `Trading opens ${formatScheduleInstant(dashboard.competition.startsAt)}.`
                       : dashboard.competition.phase === "ended"
-                        ? `This competition ended ${formatScheduleInstant(dashboard.competition.endsAt)}.`
+                        ? competitionEndedEarly
+                          ? "The host has ended this competition."
+                          : `This competition ended ${formatScheduleInstant(dashboard.competition.endsAt)}.`
                         : dashboard.competition.phase === "paused"
                           ? "Trading is paused by the host."
                           : "Trading is not open for your account yet."
@@ -3786,6 +3814,7 @@ export function SimulatorApp({
     result: Pick<InstrumentSearchResult, "symbol">,
     manageSearching = true,
   ) => {
+    const request = ++selectionRequest.current;
     if (manageSearching) setSearching(true);
     setTicketStatus({
       kind: "working",
@@ -3797,6 +3826,8 @@ export function SimulatorApp({
         { cache: "no-store", credentials: "same-origin" },
       );
       const payload = (await readJson(response)) as { results?: Quote[] } & ApiErrorShape;
+      // Another symbol was picked while this one loaded: that pick wins.
+      if (request !== selectionRequest.current) return;
       if (!response.ok) {
         throw new Error(extractError(payload, `Could not load ${result.symbol}.`));
       }
@@ -3808,6 +3839,7 @@ export function SimulatorApp({
       }
       selectQuote(quote);
     } catch (error) {
+      if (request !== selectionRequest.current) return;
       setTicketStatus({
         kind: "error",
         message: error instanceof Error ? error.message : `Could not load ${result.symbol}.`,
@@ -3818,6 +3850,9 @@ export function SimulatorApp({
   };
 
   const selectQuote = (quote: Quote) => {
+    selectionRequest.current += 1;
+    const previousSymbol = selectedSymbolRef.current;
+    selectedSymbolRef.current = quote.symbol;
     setSelectedSymbol(quote.symbol);
     setSelectedQuote(quote);
     setSearchQuery("");
@@ -3827,7 +3862,7 @@ export function SimulatorApp({
     setQuoteHistory(null);
     // Prices typed for another listing mean nothing for this one (different
     // currency, scale, or lot size), so they start blank again.
-    if (quote.symbol !== selectedQuote.symbol) {
+    if (quote.symbol !== previousSymbol) {
       setTriggerPrice("");
       setTakeProfitPrice("");
       setStopLossPrice("");
@@ -3930,6 +3965,7 @@ export function SimulatorApp({
       try {
         response = await fetch("/api/working-orders", {
           method: "POST",
+          signal: AbortSignal.timeout(ORDER_REQUEST_TIMEOUT_MS),
           headers: {
             "Content-Type": "application/json",
             "Idempotency-Key": idempotencyKey,
@@ -3946,7 +3982,7 @@ export function SimulatorApp({
         });
       } catch {
         throw new Error(
-          "The server could not be reached. Retry this ticket — the same order can't be placed twice.",
+          "The server didn't answer. Retry this ticket — the same order can't be placed twice.",
         );
       }
       const payload = await readJson(response);
@@ -3964,16 +4000,31 @@ export function SimulatorApp({
       const amount = selectedIsCrypto
         ? `${number.format(entry.quantity)} ${unitWord("CRYPTO", entry.quantity)} of ${entry.symbol}`
         : `${number.format(entry.quantity)} ${entry.symbol}`;
-      setTicketStatus({
-        kind: "success",
-        message: `${workingOrderName(entry.orderType, entry.side)} for ${amount} at ${formatWorkingOrderPrice(entry)} is waiting ${
-          entry.timeInForce === "DAY" && entry.expiresAt
-            ? `until ${formatScheduleInstant(entry.expiresAt)}`
-            : "until it fills or is cancelled"
-        }.${entry.reservedCashCents > 0 ? ` ${formatMoney(entry.reservedCashCents)} is set aside for it.` : ""}${
-          bracket ? " Its exits start watching once it fills." : ""
-        }`,
-      });
+      const label = `${workingOrderName(entry.orderType, entry.side)} for ${amount} at ${formatWorkingOrderPrice(entry)}`;
+      // A retry replays the order the first attempt created, which may have
+      // filled or ended since; report where it actually stands.
+      const stillWaiting = entry.status === "WORKING" || entry.status === "PENDING_PARENT";
+      setTicketStatus(
+        stillWaiting
+          ? {
+              kind: "success",
+              message: `${label} is waiting ${
+                entry.timeInForce === "DAY" && entry.expiresAt
+                  ? `until ${formatScheduleInstant(entry.expiresAt)}`
+                  : "until it fills or is cancelled"
+              }.${entry.reservedCashCents > 0 ? ` ${formatMoney(entry.reservedCashCents)} is set aside for it.` : ""}${
+                bracket ? " Its exits start watching once it fills." : ""
+              }`,
+            }
+          : entry.status === "FILLED"
+            ? { kind: "success", message: `${label} was placed and has already filled.` }
+            : {
+                kind: "error",
+                message: `${label} was placed but is no longer waiting${
+                  entry.statusReason ? `: ${entry.statusReason.replace(/\.$/, "")}` : ""
+                }.`,
+              },
+      );
       setTriggerPrice("");
       setTakeProfitPrice("");
       setStopLossPrice("");
@@ -4069,6 +4120,7 @@ export function SimulatorApp({
       try {
         response = await fetch("/api/orders", {
           method: "POST",
+          signal: AbortSignal.timeout(ORDER_REQUEST_TIMEOUT_MS),
           headers: {
             "Content-Type": "application/json",
             "Idempotency-Key": idempotencyKey,
@@ -4085,7 +4137,7 @@ export function SimulatorApp({
         // No response arrived, so the order may or may not have committed.
         // The key is kept: pressing the button again replays safely.
         throw new Error(
-          "The server could not be reached. Retry this ticket — the same order cannot fill twice.",
+          "The server didn't answer. Retry this ticket — the same order cannot fill twice.",
         );
       }
 

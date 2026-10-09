@@ -88,6 +88,31 @@ export function isSymbolBlocked(symbol: string): boolean {
   });
 }
 
+/** A crypto lot worth less than this (CAD cents) can be sold but not bought. */
+export const MIN_CRYPTO_LOT_CAD_CENTS = 100;
+
+/**
+ * Why a new buy of this quote would be refused, in the words the order
+ * routes use, or null. Selling is never blocked by these rules.
+ */
+export function buyBlockedReason(quote: Quote): string | null {
+  if (!isAssetClassEnabled(quote.assetClass)) {
+    return `${quote.assetClass === "CRYPTO" ? "Crypto" : "ETF"} trading is not open in this competition.`;
+  }
+  if (isSymbolBlocked(quote.symbol)) {
+    return `${quote.symbol} has been removed from the simulator. Existing holdings can still be sold.`;
+  }
+  if (quote.assetClass === "CRYPTO" && quote.priceCadCents < MIN_CRYPTO_LOT_CAD_CENTS) {
+    return `One lot of ${quote.symbol} is now worth less than $1, so new buys are paused. You can still sell.`;
+  }
+  return null;
+}
+
+/** A quote for the browser, with its buy restriction filled in. */
+export function withBuyRules(quote: Quote): Quote {
+  return { ...quote, buyBlockedReason: buyBlockedReason(quote) };
+}
+
 function cryptoPairBase(symbol: string): string | null {
   const match = symbol.match(/^(.+)-(?:CAD|USD)$/);
   return match ? match[1] : null;

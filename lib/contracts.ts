@@ -220,6 +220,12 @@ export interface Quote {
    * are still valued at this quote's price.
    */
   tradingHaltReason?: string | null;
+  /**
+   * Set when new buys of this instrument would be refused (its asset class
+   * is switched off, it was blocked, or a crypto lot is worth under $1).
+   * Selling still works. Filled in on quotes sent to the browser.
+   */
+  buyBlockedReason?: string | null;
 }
 
 export interface InstrumentSearchResult {

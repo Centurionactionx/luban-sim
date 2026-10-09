@@ -937,6 +937,7 @@ export async function placeOrder(
             normalized.bracket.timeInForce,
             quote.assetClass,
             new Date(createdAt),
+            quote.listingCurrency,
           ),
           status: "WORKING",
           parentId: null,

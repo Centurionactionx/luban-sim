@@ -7,6 +7,7 @@ import {
   normalizeMarketSymbol,
   refreshQuote,
   type QuoteRange,
+  withBuyRules,
 } from "@/lib";
 
 import {
@@ -85,7 +86,7 @@ export async function GET(request: Request): Promise<Response> {
       undefined,
       { interval: intervalValue, from, to },
     );
-    return json({ quote, history });
+    return json({ quote: withBuyRules(quote), history });
   } catch (error) {
     return handleRouteError(error);
   }

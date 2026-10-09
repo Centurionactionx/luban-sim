@@ -7,6 +7,7 @@ import {
   refreshAllQuotes,
   refreshQuote,
   searchMarketInstruments,
+  withBuyRules,
 } from "@/lib";
 
 import {
@@ -72,7 +73,7 @@ export async function GET(request: Request): Promise<Response> {
       }
 
       const quote = await refreshQuote(symbol);
-      return json({ results: quote ? [quote] : [] });
+      return json({ results: quote ? [withBuyRules(quote)] : [] });
     }
 
     if (query !== undefined) {
@@ -92,7 +93,7 @@ export async function GET(request: Request): Promise<Response> {
     }
 
     await refreshAllQuotes();
-    return json({ results: (await listQuotes()).slice(0, 25) });
+    return json({ results: (await listQuotes()).slice(0, 25).map(withBuyRules) });
   } catch (error) {
     return handleRouteError(error);
   }

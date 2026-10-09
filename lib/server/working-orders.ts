@@ -509,7 +509,12 @@ export async function placeWorkingOrder(
       }
     }
 
-    const expiresAt = workingOrderExpiresAt(order.timeInForce, quote.assetClass, new Date(nowIso));
+    const expiresAt = workingOrderExpiresAt(
+      order.timeInForce,
+      quote.assetClass,
+      new Date(nowIso),
+      quote.listingCurrency,
+    );
     const entryId = await insertWorkingOrder(tx, {
       teamId,
       actorUserId: order.actorUserId,

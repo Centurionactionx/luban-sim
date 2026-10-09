@@ -158,6 +158,7 @@ export {
   searchInstruments,
   searchMarketInstruments,
   setMarketDataProvider,
+  withBuyRules,
 } from "./server/quotes";
 
 export type {

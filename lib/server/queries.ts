@@ -25,7 +25,7 @@ import { getAdminTradingTeamId } from "./admin-trading";
 import { getSessionUser } from "./auth";
 import type { DbExecutor } from "./database";
 import { getDb, withReadTransaction } from "./db";
-import { getQuote, listQuotesForSymbols, quoteCacheGeneration } from "./quotes";
+import { getQuote, listQuotesForSymbols, quoteCacheGeneration, withBuyRules } from "./quotes";
 import { readReservations, workingOrdersAvailableTo } from "./working-order-book";
 import { listWatchlist } from "./watchlist";
 import { listWorkingOrders } from "./working-orders";
@@ -1024,7 +1024,7 @@ export async function getDashboard(
           ...(options.focusSymbol ? [options.focusSymbol] : []),
         ],
         now,
-      ),
+      ).then((quotes) => quotes.map(withBuyRules)),
       workingOrders,
       workingOrdersEnabled:
         currentUser.role !== "host" && workingOrdersAvailableTo(currentUser.role),
