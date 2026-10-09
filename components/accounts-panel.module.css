@@ -184,7 +184,8 @@
   align-items: end;
   gap: 12px;
   margin-top: 16px;
-  padding: 0 4px 7px;
+  /* Lines up with the rows inside the team cards. */
+  padding: 0 calc(4px + 12px + 1.5px) 7px;
   border-bottom: 1px solid var(--hairline);
   color: var(--muted);
   font-family: var(--font-data);
@@ -204,8 +205,16 @@
   white-space: nowrap;
 }
 
+/* Each team is its own outlined card with a tinted heading band, so it's
+   clear where one team ends and the next begins. No overflow clipping:
+   the ··· menus open past the card's edge. */
 .group {
-  margin-top: 22px;
+  --group-pad: 12px;
+  margin-top: 16px;
+  padding: 0 var(--group-pad) 2px;
+  border: 1.5px solid var(--rule);
+  border-radius: 8px;
+  background: var(--paper);
 }
 
 .groupHead {
@@ -213,8 +222,19 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 8px 12px;
-  padding: 0 4px 9px;
-  border-bottom: 2px solid var(--rule);
+  margin: 0 calc(-1 * var(--group-pad));
+  padding: 10px calc(var(--group-pad) + 4px);
+  border-bottom: 1.5px solid var(--rule);
+  border-radius: 6.5px 6.5px 0 0;
+  background: var(--quiet-purple-2);
+}
+
+:global(:root[data-theme="dark"]) .group {
+  border-color: rgb(255 255 255 / 16%);
+}
+
+:global(:root[data-theme="dark"]) .groupHead {
+  border-bottom-color: rgb(255 255 255 / 12%);
 }
 
 .badge {
@@ -486,6 +506,10 @@
   border-bottom: 1px solid var(--hairline);
 }
 
+.people > li:last-child {
+  border-bottom: 0;
+}
+
 .person {
   display: grid;
   grid-template-columns: var(--person-columns);
@@ -708,6 +732,11 @@
   margin-top: 10px;
   color: var(--muted);
   font-size: 12.5px;
+}
+
+.group > .empty {
+  margin: 0;
+  padding: 12px 4px;
 }
 
 /* The undo notice, centred along the bottom of the window. */
