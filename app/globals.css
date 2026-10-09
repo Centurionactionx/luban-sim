@@ -6635,10 +6635,24 @@ html:has(dialog[open]) {
   text-align: right;
 }
 
+/* A total too wide to sit beside its label drops to its own line, right. */
 .ticket-receipt .ticket-receipt__total {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  column-gap: 10px;
   margin-top: 4px;
   padding-top: 9px;
   border-top: 1px solid var(--rule);
+}
+
+.ticket-receipt__total dd {
+  margin-left: auto;
+}
+
+.ticket-receipt__total dd.ticket-receipt__note {
+  flex-basis: 100%;
+  margin-left: 0;
 }
 
 .ticket-receipt__total dt {
@@ -6708,7 +6722,7 @@ html:has(dialog[open]) {
   margin-top: 12px;
 }
 
-@container (max-width: 400px) {
+@container (max-width: 360px) {
   .ticket-layout {
     grid-template-columns: minmax(0, 1fr);
   }
