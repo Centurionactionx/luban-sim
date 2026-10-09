@@ -22,6 +22,8 @@
     "test:e2e": "node scripts/run-e2e.mjs",
     "verify": "pnpm lint && pnpm typecheck && pnpm test && pnpm test:e2e",
     "bootstrap:admin": "tsx scripts/create-admin-invitation.ts",
+    "relink:clerk": "tsx scripts/relink-clerk-accounts.ts",
+    "import:roster": "tsx scripts/import-roster.ts",
     "backup:db": "tsx scripts/export-database.ts",
     "changelog": "tsx scripts/write-changelog.ts"
   },

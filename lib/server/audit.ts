@@ -15,6 +15,8 @@ export type AuthAuditType =
   | "ACCOUNT_DELETED"
   | "ACCOUNT_RENAMED"
   | "ADMIN_BOOTSTRAPPED"
+  | "ACCOUNT_RELINKED"
+  | "ACCOUNT_CLAIMED"
   | "ACCESS_DENIED";
 
 export interface RecordAuthAuditInput {

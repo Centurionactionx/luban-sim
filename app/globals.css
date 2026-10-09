@@ -6438,6 +6438,61 @@ html:has(dialog[open]) {
   margin-top: 0;
 }
 
+/* "Set your name" pop-up for accounts pre-loaded from the roster. */
+.name-prompt__label {
+  display: block;
+  margin-top: 14px;
+  margin-bottom: 6px;
+  font-family: var(--font-data);
+  font-size: var(--type-meta);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.name-prompt__input {
+  width: 100%;
+  min-height: 42px;
+  padding: 8px 11px;
+  border: 1.5px solid var(--rule);
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+/* A to-do pinned above the activity log (for example, set your name). */
+.activity-prompt {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 10px 10px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--purple);
+  border-radius: 6px;
+  background: var(--quiet-purple-2);
+}
+
+.activity-prompt div {
+  flex: 1;
+  min-width: 0;
+}
+
+.activity-prompt strong {
+  font-size: var(--type-item-title);
+  font-weight: 600;
+}
+
+.activity-prompt p {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: var(--type-description);
+}
+
+.activity-prompt .button {
+  flex: none;
+  margin-top: 0;
+}
+
 .display-name-form__status {
   color: var(--muted);
   font-size: 12px;

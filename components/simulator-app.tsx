@@ -98,6 +98,7 @@ import {
   UserIcon,
   UsersIcon,
 } from "./simulator-icons";
+import { DisplayNamePrompt, useNamePromptLater } from "./display-name-prompt";
 import { FeedbackButton } from "./feedback-button";
 import { LubanMark, LubanWordmark } from "./luban-logo";
 import { PortfolioMap } from "./portfolio-map";
@@ -2073,12 +2074,15 @@ function ActivityBell({
   emptyMessage,
   showTeamNames,
   storageKey,
+  prompt,
 }: {
   items: ActivityItem[];
   title: string;
   emptyMessage: string;
   showTeamNames: boolean;
   storageKey: string;
+  /** A to-do for the signed-in person, pinned above the log until done. */
+  prompt?: { title: string; detail: string; actionLabel: string; onAction: () => void };
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -2097,7 +2101,8 @@ function ActivityBell({
         : newest,
     null,
   );
-  const unseen = items.filter((item) => Date.parse(item.createdAt) > seenMs).length;
+  const unseen =
+    items.filter((item) => Date.parse(item.createdAt) > seenMs).length + (prompt ? 1 : 0);
 
   // Anything that arrives while the feed is open counts as seen.
   useEffect(() => {
@@ -2153,6 +2158,24 @@ function ActivityBell({
           <h2 id={`${panelId}-title`}>{title}</h2>
           <span>Immutable log</span>
         </div>
+        {prompt ? (
+          <div className="activity-prompt">
+            <div>
+              <strong>{prompt.title}</strong>
+              <p>{prompt.detail}</p>
+            </div>
+            <button
+              type="button"
+              className="button button--primary button--compact"
+              onClick={() => {
+                setOpen(false);
+                prompt.onAction();
+              }}
+            >
+              {prompt.actionLabel}
+            </button>
+          </div>
+        ) : null}
         <ol className="activity-list">
           {items.length === 0 ? (
             <li className="activity-list__empty">
@@ -2781,6 +2804,13 @@ export function SimulatorApp({
   const maxConfirmRef = useRef<HTMLDialogElement>(null);
   // The portfolio map renders only while its dialog is open (view not null).
   const mapDialogRef = useRef<HTMLDialogElement>(null);
+  // A pre-loaded account still named "User 1" is asked for a name on arrival,
+  // unless they chose Later on this browser; the bell keeps the reminder.
+  const [namePrompt, setNamePrompt] = useState<"auto" | "open" | "closed">("auto");
+  const namePromptLater = useNamePromptLater(dashboard.currentUser.id);
+  const namePromptOpen =
+    namePrompt === "open" ||
+    (namePrompt === "auto" && Boolean(dashboard.currentUser.needsDisplayName) && !namePromptLater);
   const [mapView, setMapView] = useState<MapDialogView | null>(null);
   const mapRequest = useRef<AbortController | null>(null);
   const [chartExpanded, setChartExpanded] = useState(false);
@@ -4595,6 +4625,16 @@ export function SimulatorApp({
             }
             showTeamNames={isCompetitionHost}
             storageKey={`luban.activity-seen.${dashboard.currentUser.id}`}
+            prompt={
+              dashboard.currentUser.needsDisplayName
+                ? {
+                    title: "Finish setting up your name",
+                    detail: `Your team list shows you as “${dashboard.currentUser.name}”.`,
+                    actionLabel: "Set name",
+                    onAction: () => setNamePrompt("open"),
+                  }
+                : undefined
+            }
           />
           {accountControls ?? (
             <label className="identity-switcher">
@@ -5750,6 +5790,15 @@ export function SimulatorApp({
                 </div>
               ) : null}
             </dialog>
+
+            {dashboard.currentUser.needsDisplayName || namePromptOpen ? (
+              <DisplayNamePrompt
+                userId={dashboard.currentUser.id}
+                open={namePromptOpen}
+                onClose={() => setNamePrompt("closed")}
+                onSaved={() => void fetchDashboard(true)}
+              />
+            ) : null}
 
             <dialog
               ref={mapDialogRef}

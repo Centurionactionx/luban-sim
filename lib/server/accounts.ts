@@ -167,6 +167,14 @@ export async function resolveManagedUser(
     return resolved;
   }
 
+  const claimed = await claimPreloadedAccount(identity);
+
+  if (claimed) {
+    return claimed.status === "active"
+      ? { kind: "linked", user: claimed }
+      : { kind: "suspended" };
+  }
+
   const bootstrapped = await maybeBootstrapAdmin(identity);
 
   if (bootstrapped) {
@@ -174,4 +182,80 @@ export async function resolveManagedUser(
   }
 
   return { kind: "unlinked" };
+}
+
+/** True while any pre-loaded account is still waiting to be claimed. */
+export async function hasClaimableAccounts(): Promise<boolean> {
+  const db = await getDb();
+  const row = await db.get<{ present: number }>(
+    "SELECT 1 AS present FROM account_claims LIMIT 1",
+  );
+  return Boolean(row);
+}
+
+/**
+ * Links a first-time sign-in to the account a host pre-loaded for it (see
+ * scripts/import-roster.ts), matched by the provider-verified email against
+ * the account's claimable addresses. The account keeps its team, role, and
+ * placeholder name; the signed-in address becomes its email when free.
+ */
+async function claimPreloadedAccount(
+  identity: ManagedIdentity,
+): Promise<SessionUser | null> {
+  const email = identity.email?.trim().toLowerCase();
+
+  if (!email || !identity.emailVerified || !identity.subject) {
+    return null;
+  }
+
+  const db = await getDb();
+
+  const userId = await db.transaction(async (tx) => {
+    await acquireAdvisoryLock(tx, ADVISORY_LOCK_ACCOUNTS);
+
+    const claim = await tx.get<{ user_id: string; name: string; email: string }>(
+      `SELECT u.id AS user_id, u.name, u.email
+       FROM account_claims c
+       JOIN users u ON u.id = c.user_id
+       WHERE c.email = ? AND u.auth_subject IS NULL AND u.status <> 'deleted'`,
+      [email],
+    );
+
+    if (!claim) {
+      return null;
+    }
+
+    const subjectTaken = await tx.get<{ id: string }>(
+      "SELECT id FROM users WHERE auth_subject = ?",
+      [identity.subject],
+    );
+    if (subjectTaken) {
+      return null;
+    }
+
+    const emailTaken = await tx.get<{ id: string }>(
+      "SELECT id FROM users WHERE lower(email) = ? AND id <> ?",
+      [email, claim.user_id],
+    );
+    const nowIso = new Date().toISOString();
+
+    await tx.run(
+      `UPDATE users
+       SET auth_subject = ?, email = ?, email_verified_at = ?, last_login_at = ?
+       WHERE id = ?`,
+      [identity.subject, emailTaken ? claim.email : email, nowIso, nowIso, claim.user_id],
+    );
+    await tx.run("DELETE FROM account_claims WHERE user_id = ?", [claim.user_id]);
+
+    await recordAuthAuditEvent({
+      type: "ACCOUNT_CLAIMED",
+      actorUserId: claim.user_id,
+      subjectUserId: claim.user_id,
+      detail: `${claim.name} signed in for the first time and claimed their pre-loaded account.`,
+    });
+
+    return claim.user_id;
+  });
+
+  return userId ? getSessionUser(userId) : null;
 }

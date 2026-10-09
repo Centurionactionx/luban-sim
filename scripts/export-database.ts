@@ -44,6 +44,8 @@ export const APPLICATION_TABLES = [
   "feedback",
   "watchlist_items",
   "market_cache",
+  "account_claims",
+  "pending_display_names",
 ] as const;
 
 type Query = (sql: string) => Promise<{ rows: Record<string, unknown>[] }>;

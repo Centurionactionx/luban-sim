@@ -46,6 +46,8 @@ export interface DemoUser {
 export interface SessionUser extends DemoUser {
   email: string;
   status: UserStatus;
+  /** The name is still a placeholder ("User 1") from a pre-loaded roster. */
+  needsDisplayName?: boolean;
 }
 
 /**

@@ -3,7 +3,11 @@ import { auth, clerkClient, currentUser } from "@clerk/nextjs/server";
 import type { SessionUser } from "../contracts";
 import { canHostCompetitions } from "../contracts";
 import { AppError } from "../errors";
-import { resolveManagedSubject, resolveManagedUser } from "./accounts";
+import {
+  hasClaimableAccounts,
+  resolveManagedSubject,
+  resolveManagedUser,
+} from "./accounts";
 import { isManagedAuthMode } from "./auth-mode";
 import type { ManagedIdentity } from "./invitations";
 import { assertRequestAllowed } from "./request-throttle";
@@ -179,11 +183,13 @@ export async function getManagedSessionState(): Promise<ManagedSessionState> {
 
   const unlinked: ManagedSessionState = { kind: "unlinked", subject: userId };
 
-  if (!isBootstrapConfigured()) {
+  if (isCachedUnlinked(userId, Date.now())) {
     return unlinked;
   }
 
-  if (isCachedUnlinked(userId, Date.now())) {
+  // Only two things can link an unknown sign-in here: the bootstrap rule and
+  // a pre-loaded account waiting to be claimed by email.
+  if (!isBootstrapConfigured() && !(await hasClaimableAccounts())) {
     return unlinked;
   }
 

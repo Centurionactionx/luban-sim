@@ -71,6 +71,9 @@ export async function updateDisplayName(input: {
     });
   }
 
+  // Saving any name, even the placeholder unchanged, settles the prompt.
+  await db.run("DELETE FROM pending_display_names WHERE user_id = ?", [input.userId]);
+
   const user = await getSessionUser(input.userId);
   if (!user) {
     throw new AppError("UNAUTHORIZED", "Sign in to continue.", 401);

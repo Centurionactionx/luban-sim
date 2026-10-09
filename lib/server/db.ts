@@ -21,7 +21,7 @@ import {
 import { postgresConnectionOptions } from "./postgres-config";
 
 const DEFAULT_DATABASE_PATH = join(process.cwd(), "data", "luban.sqlite");
-const SCHEMA_VERSION = 16;
+const SCHEMA_VERSION = 17;
 /** Map grouping within a sector; "Other" until the feed reports one. */
 const INSTRUMENT_INDUSTRY_COLUMN = "industry TEXT NOT NULL DEFAULT 'Other'";
 
@@ -424,6 +424,18 @@ const SHARED_TABLE_BODIES = {
       cache_key TEXT PRIMARY KEY,
       payload TEXT NOT NULL,
       fetched_at_ms BIGINT NOT NULL`,
+  // Emails that may claim a pre-loaded account on first sign-in: its main
+  // address plus any alternates (a school email next to a personal one).
+  // The rows go away once the account is claimed.
+  account_claims: () => `
+      email TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL`,
+  // Accounts whose display name is still a placeholder ("User 1"). The row
+  // goes away once the person saves a name.
+  pending_display_names: () => `
+      user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL`,
 } as const;
 
 const WATCHLIST_INDEXES = [
@@ -653,6 +665,22 @@ function instrumentAssetColumns(big: string): string {
  * schema on cold start (fresh databases get the current DDL directly).
  */
 export async function runPostgresMigrations(tx: DbExecutor): Promise<void> {
+  // v17: pre-loaded accounts (claimable emails and placeholder names). New
+  // tables only.
+  for (const name of ["account_claims", "pending_display_names"] as const) {
+    const present = await tx.get<{ present: number }>(
+      `SELECT 1 AS present
+       FROM information_schema.tables
+       WHERE table_schema = current_schema() AND table_name = ?`,
+      [name],
+    );
+    if (!present) {
+      await tx.run(`CREATE TABLE IF NOT EXISTS ${name} (${SHARED_TABLE_BODIES[name]()}
+    )`);
+      await tx.run(`ALTER TABLE ${name} ENABLE ROW LEVEL SECURITY`);
+    }
+  }
+
   // v16: shared market-data cache. A new table only.
   const marketCacheTable = await tx.get<{ present: number }>(
     `SELECT 1 AS present

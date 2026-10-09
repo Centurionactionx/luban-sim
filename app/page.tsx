@@ -45,11 +45,15 @@ export default async function Home() {
       <main className="route-state" aria-labelledby="no-access-title">
         <section className="route-state__sheet">
           <p className="route-state__brand">Luban Market Lab</p>
-          <h1 id="no-access-title">Almost there — an invitation is required.</h1>
+          <h1 id="no-access-title">We couldn’t find your account.</h1>
           <p>
             You are signed in, but this sign-in is not linked to a Luban
-            account yet. Registration works only through an invitation link
-            from a competition host. If you received one, open that link while
+            account yet. If you registered for the competition, sign out and
+            sign in again with the same email you gave on the registration
+            form; your account and team are waiting there.
+          </p>
+          <p>
+            If a host sent you an invitation link instead, open that link while
             signed in and your account will be created and placed on the right
             team.
           </p>

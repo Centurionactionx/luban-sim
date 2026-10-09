@@ -107,7 +107,7 @@ function normalizeTeamStatus(value: unknown): TeamStatus {
   return normalized as TeamStatus;
 }
 
-function normalizeTeamName(value: unknown): string {
+export function normalizeTeamName(value: unknown): string {
   const normalized = String(value ?? "").trim().replace(/\s+/g, " ");
 
   if (!normalized) {

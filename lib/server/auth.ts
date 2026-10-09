@@ -23,6 +23,7 @@ interface UserRow {
   status: UserStatus;
   team_id: string | null;
   team_name: string | null;
+  name_pending?: boolean | number | null;
 }
 
 export const sessionCookieOptions: SessionCookieOptions = {
@@ -53,6 +54,7 @@ function rowToSessionUser(row: UserRow): SessionUser {
     teamId: row.team_id,
     teamName: row.team_name,
     initials: initialsFor(row.name),
+    ...(row.name_pending ? { needsDisplayName: true } : {}),
   };
 }
 
@@ -71,7 +73,10 @@ export async function getSessionUser(userId: string): Promise<SessionUser | null
         u.role,
         u.status,
         tm.team_id,
-        t.name AS team_name
+        t.name AS team_name,
+        EXISTS (
+          SELECT 1 FROM pending_display_names p WHERE p.user_id = u.id
+        ) AS name_pending
       FROM users u
       LEFT JOIN team_members tm ON tm.user_id = u.id
       LEFT JOIN teams t ON t.id = tm.team_id
