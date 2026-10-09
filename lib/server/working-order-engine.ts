@@ -7,8 +7,8 @@ import { getDb } from "./db";
 import { unitWord } from "../lots";
 import { getMarketDataProvider, marketDataNow, refreshQuote } from "./quotes";
 import { maxQuoteAgeMs, placeOrder } from "./trading";
+import { stockSessionMayBeOpen } from "../market-calendar";
 import {
-  stockSessionMayBeOpen,
   workingOrderTriggered,
   workingOrdersAvailableTo,
 } from "./working-order-book";

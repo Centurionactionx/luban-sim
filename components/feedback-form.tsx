@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 
+import { extractError, readJson } from "@/lib/api-client";
 import {
   FEEDBACK_MAX_LENGTH,
   FEEDBACK_MIN_LENGTH,
@@ -20,16 +21,6 @@ type SendState =
   | { kind: "sending" }
   | { kind: "sent" }
   | { kind: "error"; message: string };
-
-type ApiErrorShape = { error?: { message?: string } };
-
-async function readJson(response: Response): Promise<unknown> {
-  try {
-    return await response.json();
-  } catch {
-    return null;
-  }
-}
 
 const SEND_FAILED = "Your feedback could not be sent. Check your connection and try again.";
 
@@ -103,8 +94,7 @@ export function FeedbackForm({
     }
 
     if (!response.ok) {
-      const payload = (await readJson(response)) as ApiErrorShape | null;
-      setState({ kind: "error", message: payload?.error?.message ?? SEND_FAILED });
+      setState({ kind: "error", message: extractError(await readJson(response), SEND_FAILED) });
       return;
     }
 

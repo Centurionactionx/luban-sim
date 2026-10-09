@@ -1,7 +1,16 @@
 /**
- * Order arithmetic shared by the server and the order ticket, so both always
- * agree to the cent. Pure and safe to import from client components.
+ * Order arithmetic and limits shared by the server and the order ticket, so
+ * both always agree to the cent. Pure and safe to import from client components.
  */
+
+/** Most shares (lots) one order can name. */
+export const MAX_ORDER_QUANTITY = 100_000;
+
+/** Most orders a team can have waiting at once. */
+export const MAX_OPEN_WORKING_ORDERS_PER_TEAM = 20;
+
+/** The highest price an order can name: $100 million per share or lot. */
+export const MAX_ORDER_PRICE_CENTS = 10_000_000_000;
 
 /**
  * CAD cents a waiting buy sets aside per share (per lot): its price in the

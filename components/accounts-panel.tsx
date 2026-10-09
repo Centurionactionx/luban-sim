@@ -12,6 +12,7 @@ import {
 } from "react";
 
 import { DISPLAY_TIME_ZONE } from "@/lib/time";
+import { extractError, readJson } from "@/lib/api-client";
 
 import type {
   AccountView,
@@ -24,21 +25,6 @@ import type {
 } from "@/lib/contracts";
 
 import styles from "./accounts-panel.module.css";
-
-type ApiErrorShape = { error?: { message?: string } };
-
-async function readJson(response: Response): Promise<unknown> {
-  try {
-    return await response.json();
-  } catch {
-    return null;
-  }
-}
-
-function extractError(payload: unknown, fallback: string): string {
-  const shaped = payload as ApiErrorShape | null;
-  return shaped?.error?.message ?? fallback;
-}
 
 function stateLabel(state: InvitationSummary["state"]): string {
   return state.charAt(0).toUpperCase() + state.slice(1);

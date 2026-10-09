@@ -11,18 +11,21 @@ import type {
 } from "../contracts";
 import { AppError } from "../errors";
 import { cryptoTokenSymbol, lotSizeFromExponent, unitWord } from "../lots";
-import { reservedCadCentsPerUnit } from "../order-math";
+import { workingOrderExpiresAt } from "../market-calendar";
+import {
+  MAX_OPEN_WORKING_ORDERS_PER_TEAM,
+  MAX_ORDER_QUANTITY,
+  reservedCadCentsPerUnit,
+} from "../order-math";
 import { acquireAccountReadLock, type DbExecutor } from "./database";
 import { getDb } from "./db";
 import {
   MARKET_SYMBOL_PATTERN,
-  isAssetClassEnabled,
-  isSymbolBlocked,
+  assertBuyAllowed,
   normalizeMarketSymbol,
   requireQuote,
 } from "./quotes";
 import {
-  MAX_OPEN_WORKING_ORDERS_PER_TEAM,
   assertBracketPrices,
   assertWorkingOrderShape,
   countOpenWorkingOrders,
@@ -30,7 +33,6 @@ import {
   insertWorkingOrder,
   optionalPriceCents,
   readReservations,
-  workingOrderExpiresAt,
   workingOrdersAvailableTo,
 } from "./working-order-book";
 
@@ -40,7 +42,6 @@ import {
  * time), and fills go through placeOrder like any market order.
  */
 
-const MAX_QUANTITY = 100_000;
 /** Waiting orders one person can place per rolling minute. */
 const MAX_PLACEMENTS_PER_MINUTE = 30;
 const ORDER_TYPES: readonly WorkingOrderType[] = ["LIMIT", "STOP_LOSS", "TAKE_PROFIT"];
@@ -279,10 +280,10 @@ function normalizeInput(input: PlaceWorkingOrderInput) {
     throw new AppError("INVALID_ORDER_TYPE", "Choose limit, stop loss, or take profit.", 400);
   }
   assertWorkingOrderShape(side, orderType);
-  if (!Number.isSafeInteger(input.quantity) || input.quantity < 1 || input.quantity > MAX_QUANTITY) {
+  if (!Number.isSafeInteger(input.quantity) || input.quantity < 1 || input.quantity > MAX_ORDER_QUANTITY) {
     throw new AppError(
       "INVALID_QUANTITY",
-      `Quantity must be a whole number from 1 to ${MAX_QUANTITY.toLocaleString("en-CA")}.`,
+      `Quantity must be a whole number from 1 to ${MAX_ORDER_QUANTITY.toLocaleString("en-CA")}.`,
       400,
     );
   }
@@ -403,29 +404,7 @@ export async function placeWorkingOrder(
   if (quote.tradingHaltReason) {
     throw new AppError("TRADING_HALTED", quote.tradingHaltReason, 409, { symbol: order.symbol });
   }
-  if (order.side === "BUY") {
-    if (!isAssetClassEnabled(quote.assetClass)) {
-      throw new AppError(
-        "ASSET_CLASS_DISABLED",
-        `${quote.assetClass === "CRYPTO" ? "Crypto" : "ETF"} trading is not open in this competition.`,
-        409,
-      );
-    }
-    if (isSymbolBlocked(order.symbol)) {
-      throw new AppError(
-        "SYMBOL_BLOCKED",
-        `${order.symbol} has been removed from the simulator.`,
-        409,
-      );
-    }
-    if (quote.assetClass === "CRYPTO" && quote.priceCadCents < 100) {
-      throw new AppError(
-        "LOT_TOO_SMALL",
-        `One lot of ${order.symbol} is worth less than $1, so new buys are paused.`,
-        409,
-      );
-    }
-  }
+  if (order.side === "BUY") assertBuyAllowed(quote);
   // What a limit buy sets aside: its cost at the limit, priced per share the
   // way a fill is (rounded CAD per share, times quantity), with a buffer for
   // exchange-rate movement on USD listings.

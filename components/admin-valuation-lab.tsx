@@ -10,6 +10,7 @@ import {
   useState,
 } from "react";
 
+import { extractError, readJson } from "@/lib/api-client";
 import styles from "@/app/admin/valuation-lab/valuation-lab.module.css";
 import type {
   AdminValuationPortfolio,
@@ -23,12 +24,6 @@ const MAX_TEST_CASH_CENTS = 100_000_000_000_000;
 type Feedback = {
   kind: "error" | "success";
   message: string;
-};
-
-type ApiErrorPayload = {
-  error?: {
-    message?: string;
-  };
 };
 
 const cadCurrency = new Intl.NumberFormat("en-CA", {
@@ -56,18 +51,6 @@ const dateTimeFormatter = new Intl.DateTimeFormat("en-CA", {
   timeZone: TORONTO_TIME_ZONE,
   timeZoneName: "short",
 });
-
-async function readJson(response: Response): Promise<unknown> {
-  try {
-    return await response.json();
-  } catch {
-    return null;
-  }
-}
-
-function errorMessage(payload: unknown, fallback: string): string {
-  return (payload as ApiErrorPayload | null)?.error?.message ?? fallback;
-}
 
 function isPortfolio(payload: unknown): payload is AdminValuationPortfolio {
   if (!payload || typeof payload !== "object") return false;
@@ -222,7 +205,7 @@ export function AdminValuationLab({
 
         if (!response.ok) {
           throw new Error(
-            errorMessage(payload, "The valuation lab could not be refreshed."),
+            extractError(payload, "The valuation lab could not be refreshed."),
           );
         }
         if (!isPortfolio(payload)) {
@@ -333,7 +316,7 @@ export function AdminValuationLab({
 
       if (!response.ok) {
         throw new Error(
-          errorMessage(payload, "The historical purchase could not be added."),
+          extractError(payload, "The historical purchase could not be added."),
         );
       }
       if (!isPortfolio(payload)) {
@@ -398,7 +381,7 @@ export function AdminValuationLab({
 
       if (!response.ok) {
         throw new Error(
-          errorMessage(payload, "The test account cash could not be updated."),
+          extractError(payload, "The test account cash could not be updated."),
         );
       }
       if (!isPortfolio(payload)) {
@@ -439,7 +422,7 @@ export function AdminValuationLab({
       const payload = await readJson(response);
 
       if (!response.ok) {
-        throw new Error(errorMessage(payload, "The test ledger could not be cleared."));
+        throw new Error(extractError(payload, "The test ledger could not be cleared."));
       }
       if (!isPortfolio(payload)) {
         throw new Error("The valuation lab returned an unexpected response.");

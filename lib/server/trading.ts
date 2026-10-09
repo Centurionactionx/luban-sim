@@ -15,31 +15,27 @@ import { AppError } from "../errors";
 import { acquireAccountReadLock, type DbExecutor } from "./database";
 import { cryptoTokenSymbol, formatTokenQuantity, unitWord } from "../lots";
 import { assertTeamLedgerReconciles, getDb } from "./db";
+import { workingOrderExpiresAt } from "../market-calendar";
+import { MAX_OPEN_WORKING_ORDERS_PER_TEAM, MAX_ORDER_QUANTITY } from "../order-math";
 import {
-  MAX_OPEN_WORKING_ORDERS_PER_TEAM,
   assertBracketPrices,
   countOpenWorkingOrders,
   insertBracketExits,
   optionalPriceCents,
   readReservations,
-  workingOrderExpiresAt,
   workingOrdersAvailableTo,
 } from "./working-order-book";
 import {
-  isAssetClassEnabled,
-  isSymbolBlocked,
+  assertBuyAllowed,
   MARKET_SYMBOL_PATTERN,
   marketDataNow,
   normalizeMarketSymbol,
   requireQuote,
 } from "./quotes";
 
-const MAX_ORDER_QUANTITY = 100_000;
 const DEFAULT_MAX_ORDERS_PER_MINUTE = 20;
 const ORDER_RATE_WINDOW_MS = 60_000;
 const DEFAULT_MAX_QUOTE_AGE_MINUTES = 20;
-/** New crypto buys need a lot worth at least $1, or rounding gets too coarse. */
-const MIN_CRYPTO_LOT_CAD_CENTS = 100;
 
 /**
  * Oldest quote an order may fill against. Free TSX data runs about fifteen
@@ -431,37 +427,7 @@ export async function placeOrder(
       );
     }
   }
-  // Switching an asset class off or blocking a symbol stops new buys only,
-  // so nobody is ever trapped in a position they cannot sell.
-  if (normalized.side === "BUY") {
-    if (!isAssetClassEnabled(quote.assetClass)) {
-      throw new AppError(
-        "ASSET_CLASS_DISABLED",
-        `${quote.assetClass === "CRYPTO" ? "Crypto" : "ETF"} trading is not open in this competition.`,
-        409,
-        { symbol: quote.symbol, assetClass: quote.assetClass },
-      );
-    }
-    if (isSymbolBlocked(quote.symbol)) {
-      throw new AppError(
-        "SYMBOL_BLOCKED",
-        `${quote.symbol} has been removed from the simulator. Existing holdings can still be sold.`,
-        409,
-        { symbol: quote.symbol },
-      );
-    }
-    if (
-      quote.assetClass === "CRYPTO" &&
-      quote.priceCadCents < MIN_CRYPTO_LOT_CAD_CENTS
-    ) {
-      throw new AppError(
-        "LOT_TOO_SMALL",
-        `One lot of ${quote.symbol} is now worth less than $1, so new buys are paused. You can still sell.`,
-        409,
-        { symbol: quote.symbol },
-      );
-    }
-  }
+  if (normalized.side === "BUY") assertBuyAllowed(quote);
   if (normalized.bracket) {
     assertBracketPrices(quote.priceCents, normalized.bracket, "current price");
   }

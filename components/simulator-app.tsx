@@ -26,7 +26,6 @@ import type {
   InstrumentSearchResult,
   OrderView,
   PopularSection,
-  Leaderboard,
   LeaderboardRow,
   PortfolioPoint,
   PortfolioSummary,
@@ -50,7 +49,20 @@ import {
   lotExponentFromSize,
   unitWord,
 } from "@/lib/lots";
-import { priceInputToCents, reservedCadCentsPerUnit } from "@/lib/order-math";
+import {
+  type ApiErrorShape,
+  extractError,
+  orderKeyOutlivesFailure,
+  readJson,
+} from "@/lib/api-client";
+import { workingOrderExpiresAt } from "@/lib/market-calendar";
+import {
+  MAX_OPEN_WORKING_ORDERS_PER_TEAM,
+  MAX_ORDER_PRICE_CENTS,
+  MAX_ORDER_QUANTITY,
+  priceInputToCents,
+  reservedCadCentsPerUnit,
+} from "@/lib/order-math";
 import {
   DEFAULT_QUOTE_INTERVAL,
   EARLIEST_HISTORY_DATE,
@@ -105,8 +117,7 @@ import { PortfolioMap } from "./portfolio-map";
 import summaryStyles from "./portfolio-summary.module.css";
 import { ThemeToggle } from "./theme-toggle";
 
-type DashboardPayload = Omit<Dashboard, "leaderboard"> & {
-  leaderboard: LeaderboardRow[] | Leaderboard;
+type DashboardPayload = Dashboard & {
   session: {
     user: SessionUser;
     demoUsers: DemoUser[];
@@ -145,14 +156,6 @@ type OrderResult = {
   };
   portfolioVersion: number;
   duplicate: boolean;
-};
-
-type ApiErrorShape = {
-  error?: {
-    code?: string;
-    message?: string;
-    field?: string;
-  };
 };
 
 type QuoteHistoryPayload = {
@@ -604,26 +607,13 @@ function formatActivityTime(iso: string): string {
   }).format(parsed);
 }
 
-function leaderboardRows(value: DashboardPayload["leaderboard"]): LeaderboardRow[] {
-  return Array.isArray(value) ? value : value.rows;
-}
-
-function extractError(payload: unknown, fallback: string): string {
-  if (typeof payload === "object" && payload !== null) {
-    const error = (payload as ApiErrorShape).error;
-    if (error && typeof error.message === "string") return error.message;
-  }
-  return fallback;
-}
-
-async function readJson(response: Response): Promise<unknown> {
-  const text = await response.text();
-  if (!text) return {};
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    return {};
-  }
+/** Signs in as the default demo trader (demo mode only). */
+function startDemoSession(): Promise<Response> {
+  return fetch("/api/auth/demo-login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId: "alex" }),
+  });
 }
 
 function createIdempotencyKey(): string {
@@ -682,8 +672,6 @@ const STALE_SNAPSHOT_MESSAGE =
   "Showing the last real market snapshot. Trading waits for a fresh quote.";
 /** How long an order request may hang before the ticket offers a retry. */
 const ORDER_REQUEST_TIMEOUT_MS = 20_000;
-const MAX_WAITING_ORDERS = 20;
-const MAX_ORDER_PRICE_CENTS = 10_000_000_000;
 
 /** "Limit buy", "Stop loss", ...: how a waiting order is named everywhere. */
 function workingOrderName(orderType: WorkingOrderType, side: TradeSide): string {
@@ -2887,11 +2875,7 @@ export function SimulatorApp({
             return;
           }
 
-          const login = await fetch("/api/auth/demo-login", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ userId: "alex" }),
-          });
+          const login = await startDemoSession();
           const loginPayload = await readJson(login);
           if (!login.ok) {
             throw new Error(extractError(loginPayload, "The demo session could not start."));
@@ -2944,11 +2928,7 @@ export function SimulatorApp({
           return;
         }
 
-        const login = await fetch("/api/auth/demo-login", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ userId: "alex" }),
-        });
+        const login = await startDemoSession();
         if (login.ok) {
           response = await fetch(dashboardUrl, {
             signal: controller.signal,
@@ -3169,7 +3149,7 @@ export function SimulatorApp({
 
   const portfolio = dashboard.portfolio ?? emptyPortfolio;
   const teamVersion = dashboard.team?.version ?? 0;
-  const rows = leaderboardRows(dashboard.leaderboard);
+  const rows = dashboard.leaderboard;
   const quotePoints = useMemo(
     () =>
       quoteHistory?.points.map((point) => ({
@@ -3248,7 +3228,7 @@ export function SimulatorApp({
   }, [dashboard.portfolioHistory, dashboard.serverTime, portfolioRange]);
   const wholeQuantity = Number(quantity);
   const quantityIsValid =
-    Number.isInteger(wholeQuantity) && wholeQuantity > 0 && wholeQuantity <= 100_000;
+    Number.isInteger(wholeQuantity) && wholeQuantity > 0 && wholeQuantity <= MAX_ORDER_QUANTITY;
   const holdingForQuote = dashboard.holdings.find(
     (holding) => holding.symbol === selectedQuote.symbol,
   );
@@ -3374,8 +3354,8 @@ export function SimulatorApp({
                     bracketEntryCents !== null &&
                     stopLossCents >= bracketEntryCents
                   ? `The stop loss must be below the ${ticketOrderType === "LIMIT" ? "limit price" : "current price"} of ${ticketPriceText(bracketEntryCents)}.`
-                  : openWorkingOrderCount + newWorkingOrderCount > MAX_WAITING_ORDERS
-                    ? `A ${isPlatformAdminRole(dashboard) ? "test account" : "team"} can have at most ${MAX_WAITING_ORDERS} waiting orders. Cancel one first.`
+                  : openWorkingOrderCount + newWorkingOrderCount > MAX_OPEN_WORKING_ORDERS_PER_TEAM
+                    ? `A ${isPlatformAdminRole(dashboard) ? "test account" : "team"} can have at most ${MAX_OPEN_WORKING_ORDERS_PER_TEAM} waiting orders. Cancel one first.`
                     : null;
   const holdingsHaveLots = dashboard.holdings.some(
     (holding) => holding.assetClass === "CRYPTO",
@@ -3489,7 +3469,7 @@ export function SimulatorApp({
     side === "BUY"
       ? ticketUnitCadCents > 0
         ? Math.min(
-            100_000,
+            MAX_ORDER_QUANTITY,
             Math.max(0, Math.floor(portfolio.buyingPowerCents / ticketUnitCadCents)),
           )
         : 0
@@ -3955,6 +3935,15 @@ export function SimulatorApp({
         : { kind: "idle", message: "Ready for a simulated order." },
     );
 
+  // While the key is kept the order may have gone through, so the ticket must
+  // be retried unchanged; editing it would make a new order.
+  const orderFailureMessage = (error: unknown, fallback: string) => {
+    const message = error instanceof Error ? error.message : fallback;
+    return pendingOrder.current
+      ? `${message} Retry without editing the ticket; it can't be placed twice.`
+      : `${message} Check the ticket and try again.`;
+  };
+
   const placeWaitingOrder = async (
     idempotencyKey: string,
     bracket: { takeProfitCents: number | null; stopLossCents: number | null } | undefined,
@@ -3981,20 +3970,16 @@ export function SimulatorApp({
           }),
         });
       } catch {
-        throw new Error(
-          "The server didn't answer. Retry this ticket — the same order can't be placed twice.",
-        );
+        throw new Error("The server didn't answer.");
       }
       const payload = await readJson(response);
       if (!response.ok) {
-        if (response.status < 500 && response.status !== 408 && response.status !== 429) {
-          pendingOrder.current = null;
-        }
+        if (!orderKeyOutlivesFailure(response.status)) pendingOrder.current = null;
         throw new Error(extractError(payload, "The order could not be placed."));
       }
       const [entry] = (payload as { workingOrders?: WorkingOrderView[] }).workingOrders ?? [];
       if (!entry?.id) {
-        throw new Error("The order response was incomplete. Retry this ticket with the same order key.");
+        throw new Error("The order response was incomplete.");
       }
       pendingOrder.current = null;
       const amount = selectedIsCrypto
@@ -4032,10 +4017,7 @@ export function SimulatorApp({
     } catch (error) {
       setTicketStatus({
         kind: "error",
-        message:
-          error instanceof Error
-            ? `${error.message} Check the ticket and try again.`
-            : "The order could not be placed. Check the ticket and try again.",
+        message: orderFailureMessage(error, "The order could not be placed."),
       });
       // Show what the team really has waiting, whatever happened.
       void fetchDashboard(true);
@@ -4136,23 +4118,17 @@ export function SimulatorApp({
       } catch {
         // No response arrived, so the order may or may not have committed.
         // The key is kept: pressing the button again replays safely.
-        throw new Error(
-          "The server didn't answer. Retry this ticket — the same order cannot fill twice.",
-        );
+        throw new Error("The server didn't answer.");
       }
 
       const payload = await readJson(response);
       if (!response.ok) {
-        // A gateway/server failure can arrive after the trade committed.
-        // Keep the same key until a definitive result arrives.
-        if (response.status < 500 && response.status !== 408 && response.status !== 429) {
-          pendingOrder.current = null;
-        }
+        if (!orderKeyOutlivesFailure(response.status)) pendingOrder.current = null;
         throw new Error(extractError(payload, "The order could not be recorded."));
       }
       const result = payload as OrderResult;
       if (!result.order?.id || !Number.isSafeInteger(result.portfolioVersion)) {
-        throw new Error("The order response was incomplete. Retry this ticket with the same order key.");
+        throw new Error("The order response was incomplete.");
       }
       pendingOrder.current = null;
       setTicketStatus({
@@ -4186,11 +4162,10 @@ export function SimulatorApp({
     } catch (error) {
       setTicketStatus({
         kind: "error",
-        message:
-          error instanceof Error
-            ? `${error.message} Check the ticket and try again.`
-            : "The order could not be recorded. Check the ticket and try again.",
+        message: orderFailureMessage(error, "The order could not be recorded."),
       });
+      // Show what the team really holds, whatever happened.
+      void fetchDashboard(true);
     }
   };
 
@@ -5138,7 +5113,7 @@ export function SimulatorApp({
                 <div className="subheading-row">
                   <h3 id="working-orders-heading">Waiting orders</h3>
                   <span>
-                    {openWorkingOrderCount} of {MAX_WAITING_ORDERS}
+                    {openWorkingOrderCount} of {MAX_OPEN_WORKING_ORDERS_PER_TEAM}
                     {isPlatformAdmin ? "" : " · any teammate can cancel"}
                   </span>
                 </div>
@@ -6075,7 +6050,14 @@ export function SimulatorApp({
                       </select>
                       <small>
                         {timeInForce === "DAY"
-                          ? `Ends ${selectedIsCrypto ? "at midnight ET" : "at 4:00 p.m. ET"} if not filled`
+                          ? `Ends ${formatScheduleInstant(
+                              workingOrderExpiresAt(
+                                "DAY",
+                                selectedAssetClass,
+                                new Date(dashboard.serverTime),
+                                selectedQuote.listingCurrency,
+                              ) ?? "",
+                            )} if not filled`
                           : "Waits until it fills or is cancelled"}
                       </small>
                     </div>

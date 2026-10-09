@@ -92,20 +92,45 @@ export function isSymbolBlocked(symbol: string): boolean {
 export const MIN_CRYPTO_LOT_CAD_CENTS = 100;
 
 /**
- * Why a new buy of this quote would be refused, in the words the order
- * routes use, or null. Selling is never blocked by these rules.
+ * Why a new buy of this quote would be refused, or null. The one place these
+ * rules live: the ticket shows the message, the order paths throw it. Selling
+ * is never blocked by them, so nobody is trapped in a position.
  */
-export function buyBlockedReason(quote: Quote): string | null {
+function buyRefusal(quote: Quote): { code: string; message: string } | null {
   if (!isAssetClassEnabled(quote.assetClass)) {
-    return `${quote.assetClass === "CRYPTO" ? "Crypto" : "ETF"} trading is not open in this competition.`;
+    return {
+      code: "ASSET_CLASS_DISABLED",
+      message: `${quote.assetClass === "CRYPTO" ? "Crypto" : "ETF"} trading is not open in this competition.`,
+    };
   }
   if (isSymbolBlocked(quote.symbol)) {
-    return `${quote.symbol} has been removed from the simulator. Existing holdings can still be sold.`;
+    return {
+      code: "SYMBOL_BLOCKED",
+      message: `${quote.symbol} has been removed from the simulator. Existing holdings can still be sold.`,
+    };
   }
   if (quote.assetClass === "CRYPTO" && quote.priceCadCents < MIN_CRYPTO_LOT_CAD_CENTS) {
-    return `One lot of ${quote.symbol} is now worth less than $1, so new buys are paused. You can still sell.`;
+    return {
+      code: "LOT_TOO_SMALL",
+      message: `One lot of ${quote.symbol} is now worth less than $1, so new buys are paused. You can still sell.`,
+    };
   }
   return null;
+}
+
+export function buyBlockedReason(quote: Quote): string | null {
+  return buyRefusal(quote)?.message ?? null;
+}
+
+/** Throws the order paths' 409 when a new buy of this quote is refused. */
+export function assertBuyAllowed(quote: Quote): void {
+  const refusal = buyRefusal(quote);
+  if (refusal) {
+    throw new AppError(refusal.code, refusal.message, 409, {
+      symbol: quote.symbol,
+      assetClass: quote.assetClass,
+    });
+  }
 }
 
 /** A quote for the browser, with its buy restriction filled in. */
