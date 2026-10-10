@@ -4161,6 +4161,8 @@ a {
 @media (min-width: 721px) {
   .status-footer {
     grid-template-columns: 1fr auto 1fr;
+    /* Matches the 8px top padding so the first row sits centered above the divider. */
+    row-gap: 8px;
   }
 }
 
