@@ -37,6 +37,7 @@ import type {
   TeamHoldingsView,
   TeamSummary,
   TimeInForce,
+  TradeAction,
   TradeSide,
   WatchlistItemView,
   WorkingOrderType,
@@ -670,6 +671,13 @@ function tokenAmountLabel(quantity: number, lotSize: number, symbol: string): st
 }
 
 type TicketOrderType = "MARKET" | WorkingOrderType;
+
+const ACTION_LABELS: Record<TradeAction, string> = {
+  BUY: "Buy",
+  SELL: "Sell",
+  SHORT: "Short",
+  COVER: "Buy to cover",
+};
 
 const ORDER_TYPE_LABELS: Record<TicketOrderType, string> = {
   MARKET: "Market",
@@ -2798,7 +2806,9 @@ export function SimulatorApp({
   const [popularSections, setPopularSections] = useState<PopularSection[] | null>(
     null,
   );
-  const [side, setSide] = useState<TradeSide>("BUY");
+  const [action, setAction] = useState<TradeAction>("BUY");
+  // Orders are stored by side: a short sale sells and a cover buys.
+  const side: TradeSide = action === "BUY" || action === "COVER" ? "BUY" : "SELL";
   const [quantity, setQuantity] = useState("10");
   const [orderType, setOrderType] = useState<TicketOrderType>("MARKET");
   const [triggerPrice, setTriggerPrice] = useState("");
@@ -3304,16 +3314,15 @@ export function SimulatorApp({
     holdingForQuote?.reservedQuantity ?? 0,
   );
   const freeQuantity = Math.max(0, heldQuantity) - reservedQuantity;
-  // Below zero the team is short. A buy first covers the short and a market
-  // sell first sells shares held; only the rest (the opening part) needs
-  // buying power or room under the one-holding cap.
-  const closingQuantity = quantityIsValid
-    ? Math.min(wholeQuantity, Math.max(0, side === "BUY" ? -heldQuantity : heldQuantity))
-    : 0;
-  const openingQuantity = quantityIsValid ? wholeQuantity - closingQuantity : 0;
+  // Below zero the team is short. Buy and short open (or grow) a position;
+  // sell and cover close one. No action crosses zero.
+  const shortQuantity = Math.max(0, -heldQuantity);
+  const positionAfter = heldQuantity + (side === "BUY" ? wholeQuantity : -wholeQuantity);
   const workingOrdersEnabled = dashboard.workingOrdersEnabled;
   // Stop loss and take profit only sell; switching to Buy falls back to Market.
-  const ticketOrderType: TicketOrderType = !workingOrdersEnabled
+  // Short sales and covers are market orders only.
+  const ticketOrderType: TicketOrderType =
+    !workingOrdersEnabled || action === "SHORT" || action === "COVER"
     ? "MARKET"
     : side === "BUY" && (orderType === "STOP_LOSS" || orderType === "TAKE_PROFIT")
       ? "MARKET"
@@ -3331,11 +3340,9 @@ export function SimulatorApp({
       )
     : { cents: null, rounded: false };
   const triggerPriceCents = triggerParsed.cents || null;
-  // Exits guard a long; a buy that covers a short can't carry them.
   const bracketAllowed =
     workingOrdersEnabled &&
-    side === "BUY" &&
-    closingQuantity === 0 &&
+    action === "BUY" &&
     (ticketOrderType === "MARKET" || ticketOrderType === "LIMIT");
   const takeProfitEntered = bracketAllowed && takeProfitPrice.trim() !== "";
   const stopLossEntered = bracketAllowed && stopLossPrice.trim() !== "";
@@ -3462,9 +3469,8 @@ export function SimulatorApp({
     !(selectedQuote.source === "LUBAN_SIMULATED" && selectedQuote.isStale);
   // What a buy leaves to spend; null until there's a total to subtract.
   const receiptCashLeft =
-    side === "BUY" && quoteLoaded && quantityIsValid && (!isWaitingOrder || triggerPriceCents !== null)
-      ? portfolio.buyingPowerCents -
-        (isWaitingOrder ? estimatedValue : openingQuantity * ticketUnitCadCents)
+    action === "BUY" && quoteLoaded && quantityIsValid && (!isWaitingOrder || triggerPriceCents !== null)
+      ? portfolio.buyingPowerCents - estimatedValue
       : null;
   // Students can only trade while the listing's exchange is open; the server
   // enforces this too. The admin sandbox ignores market hours.
@@ -3484,8 +3490,7 @@ export function SimulatorApp({
         ? "Trading waits for a fresh market quote."
         : tradingHaltReason
           ? tradingHaltReason
-          : selectedQuote.buyBlockedReason &&
-              (openingQuantity > 0 || (side === "BUY" && !quantityIsValid))
+          : selectedQuote.buyBlockedReason && (action === "BUY" || action === "SHORT")
             ? selectedQuote.buyBlockedReason
             : isPlatformAdmin && !hasAdminTradingAccount
             ? "Set your admin test cash before placing an order."
@@ -3513,7 +3518,15 @@ export function SimulatorApp({
                     ? `Enter a positive whole number of ${unitWord(selectedAssetClass, 2)}.`
                     : waitingOrderProblem
                       ? waitingOrderProblem
-                      : side === "BUY" && receiptCashLeft !== null && receiptCashLeft < 0
+                      : action === "BUY" && heldQuantity < 0
+                        ? `The ${accountName} is short ${number.format(shortQuantity)} ${unitWord(selectedAssetClass, shortQuantity)} of ${selectedQuote.symbol}. Choose Buy to cover to buy them back.`
+                      : action === "SHORT" && heldQuantity > 0
+                        ? `The ${accountName} owns ${number.format(heldQuantity)} ${unitWord(selectedAssetClass, heldQuantity)} of ${selectedQuote.symbol}. Sell them before shorting it.`
+                      : action === "COVER" && wholeQuantity > shortQuantity
+                        ? shortQuantity === 0
+                          ? `The ${accountName} isn't short ${selectedQuote.symbol}.`
+                          : `The ${accountName} is short only ${number.format(shortQuantity)} ${unitWord(selectedAssetClass, shortQuantity)} of ${selectedQuote.symbol}.`
+                      : receiptCashLeft !== null && receiptCashLeft < 0
                         ? `This order is larger than the ${accountName}'s available cash${
                             portfolio.reservedCashCents > 0
                               ? ` (${formatMoney(portfolio.reservedCashCents)} is set aside for waiting buys)`
@@ -3523,11 +3536,9 @@ export function SimulatorApp({
                               ? `. Cash from short sales is owed back, so it can't fund buys`
                               : ""
                           }.`
-                        : side === "SELL" &&
-                            wholeQuantity > freeQuantity &&
-                            (isWaitingOrder || reservedQuantity > 0)
+                        : action === "SELL" && wholeQuantity > freeQuantity
                           ? heldQuantity <= 0
-                            ? `The ${accountName} doesn't hold any ${selectedQuote.symbol}. Short sales are market orders only.`
+                            ? `The ${accountName} doesn't hold any ${selectedQuote.symbol}. To bet on a fall, choose Short.`
                             : reservedQuantity > 0
                               ? `Only ${number.format(freeQuantity)} of the ${accountName}'s ${number.format(heldQuantity)} ${unitWord(selectedAssetClass, heldQuantity)} of ${selectedQuote.symbol} are free; the rest are held back for waiting sells.`
                               : `The ${accountName} holds only ${number.format(heldQuantity)} ${unitWord(selectedAssetClass, heldQuantity)} of ${selectedQuote.symbol}${
@@ -3563,12 +3574,24 @@ export function SimulatorApp({
           Math.max(0, heldQuantity) * selectedQuote.priceCadCents,
         ),
       );
-  // While short, Max on a market buy covers the whole short.
-  const maxCovers = side === "BUY" && heldQuantity < 0 && !isWaitingOrder;
-  const maxOrderQuantity = maxCovers
-    ? Math.min(MAX_ORDER_QUANTITY, -heldQuantity)
-    : side === "BUY"
-      ? ticketUnitCadCents > 0
+  // A short has the same one-holding cap as a buy (the admin sandbox skips it).
+  const shortLimitCents = isPlatformAdmin
+    ? Number.POSITIVE_INFINITY
+    : positionRoomCents(
+        portfolio.totalValueCents,
+        shortQuantity * selectedQuote.priceCadCents,
+      );
+  const maxOrderQuantity =
+    action === "COVER"
+      ? Math.min(MAX_ORDER_QUANTITY, shortQuantity)
+      : action === "SHORT"
+        ? heldQuantity > 0 || ticketUnitCadCents <= 0
+          ? 0
+          : Math.min(MAX_ORDER_QUANTITY, Math.floor(shortLimitCents / ticketUnitCadCents))
+    : action === "BUY"
+      ? heldQuantity < 0
+        ? 0
+        : ticketUnitCadCents > 0
         ? Math.min(
             MAX_ORDER_QUANTITY,
             Math.max(0, Math.floor(buyLimitCents / ticketUnitCadCents)),
@@ -4170,7 +4193,7 @@ export function SimulatorApp({
       kind: "working",
       message: isWaitingOrder
         ? `Placing the ${ORDER_TYPE_LABELS[ticketOrderType].toLowerCase()} order…`
-        : `Recording ${side.toLowerCase()} order in the ${isPlatformAdmin ? "private admin" : "shared team"} ledger…`,
+        : `Recording ${ACTION_LABELS[action].toLowerCase()} order in the ${isPlatformAdmin ? "private admin" : "shared team"} ledger…`,
     });
 
     // Reuse the pending key only for a retry of the exact same ticket; any
@@ -4178,7 +4201,7 @@ export function SimulatorApp({
     const orderFingerprint = [
       dashboard.currentUser.id,
       selectedQuote.symbol,
-      side,
+      action,
       wholeQuantity,
       ticketOrderType,
       triggerPriceCents ?? "-",
@@ -4216,7 +4239,7 @@ export function SimulatorApp({
             "Idempotency-Key": idempotencyKey,
           },
           body: JSON.stringify({
-            side,
+            side: action,
             symbol: selectedQuote.symbol,
             quantity: wholeQuantity,
             orderType: "MARKET",
@@ -6073,36 +6096,50 @@ export function SimulatorApp({
             <form className="order-ticket" id="order-ticket" onSubmit={placeOrder}>
               <div className="ticket-layout">
                 <div className="ticket-inputs">
-                  <fieldset className="side-control">
-                    <legend className="sr-only">Order side</legend>
-                    <button
-                      type="button"
-                      className={side === "BUY" ? "is-active" : ""}
-                      aria-pressed={side === "BUY"}
-                      onClick={() => {
-                        setSide("BUY");
+                  <div className="order-type order-type--select">
+                    <span className="ticket-label-row">
+                      <label htmlFor="order-action-select">Action</label>
+                      <HelpTip id="order-action-help" label="What do the actions mean?">
+                        <span className="help-tip__line">
+                          <strong>Buy</strong> buys shares for the team to own.
+                        </span>
+                        <span className="help-tip__line">
+                          <strong>Sell</strong> sells shares the team owns.
+                        </span>
+                        <span className="help-tip__line">
+                          <strong>Short</strong> sells borrowed shares, a bet that the price
+                          will fall. The team gets the cash now and owes the shares back.
+                        </span>
+                        <span className="help-tip__line">
+                          <strong>Buy to cover</strong> buys the shorted shares back, closing
+                          the short. Buying back below the sale price is a gain.
+                        </span>
+                      </HelpTip>
+                    </span>
+                    <select
+                      id="order-action-select"
+                      value={action}
+                      onChange={(event) => {
+                        const next = event.target.value as TradeAction;
+                        setAction(next);
                         editTicket();
-                        // Stop loss and take profit only sell.
-                        if (orderType === "STOP_LOSS" || orderType === "TAKE_PROFIT") {
+                        // Stop loss and take profit only sell what the team owns.
+                        if (
+                          next !== "SELL" &&
+                          (orderType === "STOP_LOSS" || orderType === "TAKE_PROFIT")
+                        ) {
                           setOrderType("MARKET");
                         }
                       }}
                     >
-                      Buy
-                    </button>
-                    <button
-                      type="button"
-                      className={side === "SELL" ? "is-active is-active--sell" : ""}
-                      aria-pressed={side === "SELL"}
-                      onClick={() => {
-                        setSide("SELL");
-                        editTicket();
-                      }}
-                    >
-                      Sell
-                    </button>
-                  </fieldset>
-                  {workingOrdersEnabled ? (
+                      {(Object.keys(ACTION_LABELS) as TradeAction[]).map((option) => (
+                        <option key={option} value={option}>
+                          {ACTION_LABELS[option]}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  {workingOrdersEnabled && (action === "BUY" || action === "SELL") ? (
                     <div className="order-type order-type--select">
                       <span className="ticket-label-row">
                         <label htmlFor="order-type-select">Order type</label>
@@ -6236,14 +6273,16 @@ export function SimulatorApp({
                       aria-haspopup="dialog"
                       onClick={() => maxConfirmRef.current?.showModal()}
                       title={
-                        maxCovers
+                        action === "COVER"
                           ? `Buy back every ${unitWord(selectedAssetClass, 1)} sold short`
-                          : side === "BUY"
-                          ? `Buy as many ${unitWord(selectedAssetClass, 2)} as the cash allows`
-                          : `Sell every ${unitWord(selectedAssetClass, 1)} held`
+                          : action === "SHORT"
+                            ? `Short as many ${unitWord(selectedAssetClass, 2)} as the one-holding limit allows`
+                            : action === "BUY"
+                              ? `Buy as many ${unitWord(selectedAssetClass, 2)} as the cash allows`
+                              : `Sell every ${unitWord(selectedAssetClass, 1)} held`
                       }
                     >
-                      {maxCovers ? "Cover" : side === "BUY" ? "Max" : "All"}
+                      {action === "BUY" || action === "SHORT" ? "Max" : "All"}
                       {quoteLoaded && maxOrderQuantity > 0
                         ? ` · ${number.format(maxOrderQuantity)}`
                         : ""}
@@ -6259,15 +6298,17 @@ export function SimulatorApp({
                       }}
                     >
                       <h2 id="max-confirm-title">
-                        {maxCovers
+                        {action === "COVER"
                           ? "Cover the whole short?"
-                          : side === "BUY"
-                            ? "Buy the maximum?"
-                            : "Sell everything?"}
+                          : action === "SHORT"
+                            ? "Short the maximum?"
+                            : action === "BUY"
+                              ? "Buy the maximum?"
+                              : "Sell everything?"}
                       </h2>
                       <div id="max-confirm-body">
                         <p>
-                          {side === "BUY" ? (
+                          {action !== "SELL" ? (
                             <>
                               This sets the quantity to{" "}
                               <strong>
@@ -6277,9 +6318,10 @@ export function SimulatorApp({
                               </strong>
                               , about{" "}
                               <strong>{formatMoney(maxOrderQuantity * ticketUnitCadCents)}</strong>.
-                              {maxCovers ? (
+                              {action === "COVER" ? (
                                 <> That buys back every {unitWord(selectedAssetClass, 1)} sold short.</>
-                              ) : buyLimitCents < portfolio.buyingPowerCents ? (
+                              ) : action === "SHORT" ||
+                                buyLimitCents < portfolio.buyingPowerCents ? (
                                 <>
                                   That&rsquo;s as much as the {MAX_POSITION_PERCENT}% limit on one
                                   holding allows.
@@ -6542,7 +6584,7 @@ export function SimulatorApp({
                             }`}
                       </dd>
                     </div>
-                    {side === "BUY" ? (
+                    {action === "BUY" ? (
                       <div
                         className={
                           receiptCashLeft !== null && receiptCashLeft < 0
@@ -6571,34 +6613,41 @@ export function SimulatorApp({
                       <div
                         className={
                           quantityIsValid &&
-                          wholeQuantity > freeQuantity &&
-                          (isWaitingOrder || reservedQuantity > 0)
+                          ((action === "SELL" && wholeQuantity > freeQuantity) ||
+                            (action === "COVER" && wholeQuantity > shortQuantity) ||
+                            (action === "SHORT" && heldQuantity > 0))
                             ? "ticket-receipt__after is-short"
                             : "ticket-receipt__after"
                         }
                       >
                         <dt>
                           {quantityIsValid
-                            ? heldQuantity - wholeQuantity < 0
+                            ? positionAfter < 0
                               ? "Short after"
                               : `${selectedIsCrypto ? "Lots" : "Shares"} left`
-                            : reservedQuantity > 0
+                            : heldQuantity < 0
+                              ? "Short"
+                              : reservedQuantity > 0
                               ? "Free to sell"
                               : selectedIsCrypto
                                 ? "Lots held"
                                 : "Shares held"}
                         </dt>
                         <dd>
-                          {quantityIsValid
-                            ? number.format(
-                                heldQuantity - wholeQuantity < 0
-                                  ? heldQuantity - wholeQuantity
-                                  : freeQuantity - wholeQuantity,
-                              )
-                            : number.format(freeQuantity)}
+                          {number.format(
+                            quantityIsValid
+                              ? action === "SELL"
+                                ? freeQuantity - wholeQuantity
+                                : positionAfter
+                              : heldQuantity < 0
+                                ? heldQuantity
+                                : freeQuantity,
+                          )}
                         </dd>
                         <dd className="ticket-receipt__sub">
-                          {reservedQuantity > 0
+                          {heldQuantity < 0
+                            ? `${selectedQuote.symbol} sold short`
+                            : reservedQuantity > 0
                             ? `${number.format(heldQuantity)} held · ${number.format(reservedQuantity)} held back for waiting sells`
                             : selectedIsCrypto
                               ? `${selectedQuote.symbol} · ${tokenAmountLabel(heldQuantity, selectedLotSize, selectedQuote.symbol)}`
@@ -6617,9 +6666,9 @@ export function SimulatorApp({
                       ? "Recording order…"
                       : isWaitingOrder
                         ? `Place ${ORDER_TYPE_LABELS[ticketOrderType].toLowerCase()} order`
-                        : side === "SELL" && openingQuantity > 0
+                        : action === "SHORT"
                           ? "Place short sale"
-                          : side === "BUY" && closingQuantity > 0
+                          : action === "COVER"
                             ? "Place buy to cover"
                             : `Place simulated ${side.toLowerCase()}`}
                     <ArrowIcon />

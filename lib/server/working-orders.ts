@@ -479,6 +479,18 @@ async function placeWorkingOrderNow(input: PlaceWorkingOrderInput): Promise<Work
     }
 
     const reservations = await readReservations(tx, teamId);
+    const holding = await tx.get<{ quantity: number }>(
+      "SELECT quantity FROM holdings WHERE team_id = ? AND symbol = ?",
+      [teamId, order.symbol],
+    );
+    const held = Number(holding?.quantity ?? 0);
+    if (order.side === "BUY" && held < 0) {
+      throw new AppError(
+        "SHORT_POSITION_OPEN",
+        `The ${account.role === "platform_admin" ? "test account" : "team"} is short ${order.symbol}. Covering a short is a market order: choose Buy to cover.`,
+        409,
+      );
+    }
     if (order.side === "BUY") {
       if (account.role !== "platform_admin") await assertHoldingSlot(tx, teamId, order.symbol);
       const spendable = Number(account.cash_cents) - reservations.cashCents;
@@ -493,18 +505,13 @@ async function placeWorkingOrderNow(input: PlaceWorkingOrderInput): Promise<Work
         );
       }
     } else {
-      const holding = await tx.get<{ quantity: number }>(
-        "SELECT quantity FROM holdings WHERE team_id = ? AND symbol = ?",
-        [teamId, order.symbol],
-      );
-      const held = Number(holding?.quantity ?? 0);
       const sellable = held - (reservations.sharesBySymbol.get(order.symbol) ?? 0);
       if (order.quantity > sellable) {
         throw new AppError(
           "INSUFFICIENT_SHARES",
           sellable < held
             ? `Only ${Math.max(0, sellable)} ${unitWord(quote.assetClass, sellable)} of ${order.symbol} can be sold; the rest are held for other waiting sell orders.`
-            : `The ${account.role === "platform_admin" ? "test account" : "team"} only owns ${Math.max(0, held)} ${unitWord(quote.assetClass, held)} of ${order.symbol}. Short sales are market orders only.`,
+            : `The ${account.role === "platform_admin" ? "test account" : "team"} only owns ${Math.max(0, held)} ${unitWord(quote.assetClass, held)} of ${order.symbol}. To bet on a fall, place a market Short.`,
           409,
           { availableShares: Math.max(0, sellable), requestedShares: order.quantity },
         );

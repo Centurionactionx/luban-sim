@@ -30,7 +30,7 @@ const orderSchema = z
   .object({
     orderType: z.literal("MARKET").default("MARKET"),
     quantity: z.number().int().positive().max(100_000),
-    side: z.enum(["BUY", "SELL"]),
+    side: z.enum(["BUY", "SELL", "SHORT", "COVER"]),
     symbol: z
       .string()
       .trim()

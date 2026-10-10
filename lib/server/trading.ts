@@ -8,6 +8,7 @@ import type {
   PlaceOrderInput,
   SerializedAppError,
   TeamStatus,
+  TradeAction,
   TradeReceipt,
   TradeSide,
 } from "../contracts";
@@ -121,6 +122,8 @@ interface NormalizedBracket {
 interface NormalizedOrderInput {
   actorUserId: string;
   symbol: string;
+  action: TradeAction;
+  /** The stored side: short sales sell, covers buy. */
   side: TradeSide;
   quantity: number;
   idempotencyKey: string;
@@ -152,8 +155,8 @@ function normalizeOrderInput(
   if (!symbol || !MARKET_SYMBOL_PATTERN.test(symbol)) {
     throw new AppError("INVALID_SYMBOL", "Enter a valid market symbol.", 400);
   }
-  if (side !== "BUY" && side !== "SELL") {
-    throw new AppError("INVALID_SIDE", "Order side must be BUY or SELL.", 400);
+  if (side !== "BUY" && side !== "SELL" && side !== "SHORT" && side !== "COVER") {
+    throw new AppError("INVALID_SIDE", "Order side must be BUY, SELL, SHORT, or COVER.", 400);
   }
   if (
     !Number.isSafeInteger(input.quantity) ||
@@ -174,16 +177,17 @@ function normalizeOrderInput(
     );
   }
 
-  const normalizedSide: TradeSide = side;
-  const bracket = normalizeBracket(input.bracket, normalizedSide);
+  const action: TradeAction = side;
+  const bracket = normalizeBracket(input.bracket, action);
   return {
     actorUserId,
     symbol,
-    side: normalizedSide,
+    action,
+    side: action === "BUY" || action === "COVER" ? "BUY" : "SELL",
     quantity: input.quantity,
     idempotencyKey,
     fingerprint:
-      `${actorUserId}|${symbol}|${normalizedSide}|${input.quantity}` +
+      `${actorUserId}|${symbol}|${action}|${input.quantity}` +
       (bracket
         ? `|tp:${bracket.takeProfitCents ?? "-"}|sl:${bracket.stopLossCents ?? "-"}|${bracket.timeInForce}`
         : ""),
@@ -194,13 +198,13 @@ function normalizeOrderInput(
 /** A bracket with at least one exit set, or null. Only buys can carry one. */
 function normalizeBracket(
   bracket: BracketInput | undefined,
-  side: TradeSide,
+  action: TradeAction,
 ): NormalizedBracket | null {
   if (!bracket) return null;
   const takeProfitCents = optionalPriceCents(bracket.takeProfitCents, "take profit");
   const stopLossCents = optionalPriceCents(bracket.stopLossCents, "stop loss");
   if (takeProfitCents === null && stopLossCents === null) return null;
-  if (side !== "BUY") {
+  if (action !== "BUY") {
     throw new AppError(
       "INVALID_BRACKET",
       "Take profit and stop loss exits can only be attached to a buy.",
@@ -226,8 +230,6 @@ export interface FillOptions {
   releaseWorkingOrderIds?: readonly string[];
   /** System-triggered fills don't count toward the per-minute order limit. */
   systemTriggered?: boolean;
-  /** A sell that may only close shares the team holds, never open a short. */
-  closeOnly?: boolean;
   /**
    * Fill against exactly this quote (the one the waiting order was checked
    * on), not whatever the cache holds a moment later. The usual stale,
@@ -779,14 +781,11 @@ async function placeOrderNow(input: PlaceOrderInput, options: FillOptions): Prom
       );
       const reservedShares = reservations.sharesBySymbol.get(normalized.symbol) ?? 0;
       const sellableQuantity = currentQuantity - reservedShares;
-      // A holding below zero is a short. The closing part of an order is a
-      // buy covering a short or a sell of shares held; the rest opens (or
-      // grows) a position, so only it faces the cash and holding limits.
-      const closingQuantity = Math.min(
-        normalized.quantity,
-        Math.max(0, normalized.side === "BUY" ? -currentQuantity : currentQuantity),
-      );
-      const openingQuantity = normalized.quantity - closingQuantity;
+      // A holding below zero is a short. Each action either opens (buy,
+      // short) or closes (sell, cover) and never crosses zero, so a short is
+      // always chosen on purpose. Only opening faces the cash and holding limits.
+      const opening = normalized.action === "BUY" || normalized.action === "SHORT";
+      const openingQuantity = opening ? normalized.quantity : 0;
       const openingCents = openingQuantity * quote.priceCadCents;
       const shareWord = unitWord(quote.assetClass, normalized.quantity);
       // Crypto notes also give the token amount, e.g. "3 lots (0.0003 BTC)".
@@ -794,33 +793,50 @@ async function placeOrderNow(input: PlaceOrderInput, options: FillOptions): Prom
         quote.assetClass === "CRYPTO"
           ? `${normalized.quantity} ${shareWord} (${formatTokenQuantity(normalized.quantity, quote.lotSize)} ${cryptoTokenSymbol(normalized.symbol)})`
           : `${normalized.quantity} ${shareWord}`;
-      // Shares held back for waiting sells (a stop loss, say) stay theirs: a
-      // sell that would reach into them is refused rather than turned into a
-      // short. Fills of waiting sells may only ever close shares.
-      if (
-        normalized.side === "SELL" &&
-        normalized.quantity > sellableQuantity &&
-        (reservedShares > 0 || options.closeOnly)
-      ) {
+      const owner = isAdminSandbox ? "The test account" : "The team";
+      const heldText = (quantity: number) =>
+        `${Math.abs(quantity)} ${unitWord(quote.assetClass, Math.abs(quantity))} of ${normalized.symbol}`;
+      if (normalized.action === "BUY" && currentQuantity < 0) {
+        throw new AppError(
+          "SHORT_POSITION_OPEN",
+          `${owner} is short ${heldText(currentQuantity)}. Choose Buy to cover to buy them back.`,
+          409,
+          { shortQuantity: -currentQuantity },
+        );
+      }
+      if (normalized.action === "SHORT" && currentQuantity > 0) {
+        throw new AppError(
+          "LONG_POSITION_OPEN",
+          `${owner} owns ${heldText(currentQuantity)}. Sell them before shorting it.`,
+          409,
+          { heldQuantity: currentQuantity },
+        );
+      }
+      if (normalized.action === "COVER" && normalized.quantity > -currentQuantity) {
+        throw new AppError(
+          "INSUFFICIENT_SHORT",
+          currentQuantity < 0
+            ? `${owner} is short only ${heldText(currentQuantity)}.`
+            : `${owner} isn't short ${normalized.symbol}.`,
+          409,
+          { shortQuantity: Math.max(0, -currentQuantity), requestedShares: normalized.quantity },
+        );
+      }
+      // Shares held back for waiting sells (a stop loss, say) can't be sold
+      // twice.
+      if (normalized.action === "SELL" && normalized.quantity > sellableQuantity) {
         throw new AppError(
           "INSUFFICIENT_SHARES",
-          reservedShares > 0
+          reservedShares > 0 && normalized.quantity <= currentQuantity
             ? `${reservedShares} ${unitWord(quote.assetClass, reservedShares)} of ${normalized.symbol} ${reservedShares === 1 ? "is" : "are"} held for waiting sell orders. Cancel those first, or sell at most ${Math.max(0, sellableQuantity)}.`
-            : `${isAdminSandbox ? "The test account" : "The team"} only owns ${Math.max(0, currentQuantity)} ${unitWord(quote.assetClass, currentQuantity)} of ${normalized.symbol}.`,
+            : `${owner} only owns ${heldText(Math.max(0, currentQuantity))}.` +
+              (currentQuantity <= 0 ? " To bet on a fall, choose Short." : ""),
           409,
           {
             availableShares: Math.max(0, sellableQuantity),
             requestedShares: normalized.quantity,
             reservedShares,
           },
-        );
-      }
-
-      if (normalized.bracket && closingQuantity > 0) {
-        throw new AppError(
-          "INVALID_BRACKET",
-          "Take profit and stop loss exits can't be attached to a buy that covers a short.",
-          400,
         );
       }
 
@@ -886,10 +902,9 @@ async function placeOrderNow(input: PlaceOrderInput, options: FillOptions): Prom
             Number(account.cash_cents),
           );
           const limitPercent = maxPositionPercent();
-          // An order that crosses zero opens its rest from an empty holding.
           const roomCents = positionRoomCents(
             totalValueCents,
-            (closingQuantity > 0 ? 0 : Math.abs(currentQuantity)) * quote.priceCadCents,
+            Math.abs(currentQuantity) * quote.priceCadCents,
             limitPercent,
           );
           if (openingCents > roomCents) {
@@ -899,10 +914,10 @@ async function placeOrderNow(input: PlaceOrderInput, options: FillOptions): Prom
               "POSITION_LIMIT",
               `One holding can be at most ${limitPercent}% of the team's portfolio value. ` +
                 (roomQuantity > 0
-                  ? `The team can ${action} up to ${roomQuantity + closingQuantity} more ${unitWord(quote.assetClass, roomQuantity + closingQuantity)} of ${normalized.symbol}.`
+                  ? `The team can ${action} up to ${roomQuantity} more ${unitWord(quote.assetClass, roomQuantity)} of ${normalized.symbol}.`
                   : `The team already holds as much ${normalized.symbol} as that allows.`),
               409,
-              { maxQuantity: roomQuantity + closingQuantity, limitPercent },
+              { maxQuantity: roomQuantity, limitPercent },
             );
           }
         }
@@ -1001,8 +1016,8 @@ async function placeOrderNow(input: PlaceOrderInput, options: FillOptions): Prom
         ],
       );
 
-      const shortSale = normalized.side === "SELL" && openingQuantity > 0;
-      const cover = normalized.side === "BUY" && closingQuantity > 0;
+      const shortSale = normalized.action === "SHORT";
+      const cover = normalized.action === "COVER";
       const verb = shortSale ? "Sold short" : cover ? "Bought to cover" : normalized.side === "BUY" ? "Bought" : "Sold";
       const action = shortSale ? "SELL SHORT" : cover ? "BUY TO COVER" : normalized.side;
       await tx.run(

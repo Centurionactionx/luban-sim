@@ -288,8 +288,6 @@ async function fillOrder(
       },
       {
         systemTriggered: true,
-        // Waiting sells guard shares the team holds; they never open a short.
-        closeOnly: order.side === "SELL",
         releaseWorkingOrderIds: [order.id],
         expectTeamId: order.team_id,
         activityLabel: label,

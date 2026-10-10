@@ -37,7 +37,7 @@ export const CHANGELOG: readonly ChangelogRelease[] = [
     date: null,
     title: "Short selling",
     changes: [
-      { kind: "added", text: "Short selling. Sell more than your team owns and the rest is sold short: you get the cash now and owe the shares back. Buying them back later (a buy to cover) locks in the gain or loss. Shorts show as negative holdings, follow the same one-holding and 25-stock limits, and are market orders only." },
+      { kind: "added", text: "Short selling. The order ticket has a new Action menu: Buy, Sell, Short and Buy to cover. Short sells shares your team doesn't own, a bet that the price will fall: you get the cash now and owe the shares back. Buy to cover buys them back and locks in the gain or loss. Shorts show as negative holdings, follow the same one-holding and 25-stock limits, and are market orders only." },
       { kind: "changed", text: "Cash from short sales is owed back, so it doesn't count as buying power. Covering a short is always allowed, even if it leaves your team's cash below zero." },
     ],
   },

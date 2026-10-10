@@ -22,6 +22,11 @@ export type CompetitionPhase =
   | "ended";
 export type TeamStatus = "active" | "frozen" | "disqualified";
 export type TradeSide = "BUY" | "SELL";
+/**
+ * What an order does. Short opens or grows a short (a sell of shares the team
+ * doesn't own); cover buys a short back. Orders are stored by side only.
+ */
+export type TradeAction = TradeSide | "SHORT" | "COVER";
 export type OrderStatus = "FILLED" | "REJECTED";
 export type MarketDataSource = "YAHOO_FINANCE" | "LUBAN_SIMULATED";
 export type QuoteRange = "1D" | "5D" | "1M" | "3M";
@@ -465,7 +470,7 @@ export interface Dashboard {
 export interface PlaceOrderInput {
   actorUserId: string;
   symbol: string;
-  side: TradeSide;
+  side: TradeAction;
   quantity: number;
   idempotencyKey: string;
   /** Optional exits attached to a market buy (a bracket). */

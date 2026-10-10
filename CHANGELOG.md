@@ -9,7 +9,7 @@ Releases before v1.28.0 didn't have numbers, so they're listed by date.
 
 ### New
 
-- Short selling. Sell more than your team owns and the rest is sold short: you get the cash now and owe the shares back. Buying them back later (a buy to cover) locks in the gain or loss. Shorts show as negative holdings, follow the same one-holding and 25-stock limits, and are market orders only.
+- Short selling. The order ticket has a new Action menu: Buy, Sell, Short and Buy to cover. Short sells shares your team doesn't own, a bet that the price will fall: you get the cash now and owe the shares back. Buy to cover buys them back and locks in the gain or loss. Shorts show as negative holdings, follow the same one-holding and 25-stock limits, and are market orders only.
 
 ### Improved
 
