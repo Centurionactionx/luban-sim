@@ -1,3 +1,4 @@
+import { Analytics } from "@vercel/analytics/next";
 import type { Metadata, Viewport } from "next";
 import { IBM_Plex_Mono, Space_Grotesk } from "next/font/google";
 import type { ReactNode } from "react";
@@ -64,6 +65,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
     <body>
       {children}
       <ServiceWorkerRegistration />
+      <Analytics />
     </body>
   );
 
