@@ -210,6 +210,16 @@ async function claimPreloadedAccount(
 
   const db = await getDb();
 
+  // No pending claim for this address: skip the exclusive lock, which would
+  // otherwise pause every trade for each unrelated first sign-in.
+  const pending = await db.get(
+    "SELECT 1 AS present FROM account_claims WHERE email = ?",
+    [email],
+  );
+  if (!pending) {
+    return null;
+  }
+
   const userId = await db.transaction(async (tx) => {
     await acquireAdvisoryLock(tx, ADVISORY_LOCK_ACCOUNTS);
 

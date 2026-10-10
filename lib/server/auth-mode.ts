@@ -15,12 +15,13 @@ export function isManagedAuthMode(): boolean {
 }
 
 /**
- * Demo identity switching is never available in managed mode, and in a
- * production build it additionally requires the explicit LUBAN_DEMO_MODE
- * opt-in so a public deployment cannot expose the seeded host account.
+ * Demo identity switching is never available in managed mode or on Vercel
+ * (whatever LUBAN_DEMO_MODE says), and in a production build it additionally
+ * requires the explicit LUBAN_DEMO_MODE opt-in so a public deployment cannot
+ * expose the seeded host account.
  */
 export function isDemoLoginAllowed(): boolean {
-  if (isManagedAuthMode()) {
+  if (isManagedAuthMode() || process.env.VERCEL === "1") {
     return false;
   }
 

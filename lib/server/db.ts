@@ -21,7 +21,7 @@ import {
 import { postgresConnectionOptions } from "./postgres-config";
 
 const DEFAULT_DATABASE_PATH = join(process.cwd(), "data", "luban.sqlite");
-const SCHEMA_VERSION = 18;
+const SCHEMA_VERSION = 19;
 /** Map grouping within a sector; "Other" until the feed reports one. */
 const INSTRUMENT_INDUSTRY_COLUMN = "industry TEXT NOT NULL DEFAULT 'Other'";
 
@@ -142,6 +142,58 @@ function createSqliteSchema(database: DatabaseSync): void {
   ensureInvitationOperatorColumn(database);
   ensureAdminValuationColumns(database);
   backfillAdminValuationAccountsSqlite(database);
+  ensureSignedBalances(database);
+}
+
+/** v19 lifts the sign checks that short selling (and the debt it can leave) breaks. */
+const SIGNED_TABLES = ["teams", "holdings", "orders", "portfolio_snapshots"] as const;
+const SIGN_CHECK =
+  /CHECK \((?:cash_cents|quantity|cash_after_cents|holding_quantity_after|total_value_cents) >= 0\)/;
+
+/**
+ * Schema v19: cash, holdings, and portfolio value can go below zero. SQLite
+ * cannot drop a CHECK constraint, so a pre-v19 table is rebuilt from its
+ * current definition, the way ensureDeletedStatus rebuilds users.
+ */
+function ensureSignedBalances(database: DatabaseSync): void {
+  const stale = SIGNED_TABLES.filter((name) => {
+    const table = database
+      .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get(name) as { sql: string } | undefined;
+    return table !== undefined && SIGN_CHECK.test(table.sql);
+  });
+  if (stale.length === 0) return;
+
+  database.exec("PRAGMA foreign_keys = OFF;");
+  try {
+    database.exec("BEGIN IMMEDIATE;");
+    for (const name of stale) {
+      const rebuilt = `${name}_signed`;
+      database.exec(`CREATE TABLE ${rebuilt} (${SHARED_TABLE_BODIES[name]("INTEGER")}\n    )`);
+      const columnsOf = (table: string) =>
+        (database.prepare(`PRAGMA table_info(${table})`).all() as unknown as Array<{ name: string }>)
+          .map((column) => column.name);
+      const kept = columnsOf(rebuilt).filter((column) => columnsOf(name).includes(column));
+      database.exec(`
+        INSERT INTO ${rebuilt} (${kept.join(", ")}) SELECT ${kept.join(", ")} FROM ${name};
+        DROP TABLE ${name};
+        ALTER TABLE ${rebuilt} RENAME TO ${name};
+      `);
+    }
+    // Dropping the old tables took their indexes with them.
+    database.exec(SQLITE_SCHEMA_SQL);
+    database.exec(`${TEAMS_SANDBOX_OWNER_INDEX};`);
+    database.exec("COMMIT;");
+  } catch (error) {
+    try {
+      database.exec("ROLLBACK;");
+    } catch {
+      // Preserve the migration error below.
+    }
+    database.exec("PRAGMA foreign_keys = ON;");
+    throw error;
+  }
+  database.exec("PRAGMA foreign_keys = ON;");
 }
 
 /**
@@ -229,7 +281,7 @@ const SHARED_TABLE_BODIES = {
       sandbox_owner_user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
       status TEXT NOT NULL CHECK (status IN ('active', 'frozen', 'disqualified')),
-      cash_cents ${big} NOT NULL CHECK (cash_cents >= 0),
+      cash_cents ${big} NOT NULL,
       version ${big} NOT NULL DEFAULT 0 CHECK (version >= 0),
       created_at TEXT NOT NULL,
       UNIQUE (competition_id, name)`,
@@ -256,7 +308,7 @@ const SHARED_TABLE_BODIES = {
   holdings: (big: string) => `
       team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
       symbol TEXT NOT NULL REFERENCES instruments(symbol),
-      quantity ${big} NOT NULL CHECK (quantity >= 0),
+      quantity ${big} NOT NULL,
       average_cost_cents ${big} NOT NULL CHECK (average_cost_cents >= 0),
       updated_at TEXT NOT NULL,
       PRIMARY KEY (team_id, symbol)`,
@@ -272,8 +324,8 @@ const SHARED_TABLE_BODIES = {
       fill_price_cents ${big} NOT NULL CHECK (fill_price_cents > 0),
       fill_price_cad_cents ${big} NOT NULL CHECK (fill_price_cad_cents > 0),
       gross_cents ${big} NOT NULL CHECK (gross_cents > 0),
-      cash_after_cents ${big} NOT NULL CHECK (cash_after_cents >= 0),
-      holding_quantity_after ${big} NOT NULL CHECK (holding_quantity_after >= 0),
+      cash_after_cents ${big} NOT NULL,
+      holding_quantity_after ${big} NOT NULL,
       portfolio_version ${big} NOT NULL CHECK (portfolio_version >= 0),
       status TEXT NOT NULL CHECK (status IN ('FILLED', 'REJECTED')),
       created_at TEXT NOT NULL`,
@@ -314,7 +366,7 @@ const SHARED_TABLE_BODIES = {
   portfolio_snapshots: (big: string) => `
       id TEXT PRIMARY KEY,
       team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-      total_value_cents ${big} NOT NULL CHECK (total_value_cents >= 0),
+      total_value_cents ${big} NOT NULL,
       captured_at TEXT NOT NULL`,
   sessions: () => `
       token_hash TEXT PRIMARY KEY,
@@ -453,6 +505,7 @@ const WATCHLIST_INDEXES = [
 const FEEDBACK_INDEXES = [
   "CREATE INDEX IF NOT EXISTS idx_feedback_created ON feedback (created_at DESC)",
   "CREATE INDEX IF NOT EXISTS idx_feedback_topic_created ON feedback (topic, created_at DESC)",
+  "CREATE INDEX IF NOT EXISTS idx_feedback_user_created ON feedback (user_id, created_at)",
 ];
 
 const SCHEMA_INDEXES = [
@@ -461,6 +514,9 @@ const SCHEMA_INDEXES = [
   "CREATE INDEX IF NOT EXISTS idx_orders_team_created ON orders (team_id, created_at DESC)",
   "CREATE INDEX IF NOT EXISTS idx_holdings_symbol_quantity ON holdings (symbol, quantity)",
   "CREATE INDEX IF NOT EXISTS idx_idempotency_order ON idempotency_records (order_id)",
+  "CREATE INDEX IF NOT EXISTS idx_idempotency_actor_created ON idempotency_records (actor_user_id, created_at)",
+  "CREATE INDEX IF NOT EXISTS idx_ledger_team ON ledger_entries (team_id)",
+  "CREATE INDEX IF NOT EXISTS idx_ledger_order ON ledger_entries (order_id)",
   "CREATE INDEX IF NOT EXISTS idx_snapshots_team_captured ON portfolio_snapshots (team_id, captured_at ASC)",
   "CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id)",
   "CREATE INDEX IF NOT EXISTS idx_invitations_expires ON account_invitations (expires_at)",
@@ -469,9 +525,15 @@ const SCHEMA_INDEXES = [
   "CREATE INDEX IF NOT EXISTS idx_instruments_auto_refresh ON instruments (auto_refresh, is_active)",
   "CREATE INDEX IF NOT EXISTS idx_working_orders_status_symbol ON working_orders (status, symbol)",
   "CREATE INDEX IF NOT EXISTS idx_working_orders_team_status ON working_orders (team_id, status)",
+  "CREATE INDEX IF NOT EXISTS idx_working_orders_actor_created ON working_orders (actor_user_id, created_at)",
   ...FEEDBACK_INDEXES,
   ...WATCHLIST_INDEXES,
 ];
+
+const TEAMS_SANDBOX_OWNER_INDEX = `
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_teams_sandbox_owner
+  ON teams (sandbox_owner_user_id)
+  WHERE sandbox_owner_user_id IS NOT NULL`;
 
 function schemaStatements(engine: DatabaseEngine): string[] {
   // SQLite's INTEGER is 64-bit; PostgreSQL needs explicit BIGINT for cents.
@@ -483,11 +545,7 @@ function schemaStatements(engine: DatabaseEngine): string[] {
   const statements = [...tables, ...SCHEMA_INDEXES];
 
   if (engine === "postgres") {
-    statements.push(`
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_teams_sandbox_owner
-      ON teams (sandbox_owner_user_id)
-      WHERE sandbox_owner_user_id IS NOT NULL
-    `);
+    statements.push(TEAMS_SANDBOX_OWNER_INDEX);
     // The server connects as the table owner; browsers must never reach these
     // tables through Supabase's anon/authenticated roles. RLS with no
     // policies makes that explicit.
@@ -543,7 +601,7 @@ function requirePostgresUrl(): string {
   return raw;
 }
 
-const DEFAULT_POSTGRES_POOL_MAX = 10;
+const DEFAULT_POSTGRES_POOL_MAX = 5;
 
 /**
  * Connections per process. Dashboard reads and trades each hold a connection
@@ -669,214 +727,90 @@ function instrumentAssetColumns(big: string): string {
   return instrumentAssetColumnList(big).join(",\n      ");
 }
 /**
- * Idempotent, cheap migrations applied to an already-provisioned PostgreSQL
- * schema on cold start (fresh databases get the current DDL directly).
+ * Idempotent migrations applied to an already-provisioned PostgreSQL schema on
+ * every cold start (fresh databases get the current DDL directly). The catalog
+ * is read once and DDL runs only for what is missing, because even a no-op
+ * ALTER TABLE or CREATE INDEX IF NOT EXISTS locks its table behind live trades.
  */
 export async function runPostgresMigrations(tx: DbExecutor): Promise<void> {
-  // v17: pre-loaded accounts (claimable emails and placeholder names).
-  // v18: host announcements. New tables only.
-  for (const name of ["account_claims", "pending_display_names", "announcements"] as const) {
-    const present = await tx.get<{ present: number }>(
-      `SELECT 1 AS present
-       FROM information_schema.tables
-       WHERE table_schema = current_schema() AND table_name = ?`,
-      [name],
+  // Tables and indexes share one namespace, so one map answers both "exists?"
+  // and a table's row-level-security flag.
+  const relations = new Map(
+    (
+      await tx.all<{ name: string; rls: boolean }>(
+        `SELECT c.relname AS name, c.relrowsecurity AS rls
+         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname = current_schema()`,
+      )
+    ).map((row) => [row.name, row.rls] as const),
+  );
+  const columns = new Set(
+    (
+      await tx.all<{ name: string }>(
+        `SELECT table_name || '.' || column_name AS name
+         FROM information_schema.columns WHERE table_schema = current_schema()`,
+      )
+    ).map((row) => row.name),
+  );
+
+  // Tables added after v1: valuation lab (v8), working orders (v12), feedback
+  // (v14), watchlists (v15), market cache (v16), claims (v17), announcements (v18).
+  const backfillValuationAccounts = !relations.has("admin_valuation_accounts");
+  for (const [name, body] of Object.entries(SHARED_TABLE_BODIES)) {
+    if (!relations.has(name)) {
+      await tx.run(`CREATE TABLE IF NOT EXISTS ${name} (${body("BIGINT")}\n    )`);
+      relations.set(name, false);
+    }
+  }
+
+  // Positions bought before the lab had cash accounts fund one account each.
+  if (backfillValuationAccounts) {
+    await tx.run(
+      `INSERT INTO admin_valuation_accounts (
+         admin_user_id, starting_cash_cents, version, updated_at
+       )
+       SELECT
+         admin_user_id,
+         SUM(fill_price_cad_cents * quantity),
+         0,
+         ?
+       FROM admin_valuation_positions
+       GROUP BY admin_user_id
+       ON CONFLICT (admin_user_id) DO NOTHING`,
+      [new Date().toISOString()],
     );
-    if (!present) {
-      await tx.run(`CREATE TABLE IF NOT EXISTS ${name} (${SHARED_TABLE_BODIES[name]()}
-    )`);
+  }
+
+  // Columns added after v1; existing rows take the defaults.
+  const addedColumns: [table: string, definition: string][] = [
+    ["admin_valuation_positions", "split_checked_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z'"], // v8
+    // v9: a platform administrator's private simulator account, kept out of every competition surface.
+    ["teams", "sandbox_owner_user_id TEXT REFERENCES users(id) ON DELETE CASCADE"],
+    // v10: only the bootstrap script may issue creatorless invitations, so old rows fail closed.
+    ["account_invitations", "issued_by_operator INTEGER NOT NULL DEFAULT 0 CHECK (issued_by_operator IN (0, 1))"],
+    // v11: ETFs and lot-based crypto; every existing instrument is a stock priced per share.
+    ...instrumentAssetColumnList("BIGINT").map((column): [string, string] => ["instruments", column]),
+    ["instruments", INSTRUMENT_INDUSTRY_COLUMN], // v13: "Other" until the next lookup
+  ];
+  for (const [table, definition] of addedColumns) {
+    if (!columns.has(`${table}.${definition.split(" ", 1)[0]}`)) {
+      await tx.run(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${definition}`);
+    }
+  }
+
+  for (const statement of [...SCHEMA_INDEXES, TEAMS_SANDBOX_OWNER_INDEX]) {
+    if (!relations.has(/INDEX IF NOT EXISTS (\w+)/.exec(statement)![1])) {
+      await tx.run(statement);
+    }
+  }
+
+  // Row-level security with no policies keeps Supabase's anon role out of every
+  // table. Also repairs tables an earlier migration created without it.
+  for (const name of Object.keys(SHARED_TABLE_BODIES)) {
+    if (!relations.get(name)) {
       await tx.run(`ALTER TABLE ${name} ENABLE ROW LEVEL SECURITY`);
     }
   }
-
-  // v16: shared market-data cache. A new table only.
-  const marketCacheTable = await tx.get<{ present: number }>(
-    `SELECT 1 AS present
-     FROM information_schema.tables
-     WHERE table_schema = current_schema() AND table_name = 'market_cache'`,
-  );
-  if (!marketCacheTable) {
-    await tx.run(`CREATE TABLE IF NOT EXISTS market_cache (${SHARED_TABLE_BODIES.market_cache()}
-    )`);
-    await tx.run("ALTER TABLE market_cache ENABLE ROW LEVEL SECURITY");
-  }
-
-  // v15: team watchlists. A new table only; nothing existing changes.
-  const watchlistTable = await tx.get<{ present: number }>(
-    `SELECT 1 AS present
-     FROM information_schema.tables
-     WHERE table_schema = current_schema() AND table_name = 'watchlist_items'`,
-  );
-  if (!watchlistTable) {
-    await tx.run(`CREATE TABLE IF NOT EXISTS watchlist_items (${SHARED_TABLE_BODIES.watchlist_items()}
-    )`);
-    for (const statement of WATCHLIST_INDEXES) {
-      await tx.run(statement);
-    }
-    await tx.run("ALTER TABLE watchlist_items ENABLE ROW LEVEL SECURITY");
-  }
-
-  // v14: user feedback. A new table only; nothing existing changes. Checked
-  // first so warm starts skip the DDL and the table lock.
-  const feedbackTable = await tx.get<{ present: number }>(
-    `SELECT 1 AS present
-     FROM information_schema.tables
-     WHERE table_schema = current_schema() AND table_name = 'feedback'`,
-  );
-  if (!feedbackTable) {
-    await tx.run(`CREATE TABLE IF NOT EXISTS feedback (${SHARED_TABLE_BODIES.feedback()}
-    )`);
-    for (const statement of FEEDBACK_INDEXES) {
-      await tx.run(statement);
-    }
-    await tx.run("ALTER TABLE feedback ENABLE ROW LEVEL SECURITY");
-  }
-
-  // v13: industry for the portfolio map. Existing rows read "Other" until
-  // their next lookup. Checked first so warm starts skip the table lock.
-  const industryColumn = await tx.get<{ present: number }>(
-    `SELECT 1 AS present
-     FROM information_schema.columns
-     WHERE table_schema = current_schema()
-       AND table_name = 'instruments' AND column_name = 'industry'`,
-  );
-  if (!industryColumn) {
-    await tx.run(
-      `ALTER TABLE instruments ADD COLUMN IF NOT EXISTS ${INSTRUMENT_INDUSTRY_COLUMN}`,
-    );
-  }
-
-  // v12: limit, stop-loss, and take-profit orders. A new table only; nothing
-  // existing changes.
-  await tx.run(`CREATE TABLE IF NOT EXISTS working_orders (
-      id TEXT PRIMARY KEY,
-      team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
-      actor_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      idempotency_key TEXT NOT NULL,
-      symbol TEXT NOT NULL REFERENCES instruments(symbol),
-      side TEXT NOT NULL CHECK (side IN ('BUY', 'SELL')),
-      order_type TEXT NOT NULL CHECK (order_type IN ('LIMIT', 'STOP_LOSS', 'TAKE_PROFIT')),
-      quantity BIGINT NOT NULL CHECK (quantity > 0),
-      trigger_price_cents BIGINT NOT NULL CHECK (trigger_price_cents > 0),
-      reserved_cash_cents BIGINT NOT NULL DEFAULT 0 CHECK (reserved_cash_cents >= 0),
-      time_in_force TEXT NOT NULL CHECK (time_in_force IN ('DAY', 'GTC')),
-      expires_at TEXT,
-      status TEXT NOT NULL
-        CHECK (status IN ('PENDING_PARENT', 'WORKING', 'FILLED', 'CANCELLED', 'EXPIRED')),
-      status_reason TEXT,
-      parent_id TEXT REFERENCES working_orders(id) ON DELETE SET NULL,
-      oco_group_id TEXT,
-      filled_order_id TEXT REFERENCES orders(id) ON DELETE SET NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      UNIQUE (actor_user_id, idempotency_key)
-  )`);
-  await tx.run(
-    "CREATE INDEX IF NOT EXISTS idx_working_orders_status_symbol ON working_orders (status, symbol)",
-  );
-  await tx.run(
-    "CREATE INDEX IF NOT EXISTS idx_working_orders_team_status ON working_orders (team_id, status)",
-  );
-  // Only when needed: ALTER TABLE takes a table-wide lock that would wait
-  // behind in-flight fills on every cold start.
-  const workingOrdersRls = await tx.get<{ relrowsecurity: boolean }>(
-    "SELECT relrowsecurity FROM pg_class WHERE oid = 'working_orders'::regclass",
-  );
-  if (!workingOrdersRls?.relrowsecurity) {
-    await tx.run("ALTER TABLE working_orders ENABLE ROW LEVEL SECURITY");
-  }
-
-  // v11: ETFs and lot-based crypto. Every existing instrument is a stock
-  // priced per share, which is exactly what the defaults describe.
-  for (const column of instrumentAssetColumnList("BIGINT")) {
-    await tx.run(`ALTER TABLE instruments ADD COLUMN IF NOT EXISTS ${column}`);
-  }
-
-  // v10: only invitations minted by the out-of-band bootstrap script may lack
-  // a creator. Existing rows default to 0, so a creatorless invitation left
-  // over from a deleted account fails closed.
-  await tx.run(`
-    ALTER TABLE account_invitations
-    ADD COLUMN IF NOT EXISTS issued_by_operator INTEGER NOT NULL DEFAULT 0
-      CHECK (issued_by_operator IN (0, 1))
-  `);
-
-  // v9: a platform administrator may own one private simulator account. The
-  // row still uses the battle-tested team/holding/order ledger internally,
-  // but the nullable owner marker keeps it out of every competition surface.
-  await tx.run(`
-    ALTER TABLE teams
-    ADD COLUMN IF NOT EXISTS sandbox_owner_user_id TEXT
-      REFERENCES users(id) ON DELETE CASCADE
-  `);
-  await tx.run(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_teams_sandbox_owner
-    ON teams (sandbox_owner_user_id)
-    WHERE sandbox_owner_user_id IS NOT NULL
-  `);
-
-  // v8: provision the complete valuation sandbox on databases created before
-  // the lab existed. Creating both tables here matters for long-lived
-  // Supabase projects because initializeAppDatabaseSchema deliberately skips
-  // the full DDL pass once the users table is present.
-  await tx.run(`
-    CREATE TABLE IF NOT EXISTS admin_valuation_positions (
-      id TEXT PRIMARY KEY,
-      admin_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      idempotency_key TEXT NOT NULL,
-      request_fingerprint TEXT NOT NULL,
-      symbol TEXT NOT NULL REFERENCES instruments(symbol),
-      requested_date TEXT NOT NULL,
-      session_date TEXT NOT NULL,
-      session_at TEXT NOT NULL,
-      quantity BIGINT NOT NULL CHECK (quantity > 0),
-      fill_price_cents BIGINT NOT NULL CHECK (fill_price_cents > 0),
-      fill_price_cad_cents BIGINT NOT NULL CHECK (fill_price_cad_cents > 0),
-      historical_fx_rate_basis_points BIGINT NOT NULL
-        CHECK (historical_fx_rate_basis_points > 0),
-      split_multiplier_ppm BIGINT NOT NULL CHECK (split_multiplier_ppm > 0),
-      split_checked_at TEXT NOT NULL,
-      source TEXT NOT NULL CHECK (source IN ('YAHOO_FINANCE', 'LUBAN_SIMULATED')),
-      source_url TEXT,
-      created_at TEXT NOT NULL,
-      UNIQUE (admin_user_id, idempotency_key)
-    )
-  `);
-  await tx.run(`
-    ALTER TABLE admin_valuation_positions
-    ADD COLUMN IF NOT EXISTS split_checked_at TEXT NOT NULL
-      DEFAULT '1970-01-01T00:00:00.000Z'
-  `);
-  await tx.run(
-    "CREATE INDEX IF NOT EXISTS idx_admin_valuation_owner_created ON admin_valuation_positions (admin_user_id, created_at DESC)",
-  );
-  await tx.run("ALTER TABLE admin_valuation_positions ENABLE ROW LEVEL SECURITY");
-
-  // Every platform administrator's historical valuation lab gets its own
-  // cash account, deliberately separate from competition/team cash.
-  await tx.run(`
-    CREATE TABLE IF NOT EXISTS admin_valuation_accounts (
-      admin_user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-      starting_cash_cents BIGINT NOT NULL CHECK (starting_cash_cents >= 0),
-      version BIGINT NOT NULL DEFAULT 0 CHECK (version >= 0),
-      updated_at TEXT NOT NULL
-    )
-  `);
-  await tx.run("ALTER TABLE admin_valuation_accounts ENABLE ROW LEVEL SECURITY");
-  await tx.run(
-    `INSERT INTO admin_valuation_accounts (
-       admin_user_id, starting_cash_cents, version, updated_at
-     )
-     SELECT
-       admin_user_id,
-       SUM(fill_price_cad_cents * quantity),
-       0,
-       ?
-     FROM admin_valuation_positions
-     GROUP BY admin_user_id
-     ON CONFLICT (admin_user_id) DO NOTHING`,
-    [new Date().toISOString()],
-  );
 
   // v7: users.status gains 'deleted'. PostgreSQL names the inline column
   // check users_status_check; swap it only when it predates the new value.
@@ -885,6 +819,21 @@ export async function runPostgresMigrations(tx: DbExecutor): Promise<void> {
      FROM pg_constraint
      WHERE conrelid = 'users'::regclass AND conname = 'users_status_check'`,
   );
+
+  // v19: short selling lets cash, holdings, and portfolio value go below zero.
+  // Dropped only when present, so a migrated database takes no table lock.
+  const signChecks = await tx.all<{ table_name: string; name: string }>(
+    `SELECT conrelid::regclass::text AS table_name, conname AS name
+     FROM pg_constraint
+     WHERE conname IN (
+       'teams_cash_cents_check', 'holdings_quantity_check',
+       'orders_cash_after_cents_check', 'orders_holding_quantity_after_check',
+       'portfolio_snapshots_total_value_cents_check'
+     ) AND connamespace = current_schema()::regnamespace`,
+  );
+  for (const check of signChecks) {
+    await tx.run(`ALTER TABLE ${check.table_name} DROP CONSTRAINT IF EXISTS ${check.name}`);
+  }
 
   if (!statusCheck || !statusCheck.def.includes("'deleted'")) {
     await tx.run("ALTER TABLE users DROP CONSTRAINT IF EXISTS users_status_check");
@@ -916,8 +865,10 @@ async function seedIfEmpty(app: AppDatabase): Promise<void> {
 }
 
 async function syncLocalDemoAdmin(app: AppDatabase): Promise<void> {
+  // Never on a Vercel deployment, whatever the demo flags say.
   const demoAdminEnabled =
     process.env.LUBAN_AUTH_MODE !== "managed" &&
+    process.env.VERCEL !== "1" &&
     (process.env.NODE_ENV === "development" ||
       process.env.LUBAN_DEMO_MODE === "true");
 

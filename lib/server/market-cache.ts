@@ -20,6 +20,9 @@ export interface SharedMarketCache {
 /** Largest batch read in one query; far above one dashboard's needs. */
 const MAX_KEYS_PER_READ = 500;
 
+/** A row stamped further ahead than this is bogus: readers ignore it, writers replace it. */
+export const MAX_SHARED_CLOCK_SKEW_MS = 60_000;
+
 export const databaseMarketCache: SharedMarketCache = {
   async read(keys) {
     const entries = new Map<string, SharedCacheEntry>();
@@ -59,7 +62,8 @@ export const databaseMarketCache: SharedMarketCache = {
          ON CONFLICT (cache_key) DO UPDATE SET
            payload = excluded.payload,
            fetched_at_ms = excluded.fetched_at_ms
-         WHERE market_cache.fetched_at_ms < excluded.fetched_at_ms`,
+         WHERE market_cache.fetched_at_ms < excluded.fetched_at_ms
+            OR market_cache.fetched_at_ms > excluded.fetched_at_ms + ${MAX_SHARED_CLOCK_SKEW_MS}`,
         [key, payload, fetchedAtMs],
       );
     } catch {

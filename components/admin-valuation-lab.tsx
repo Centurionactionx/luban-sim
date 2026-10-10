@@ -237,17 +237,31 @@ export function AdminValuationLab({
   );
 
   useEffect(() => {
-    const initialTimer = window.setTimeout(
-      () => void loadPortfolio("initial"),
-      0,
-    );
-    const refreshTimer = window.setInterval(() => {
-      if (!mutationInFlight.current) void loadPortfolio("background");
-    }, REFRESH_INTERVAL_MS);
+    let loadedAt = 0;
+    // Hidden tabs sit out; coming back refreshes if a minute has passed. The
+    // 1 s of slack lets a tick that lands just short of a full interval count.
+    const refreshIfDue = () => {
+      if (
+        document.hidden ||
+        mutationInFlight.current ||
+        Date.now() - loadedAt < REFRESH_INTERVAL_MS - 1_000
+      ) {
+        return;
+      }
+      loadedAt = Date.now();
+      void loadPortfolio("background");
+    };
+    const initialTimer = window.setTimeout(() => {
+      loadedAt = Date.now();
+      void loadPortfolio("initial");
+    }, 0);
+    const refreshTimer = window.setInterval(refreshIfDue, REFRESH_INTERVAL_MS);
+    document.addEventListener("visibilitychange", refreshIfDue);
 
     return () => {
       window.clearTimeout(initialTimer);
       window.clearInterval(refreshTimer);
+      document.removeEventListener("visibilitychange", refreshIfDue);
       refreshAbort.current?.abort();
     };
   }, [loadPortfolio]);

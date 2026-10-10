@@ -85,6 +85,8 @@ import {
   zonedInputValueToIso,
 } from "@/lib/time";
 import {
+  allMarketsClosed,
+  IDLE_SYNC_INTERVAL_MS,
   MARKET_REFRESH_INTERVAL_MS,
   TEAM_SYNC_INTERVAL_MS,
 } from "@/lib/market-config";
@@ -301,6 +303,7 @@ const fallbackPortfolio: PortfolioSummary = {
   dayChangePercent: 0,
   buyingPowerCents: 10000000,
   reservedCashCents: 0,
+  shortLiabilityCents: 0,
   unrealizedGainCents: 0,
   realizedGainCents: 0,
   asOf: FIXED_NOW,
@@ -434,6 +437,7 @@ const emptyPortfolio: PortfolioSummary = {
   dayChangePercent: 0,
   buyingPowerCents: 0,
   reservedCashCents: 0,
+  shortLiabilityCents: 0,
   unrealizedGainCents: 0,
   realizedGainCents: 0,
   asOf: FIXED_NOW,
@@ -2485,11 +2489,19 @@ function WatchlistTable({
     key: "added",
     descending: false,
   });
-  // Sparklines redraw every few minutes, when their cache runs out.
+  // Sparklines redraw every few minutes, when their cache runs out. A hidden
+  // tab sits out; coming back redraws any that expired meanwhile.
   const [sparkKey, setSparkKey] = useState(0);
   useEffect(() => {
-    const timer = window.setInterval(() => setSparkKey((key) => key + 1), SPARKLINE_TTL_MS);
-    return () => window.clearInterval(timer);
+    const redraw = () => {
+      if (!document.hidden) setSparkKey((key) => key + 1);
+    };
+    const timer = window.setInterval(redraw, SPARKLINE_TTL_MS);
+    document.addEventListener("visibilitychange", redraw);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", redraw);
+    };
   }, []);
 
   const sorted = useMemo(() => {
@@ -2678,7 +2690,7 @@ function TradeHistoryTable({
               <td data-label="Price">{formatMoney(order.fillPriceCadCents)}</td>
               <td data-label="Total">{formatMoney(order.grossCents)}</td>
               <td data-label="Realized">
-                {order.side === "SELL" && typeof order.realizedGainCents === "number" ? (
+                {typeof order.realizedGainCents === "number" ? (
                   <ChangeValue cents={order.realizedGainCents} percent={0} />
                 ) : (
                   <span className="cell-muted">—</span>
@@ -3065,19 +3077,36 @@ export function SimulatorApp({
     return () => controller.abort();
   }, [tradeHistoryOpen, historyVersion, historyUserId]);
 
+  // Nothing can move while every market on the page is shut, so the poll slows.
+  const marketsIdle = allMarketsClosed(dashboard.availableSymbols);
+  const marketsIdleRef = useRef(marketsIdle);
+  useEffect(() => {
+    marketsIdleRef.current = marketsIdle;
+  }, [marketsIdle]);
+
   useEffect(() => {
     if (!sessionReady) return;
-    const pollDashboard = () => {
+    let lastPollAt = 0;
+    // Hidden tabs sit out. The 1 s of slack lets a tick that lands just short
+    // of a full interval still count.
+    const pollIfDue = (every: number) => {
+      if (document.hidden || Date.now() - lastPollAt < every - 1_000) return;
+      lastPollAt = Date.now();
       const refreshMarket =
-        Date.now() - lastMarketRefreshAttemptAt.current >=
-        MARKET_REFRESH_INTERVAL_MS;
+        lastPollAt - lastMarketRefreshAttemptAt.current >= MARKET_REFRESH_INTERVAL_MS;
       void fetchDashboard(false, refreshMarket);
     };
-    const initial = window.setTimeout(pollDashboard, 0);
-    const interval = window.setInterval(pollDashboard, TEAM_SYNC_INTERVAL_MS);
+    const onTick = () =>
+      pollIfDue(marketsIdleRef.current ? IDLE_SYNC_INTERVAL_MS : TEAM_SYNC_INTERVAL_MS);
+    // Back on the tab: catch up now if a minute has passed.
+    const onVisible = () => pollIfDue(TEAM_SYNC_INTERVAL_MS);
+    const initial = window.setTimeout(() => pollIfDue(0), 0);
+    const interval = window.setInterval(onTick, TEAM_SYNC_INTERVAL_MS);
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       window.clearTimeout(initial);
       window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
       dashboardRequest.current?.abort();
       dashboardRequest.current = null;
     };
@@ -3270,8 +3299,18 @@ export function SimulatorApp({
   const tradingHaltReason = selectedQuote.tradingHaltReason ?? null;
   const heldQuantity = holdingForQuote?.quantity ?? 0;
   // Shares (lots) held back for the team's waiting sells can't be sold again.
-  const reservedQuantity = Math.min(heldQuantity, holdingForQuote?.reservedQuantity ?? 0);
-  const freeQuantity = heldQuantity - reservedQuantity;
+  const reservedQuantity = Math.min(
+    Math.max(0, heldQuantity),
+    holdingForQuote?.reservedQuantity ?? 0,
+  );
+  const freeQuantity = Math.max(0, heldQuantity) - reservedQuantity;
+  // Below zero the team is short. A buy first covers the short and a market
+  // sell first sells shares held; only the rest (the opening part) needs
+  // buying power or room under the one-holding cap.
+  const closingQuantity = quantityIsValid
+    ? Math.min(wholeQuantity, Math.max(0, side === "BUY" ? -heldQuantity : heldQuantity))
+    : 0;
+  const openingQuantity = quantityIsValid ? wholeQuantity - closingQuantity : 0;
   const workingOrdersEnabled = dashboard.workingOrdersEnabled;
   // Stop loss and take profit only sell; switching to Buy falls back to Market.
   const ticketOrderType: TicketOrderType = !workingOrdersEnabled
@@ -3292,9 +3331,11 @@ export function SimulatorApp({
       )
     : { cents: null, rounded: false };
   const triggerPriceCents = triggerParsed.cents || null;
+  // Exits guard a long; a buy that covers a short can't carry them.
   const bracketAllowed =
     workingOrdersEnabled &&
     side === "BUY" &&
+    closingQuantity === 0 &&
     (ticketOrderType === "MARKET" || ticketOrderType === "LIMIT");
   const takeProfitEntered = bracketAllowed && takeProfitPrice.trim() !== "";
   const stopLossEntered = bracketAllowed && stopLossPrice.trim() !== "";
@@ -3422,7 +3463,8 @@ export function SimulatorApp({
   // What a buy leaves to spend; null until there's a total to subtract.
   const receiptCashLeft =
     side === "BUY" && quoteLoaded && quantityIsValid && (!isWaitingOrder || triggerPriceCents !== null)
-      ? portfolio.buyingPowerCents - estimatedValue
+      ? portfolio.buyingPowerCents -
+        (isWaitingOrder ? estimatedValue : openingQuantity * ticketUnitCadCents)
       : null;
   // Students can only trade while the listing's exchange is open; the server
   // enforces this too. The admin sandbox ignores market hours.
@@ -3442,7 +3484,8 @@ export function SimulatorApp({
         ? "Trading waits for a fresh market quote."
         : tradingHaltReason
           ? tradingHaltReason
-          : side === "BUY" && selectedQuote.buyBlockedReason
+          : selectedQuote.buyBlockedReason &&
+              (openingQuantity > 0 || (side === "BUY" && !quantityIsValid))
             ? selectedQuote.buyBlockedReason
             : isPlatformAdmin && !hasAdminTradingAccount
             ? "Set your admin test cash before placing an order."
@@ -3470,15 +3513,21 @@ export function SimulatorApp({
                     ? `Enter a positive whole number of ${unitWord(selectedAssetClass, 2)}.`
                     : waitingOrderProblem
                       ? waitingOrderProblem
-                      : side === "BUY" && estimatedValue > portfolio.buyingPowerCents
+                      : side === "BUY" && receiptCashLeft !== null && receiptCashLeft < 0
                         ? `This order is larger than the ${accountName}'s available cash${
                             portfolio.reservedCashCents > 0
                               ? ` (${formatMoney(portfolio.reservedCashCents)} is set aside for waiting buys)`
                               : ""
+                          }${
+                            portfolio.shortLiabilityCents > 0
+                              ? `. Cash from short sales is owed back, so it can't fund buys`
+                              : ""
                           }.`
-                        : side === "SELL" && wholeQuantity > freeQuantity
-                          ? heldQuantity === 0
-                            ? `The ${accountName} doesn't hold any ${selectedQuote.symbol}.`
+                        : side === "SELL" &&
+                            wholeQuantity > freeQuantity &&
+                            (isWaitingOrder || reservedQuantity > 0)
+                          ? heldQuantity <= 0
+                            ? `The ${accountName} doesn't hold any ${selectedQuote.symbol}. Short sales are market orders only.`
                             : reservedQuantity > 0
                               ? `Only ${number.format(freeQuantity)} of the ${accountName}'s ${number.format(heldQuantity)} ${unitWord(selectedAssetClass, heldQuantity)} of ${selectedQuote.symbol} are free; the rest are held back for waiting sells.`
                               : `The ${accountName} holds only ${number.format(heldQuantity)} ${unitWord(selectedAssetClass, heldQuantity)} of ${selectedQuote.symbol}${
@@ -3509,10 +3558,16 @@ export function SimulatorApp({
     ? portfolio.buyingPowerCents
     : Math.min(
         portfolio.buyingPowerCents,
-        positionRoomCents(portfolio.totalValueCents, heldQuantity * selectedQuote.priceCadCents),
+        positionRoomCents(
+          portfolio.totalValueCents,
+          Math.max(0, heldQuantity) * selectedQuote.priceCadCents,
+        ),
       );
-  const maxOrderQuantity =
-    side === "BUY"
+  // While short, Max on a market buy covers the whole short.
+  const maxCovers = side === "BUY" && heldQuantity < 0 && !isWaitingOrder;
+  const maxOrderQuantity = maxCovers
+    ? Math.min(MAX_ORDER_QUANTITY, -heldQuantity)
+    : side === "BUY"
       ? ticketUnitCadCents > 0
         ? Math.min(
             MAX_ORDER_QUANTITY,
@@ -5148,6 +5203,9 @@ export function SimulatorApp({
                                   )}
                                 </small>
                               ) : null}
+                              {holding.quantity < 0 ? (
+                                <small className="cell-note">Short</small>
+                              ) : null}
                               {holding.reservedQuantity ? (
                                 <small className="cell-note">
                                   {number.format(holding.reservedQuantity)} held for waiting sells
@@ -5157,7 +5215,9 @@ export function SimulatorApp({
                             <td data-label="Avg cost">
                               {formatMoney(holding.averageCostCents)}
                               <small className="cell-note">
-                                {formatMoney(holding.costBasisCents)} paid
+                                {holding.quantity < 0
+                                  ? `${formatMoney(-holding.costBasisCents)} received`
+                                  : `${formatMoney(holding.costBasisCents)} paid`}
                               </small>
                             </td>
                             <td data-label="Price">
@@ -6176,12 +6236,14 @@ export function SimulatorApp({
                       aria-haspopup="dialog"
                       onClick={() => maxConfirmRef.current?.showModal()}
                       title={
-                        side === "BUY"
+                        maxCovers
+                          ? `Buy back every ${unitWord(selectedAssetClass, 1)} sold short`
+                          : side === "BUY"
                           ? `Buy as many ${unitWord(selectedAssetClass, 2)} as the cash allows`
                           : `Sell every ${unitWord(selectedAssetClass, 1)} held`
                       }
                     >
-                      {side === "BUY" ? "Max" : "All"}
+                      {maxCovers ? "Cover" : side === "BUY" ? "Max" : "All"}
                       {quoteLoaded && maxOrderQuantity > 0
                         ? ` · ${number.format(maxOrderQuantity)}`
                         : ""}
@@ -6197,7 +6259,11 @@ export function SimulatorApp({
                       }}
                     >
                       <h2 id="max-confirm-title">
-                        {side === "BUY" ? "Buy the maximum?" : "Sell everything?"}
+                        {maxCovers
+                          ? "Cover the whole short?"
+                          : side === "BUY"
+                            ? "Buy the maximum?"
+                            : "Sell everything?"}
                       </h2>
                       <div id="max-confirm-body">
                         <p>
@@ -6211,7 +6277,9 @@ export function SimulatorApp({
                               </strong>
                               , about{" "}
                               <strong>{formatMoney(maxOrderQuantity * ticketUnitCadCents)}</strong>.
-                              {buyLimitCents < portfolio.buyingPowerCents ? (
+                              {maxCovers ? (
+                                <> That buys back every {unitWord(selectedAssetClass, 1)} sold short.</>
+                              ) : buyLimitCents < portfolio.buyingPowerCents ? (
                                 <>
                                   That&rsquo;s as much as the {MAX_POSITION_PERCENT}% limit on one
                                   holding allows.
@@ -6502,14 +6570,18 @@ export function SimulatorApp({
                     ) : (
                       <div
                         className={
-                          quantityIsValid && wholeQuantity > freeQuantity
+                          quantityIsValid &&
+                          wholeQuantity > freeQuantity &&
+                          (isWaitingOrder || reservedQuantity > 0)
                             ? "ticket-receipt__after is-short"
                             : "ticket-receipt__after"
                         }
                       >
                         <dt>
                           {quantityIsValid
-                            ? `${selectedIsCrypto ? "Lots" : "Shares"} left`
+                            ? heldQuantity - wholeQuantity < 0
+                              ? "Short after"
+                              : `${selectedIsCrypto ? "Lots" : "Shares"} left`
                             : reservedQuantity > 0
                               ? "Free to sell"
                               : selectedIsCrypto
@@ -6518,7 +6590,11 @@ export function SimulatorApp({
                         </dt>
                         <dd>
                           {quantityIsValid
-                            ? number.format(freeQuantity - wholeQuantity)
+                            ? number.format(
+                                heldQuantity - wholeQuantity < 0
+                                  ? heldQuantity - wholeQuantity
+                                  : freeQuantity - wholeQuantity,
+                              )
                             : number.format(freeQuantity)}
                         </dd>
                         <dd className="ticket-receipt__sub">
@@ -6541,7 +6617,11 @@ export function SimulatorApp({
                       ? "Recording order…"
                       : isWaitingOrder
                         ? `Place ${ORDER_TYPE_LABELS[ticketOrderType].toLowerCase()} order`
-                        : `Place simulated ${side.toLowerCase()}`}
+                        : side === "SELL" && openingQuantity > 0
+                          ? "Place short sale"
+                          : side === "BUY" && closingQuantity > 0
+                            ? "Place buy to cover"
+                            : `Place simulated ${side.toLowerCase()}`}
                     <ArrowIcon />
                   </button>
                   <button
@@ -6692,8 +6772,8 @@ export function SimulatorApp({
               data-team-sync-ms={TEAM_SYNC_INTERVAL_MS}
               data-market-refresh-ms={MARKET_REFRESH_INTERVAL_MS}
             >
-              <span>Team ledger every 60 seconds</span>
-              <span>Market prices every 60 seconds</span>
+              <span>{`Team ledger every ${marketsIdle ? "5 minutes" : "60 seconds"}`}</span>
+              <span>{`Market prices every ${marketsIdle ? "5 minutes" : "60 seconds"}`}</span>
             </span>
           </div>
           <div>

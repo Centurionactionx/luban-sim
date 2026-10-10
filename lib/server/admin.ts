@@ -243,13 +243,22 @@ export async function getAdminOverview(
 export async function updateCompetitionStatus(
   input: UpdateCompetitionStatusInput,
 ): Promise<AdminOverview> {
+  await applyCompetitionStatus(input);
+  return getAdminOverview(input.actorUserId);
+}
+
+// The apply* halves skip the overview so updateCompetition can build it after
+// its exclusive transaction commits instead of while still holding the lock.
+async function applyCompetitionStatus(
+  input: UpdateCompetitionStatusInput,
+): Promise<void> {
   await requireHost(input.actorUserId);
   const status = normalizeCompetitionStatus(input.status);
   const db = await getDb();
   const competition = await getCompetitionSummary();
 
   if (competition.status === status) {
-    return getAdminOverview(input.actorUserId);
+    return;
   }
 
   await db.transaction(async (tx) => {
@@ -287,8 +296,6 @@ export async function updateCompetitionStatus(
       ],
     );
   });
-
-  return getAdminOverview(input.actorUserId);
 }
 
 const MAX_COMPETITION_LENGTH_MS = 366 * 24 * 3_600_000;
@@ -325,6 +332,13 @@ function normalizeScheduleInstant(
 export async function updateCompetitionSchedule(
   input: UpdateCompetitionScheduleInput,
 ): Promise<AdminOverview> {
+  await applyCompetitionSchedule(input);
+  return getAdminOverview(input.actorUserId);
+}
+
+async function applyCompetitionSchedule(
+  input: UpdateCompetitionScheduleInput,
+): Promise<void> {
   await requireHost(input.actorUserId);
 
   if (
@@ -541,8 +555,6 @@ export async function updateCompetitionSchedule(
       await assertTeamLedgerReconciles(rebuiltTeamIds);
     }
   });
-
-  return getAdminOverview(input.actorUserId);
 }
 
 export async function createCompetitionTeam(
@@ -1059,7 +1071,7 @@ export async function updateCompetition(
   const db = await getDb();
   await db.transaction(async () => {
     if (hasSchedule) {
-      await updateCompetitionSchedule({
+      await applyCompetitionSchedule({
         actorUserId: input.actorUserId,
         startsAt: input.startsAt,
         endsAt: input.endsAt,
@@ -1067,7 +1079,7 @@ export async function updateCompetition(
       });
     }
     if (input.status !== undefined) {
-      await updateCompetitionStatus({
+      await applyCompetitionStatus({
         actorUserId: input.actorUserId,
         status: input.status,
       });

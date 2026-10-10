@@ -1,7 +1,11 @@
 import { centsToDecimal, toCsv } from "@/lib/csv";
 import { listOrdersForExport } from "@/lib";
 
-import { handleRouteError, requireAuthenticatedUser } from "../../_lib/http";
+import {
+  handleRouteError,
+  requireAdminMfa,
+  requireAuthenticatedUser,
+} from "../../_lib/http";
 
 export const dynamic = "force-dynamic";
 
@@ -9,6 +13,8 @@ export const dynamic = "force-dynamic";
 export async function GET(): Promise<Response> {
   try {
     const user = await requireAuthenticatedUser();
+    // A host's export spans every team, so it needs the host second factor.
+    await requireAdminMfa(user);
     const orders = await listOrdersForExport(user.id);
     const csv = toCsv(
       [

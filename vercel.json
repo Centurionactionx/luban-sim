@@ -1,5 +1,5 @@
 {
   "crons": [
-    { "path": "/api/health", "schedule": "0 15 * * *" }
+    { "path": "/api/health", "schedule": "0 7 * * *" }
   ]
 }

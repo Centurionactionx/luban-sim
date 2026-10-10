@@ -18,6 +18,18 @@ export const MAX_ORDER_PRICE_CENTS = 10_000_000_000;
  */
 export const MAX_POSITION_PERCENT = 25;
 
+/** Most different listings a team can hold or have waiting buys for at once. */
+export const MAX_DISTINCT_HOLDINGS_PER_TEAM = 25;
+
+/**
+ * Whether buying `symbol` would open a new holding past the limit. `symbols`
+ * are the ones the team already holds or has waiting buys for.
+ */
+export function holdingsLimitReached(symbols: Iterable<string>, symbol: string): boolean {
+  const distinct = new Set(symbols);
+  return !distinct.has(symbol) && distinct.size >= MAX_DISTINCT_HOLDINGS_PER_TEAM;
+}
+
 /**
  * CAD cents of a listing a team can still buy before that holding passes
  * limitPercent of the portfolio. A buy only swaps cash for shares at
@@ -29,6 +41,54 @@ export function positionRoomCents(
   limitPercent: number = MAX_POSITION_PERCENT,
 ): number {
   return Math.max(0, Math.floor((totalValueCents * limitPercent) / 100) - holdingValueCents);
+}
+
+/** A holding: positive quantity is long, negative is short. */
+export interface Position {
+  quantity: number;
+  /** Average buy price of a long, or average sale price of a short, CAD cents. */
+  averageCostCents: number;
+}
+
+/**
+ * A fill applied to a position, using the trade engine's average-cost rules:
+ * adding to a position on the same side blends the average (rounded to the
+ * cent), reducing it keeps the average and realizes the difference, and an
+ * order that crosses zero closes the old side and opens the rest at the fill
+ * price. `grossCents` is the fill price times `quantity`.
+ */
+export function applyFill(
+  position: Position,
+  side: "BUY" | "SELL",
+  quantity: number,
+  grossCents: number,
+): Position & { realizedCents: number; closedQuantity: number } {
+  const delta = side === "BUY" ? quantity : -quantity;
+  const held = position.quantity;
+  if (held === 0 || Math.sign(held) === Math.sign(delta)) {
+    const after = held + delta;
+    return {
+      quantity: after,
+      averageCostCents: Math.round(
+        (Math.abs(held) * position.averageCostCents + grossCents) / Math.abs(after),
+      ),
+      realizedCents: 0,
+      closedQuantity: 0,
+    };
+  }
+  const closedQuantity = Math.min(quantity, Math.abs(held));
+  const closedProceedsCents = (grossCents / quantity) * closedQuantity;
+  const closedCostCents = closedQuantity * position.averageCostCents;
+  const realizedCents =
+    held > 0 ? closedProceedsCents - closedCostCents : closedCostCents - closedProceedsCents;
+  const after = held + delta;
+  return {
+    quantity: after,
+    averageCostCents:
+      after === 0 ? 0 : closedQuantity < quantity ? grossCents / quantity : position.averageCostCents,
+    realizedCents,
+    closedQuantity,
+  };
 }
 
 /**

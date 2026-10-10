@@ -1,13 +1,18 @@
+import { rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const require = createRequire(import.meta.url);
+const databasePath = join(process.cwd(), "data", "luban.e2e.sqlite");
+// Start every run from an empty database: rows the reset keeps (feedback)
+// would otherwise pile up and trip the daily limits on later runs.
+for (const suffix of ["", "-wal", "-shm"]) rmSync(databasePath + suffix, { force: true });
 const env = {
   ...process.env,
   LUBAN_AUTH_MODE: "demo",
   LUBAN_DATABASE_PROVIDER: "sqlite",
-  LUBAN_DATABASE_PATH: join(process.cwd(), "data", "luban.e2e.sqlite"),
+  LUBAN_DATABASE_PATH: databasePath,
   LUBAN_DEMO_MODE: "true",
   LUBAN_MARKET_DATA_PROVIDER: "synthetic",
   VERCEL: "0",

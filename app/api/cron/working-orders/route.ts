@@ -1,8 +1,6 @@
-import { timingSafeEqual } from "node:crypto";
-
 import { hasOpenWorkingOrders, runWorkingOrders } from "@/lib";
 
-import { handleRouteError, json } from "../../_lib/http";
+import { handleRouteError, isCronAuthorized, json } from "../../_lib/http";
 
 export const dynamic = "force-dynamic";
 // A run fetches one quote per symbol with waiting orders; leave room.
@@ -13,18 +11,9 @@ export const maxDuration = 60;
  * scripts/working-orders-cron.sql). It needs `Authorization: Bearer
  * <CRON_SECRET>`; without CRON_SECRET configured it refuses every call.
  */
-function authorized(request: Request): boolean {
-  const secret = process.env.CRON_SECRET?.trim();
-  if (!secret) return false;
-  const header = request.headers.get("authorization") ?? "";
-  const expected = Buffer.from(`Bearer ${secret}`);
-  const received = Buffer.from(header);
-  return received.length === expected.length && timingSafeEqual(received, expected);
-}
-
 async function handle(request: Request): Promise<Response> {
   try {
-    if (!authorized(request)) {
+    if (!isCronAuthorized(request)) {
       return json(
         { error: { code: "UNAUTHORIZED", message: "Not authorized." } },
         { status: 401 },

@@ -21,9 +21,16 @@ import {
   type QuoteInterval,
 } from "../history-options";
 import { lotExponentFromSize, lotSizeFromExponent } from "../lots";
+import { stockSessionMayBeOpen } from "../market-calendar";
 import { MARKET_REFRESH_INTERVAL_MS } from "../market-config";
 import { getDb } from "./db";
-import { databaseMarketCache, type SharedMarketCache } from "./market-cache";
+import {
+  MAX_SHARED_CLOCK_SKEW_MS,
+  databaseMarketCache,
+  type SharedCacheEntry,
+  type SharedMarketCache,
+} from "./market-cache";
+import { assertRequestAllowed } from "./request-throttle";
 
 export const QUOTE_DELAY_MINUTES = 15;
 
@@ -34,6 +41,14 @@ const YAHOO_MOST_ACTIVE_URL =
 const POPULAR_TTL_MS = 10 * 60_000;
 const POPULAR_SECTION_SIZE = 6;
 const QUOTE_TTL_MS = MARKET_REFRESH_INTERVAL_MS;
+const CLOSED_MARKET_QUOTE_TTL_MS = 15 * 60_000;
+/** Yahoo requests this server instance has in flight at once. */
+const MAX_YAHOO_IN_FLIGHT = 6;
+/** After Yahoo answers 429, no instance calls it for this long. */
+const YAHOO_COOLDOWN_MS = 2 * 60_000;
+const YAHOO_BREAKER_KEY = "breaker:yahoo";
+/** Per person, per minute, across every request that can reach Yahoo. */
+const MARKET_DATA_REQUESTS_PER_MINUTE = 180;
 const DAILY_HISTORY_TTL_MS = 15 * 60_000;
 const INTRADAY_HISTORY_TTL_MS = MARKET_REFRESH_INTERVAL_MS;
 const SEARCH_TTL_MS = 10 * 60_000;
@@ -68,6 +83,15 @@ export function isAssetClassEnabled(assetClass: AssetClass | undefined): boolean
   if (assetClass === "ETF") return isEtfTradingEnabled();
   if (assetClass === "CRYPTO") return isCryptoTradingEnabled();
   return true;
+}
+
+/**
+ * One per-person allowance for every request that can reach Yahoo on a cache
+ * miss (lookups, searches, charts, the dashboard's symbol, watchlist adds), so
+ * no one person can get the server's address blocked for everyone.
+ */
+export function assertMarketDataBudget(userId: string): void {
+  assertRequestAllowed(`market-data:${userId}`, MARKET_DATA_REQUESTS_PER_MINUTE);
 }
 
 /**
@@ -403,6 +427,7 @@ interface YahooMarketState {
   mostActive: CacheEntry<InstrumentSearchResult[]> | null;
   quoteFailures: Map<string, FailedQuoteRefresh>;
   searchFailures: Map<string, FailedQuoteRefresh>;
+  historyFailures: Map<string, FailedQuoteRefresh>;
   inFlight: Map<string, Promise<unknown>>;
 }
 
@@ -445,6 +470,7 @@ function yahooState(): YahooMarketState {
       discoveredInstruments: new Map(),
       quoteFailures: new Map(),
       searchFailures: new Map(),
+      historyFailures: new Map(),
       mostActive: null,
       inFlight: new Map(),
     };
@@ -455,8 +481,33 @@ function yahooState(): YahooMarketState {
   yahooGlobal.__lubanYahooMarketState.discoveredInstruments ??= new Map();
   yahooGlobal.__lubanYahooMarketState.quoteFailures ??= new Map();
   yahooGlobal.__lubanYahooMarketState.searchFailures ??= new Map();
+  yahooGlobal.__lubanYahooMarketState.historyFailures ??= new Map();
   yahooGlobal.__lubanYahooMarketState.mostActive ??= null;
   return yahooGlobal.__lubanYahooMarketState;
+}
+
+/**
+ * Whether a cached quote can be reused. A closed stock listing barely moves,
+ * so overnight and on weekends it is re-fetched every 15 minutes instead of
+ * every minute; from just before the open (stockSessionMayBeOpen) it is back
+ * on the minute cycle, so the opening price arrives within a minute of the
+ * bell. Crypto always reports open.
+ */
+function isQuoteFresh(entry: CacheEntry<Quote>, nowMs: number): boolean {
+  const ttlMs =
+    entry.value.marketOpen || stockSessionMayBeOpen(new Date(nowMs))
+      ? QUOTE_TTL_MS
+      : CLOSED_MARKET_QUOTE_TTL_MS;
+  return !entry.value.isStale && nowMs - entry.fetchedAtMs < ttlMs;
+}
+
+function marketDataRateLimited(waitMs: number): AppError {
+  return new AppError(
+    "MARKET_DATA_RATE_LIMITED",
+    "The free market data service is busy. Try again shortly.",
+    503,
+    { retryAfterSeconds: Math.ceil(waitMs / 1_000) },
+  );
 }
 
 function rowToInstrument(row: InstrumentRow): MarketInstrument {
@@ -1396,6 +1447,10 @@ function resolveLotExponent(
 export class YahooFinanceMarketDataProvider implements MarketDataProvider {
   readonly id = "YAHOO_FINANCE";
   private readonly state = yahooState();
+  /** Yahoo calls are refused until then, after a 429. */
+  private breakerUntilMs = 0;
+  private readonly yahooSlots = { active: 0, waiting: [] as Array<() => void> };
+  private fxRate: CacheEntry<number> | null = null;
 
   constructor(
     private readonly fetcher: typeof fetch = fetch,
@@ -1404,12 +1459,30 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
     private readonly shared: SharedMarketCache | null = null,
   ) {}
 
+  /**
+   * Shared rows for these keys. The same query picks up a rate-limit trip
+   * another instance recorded, so it stops calling Yahoo too.
+   */
+  private async readSharedRows(keys: string[]): Promise<Map<string, SharedCacheEntry>> {
+    if (!this.shared) return new Map();
+    const nowMs = this.now();
+    const entries = await this.shared.read([YAHOO_BREAKER_KEY, ...keys]);
+    for (const [key, entry] of entries) {
+      // A row stamped in the future would never expire.
+      if (entry.fetchedAtMs > nowMs + MAX_SHARED_CLOCK_SKEW_MS) entries.delete(key);
+    }
+    const trippedAtMs = entries.get(YAHOO_BREAKER_KEY)?.fetchedAtMs;
+    if (trippedAtMs !== undefined) {
+      this.breakerUntilMs = Math.max(this.breakerUntilMs, trippedAtMs + YAHOO_COOLDOWN_MS);
+    }
+    return entries;
+  }
+
   private async readShared<T>(
     key: string,
     ttlMs: number,
   ): Promise<{ value: T; fetchedAtMs: number } | null> {
-    if (!this.shared) return null;
-    const entry = (await this.shared.read([key])).get(key);
+    const entry = (await this.readSharedRows([key])).get(key);
     if (!entry || this.now() - entry.fetchedAtMs >= ttlMs) return null;
     try {
       return { value: JSON.parse(entry.payload) as T, fetchedAtMs: entry.fetchedAtMs };
@@ -1428,18 +1501,18 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
     const nowMs = this.now();
     const wanted = symbols.filter((symbol) => {
       const cached = this.state.quotes.get(symbol);
-      return !cached || nowMs - cached.fetchedAtMs >= QUOTE_TTL_MS || cached.value.isStale;
+      return !cached || !isQuoteFresh(cached, nowMs);
     });
     if (wanted.length === 0) return;
-    const entries = await this.shared.read(wanted.map((symbol) => `quote:${symbol}`));
+    const entries = await this.readSharedRows(wanted.map((symbol) => `quote:${symbol}`));
     for (const symbol of wanted) {
       const entry = entries.get(`quote:${symbol}`);
-      if (!entry || nowMs - entry.fetchedAtMs >= QUOTE_TTL_MS) continue;
+      if (!entry) continue;
       try {
-        const value = JSON.parse(entry.payload) as Quote;
-        if (value.isStale) continue;
+        const cached = { value: JSON.parse(entry.payload) as Quote, fetchedAtMs: entry.fetchedAtMs };
+        if (!isQuoteFresh(cached, nowMs)) continue;
         quoteGeneration += 1;
-        boundedSet(this.state.quotes, symbol, { value, fetchedAtMs: entry.fetchedAtMs });
+        boundedSet(this.state.quotes, symbol, cached);
         this.state.quoteFailures.delete(symbol);
       } catch {
         // A bad row is ignored; the symbol is fetched normally.
@@ -1462,9 +1535,7 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
   async refreshQuote(instrument: MarketInstrument): Promise<Quote> {
     const cached = this.state.quotes.get(instrument.symbol);
     const nowMs = this.now();
-    if (cached && nowMs - cached.fetchedAtMs < QUOTE_TTL_MS && !cached.value.isStale) {
-      return cached.value;
-    }
+    if (cached && isQuoteFresh(cached, nowMs)) return cached.value;
 
     const recentFailure = this.state.quoteFailures.get(instrument.symbol);
     if (
@@ -1479,19 +1550,15 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
       return await this.coalesce(`quote:${instrument.symbol}`, async () => {
         const refreshedCache = this.state.quotes.get(instrument.symbol);
         const refreshedNow = this.now();
-        if (
-          refreshedCache &&
-          refreshedNow - refreshedCache.fetchedAtMs < QUOTE_TTL_MS &&
-          !refreshedCache.value.isStale
-        ) {
+        if (refreshedCache && isQuoteFresh(refreshedCache, refreshedNow)) {
           return refreshedCache.value;
         }
 
         const sharedQuote = await this.readShared<Quote>(
           `quote:${instrument.symbol}`,
-          QUOTE_TTL_MS,
+          CLOSED_MARKET_QUOTE_TTL_MS,
         );
-        if (sharedQuote && !sharedQuote.value.isStale) {
+        if (sharedQuote && isQuoteFresh(sharedQuote, refreshedNow)) {
           quoteGeneration += 1;
           boundedSet(this.state.quotes, instrument.symbol, sharedQuote);
           this.state.quoteFailures.delete(instrument.symbol);
@@ -1619,6 +1686,15 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
       return cached.value;
     }
 
+    const recentFailure = this.state.historyFailures.get(key);
+    if (
+      recentFailure &&
+      nowMs - recentFailure.attemptedAtMs < MARKET_REFRESH_INTERVAL_MS
+    ) {
+      if (cached) return cached.value;
+      throw recentFailure.error;
+    }
+
     try {
       return await this.coalesce(`history:${key}`, async () => {
         const refreshedCache = this.state.histories.get(key);
@@ -1663,10 +1739,19 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
           request,
         );
         boundedSet(this.state.histories, key, { value, fetchedAtMs: refreshedNow });
+        this.state.historyFailures.delete(key);
         if (sharedKey) await this.writeShared(sharedKey, value, refreshedNow);
         return value;
       });
     } catch (error) {
+      const normalized = normalizeProviderError(
+        error,
+        `The market history for ${instrument.symbol}`,
+      );
+      boundedSet(this.state.historyFailures, key, {
+        error: normalized,
+        attemptedAtMs: this.now(),
+      });
       const staleCache = this.state.histories.get(key);
       if (staleCache) {
         const stale = { ...staleCache.value, isStale: true };
@@ -1676,7 +1761,7 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
         });
         return stale;
       }
-      throw normalizeProviderError(error, `The market history for ${instrument.symbol}`);
+      throw normalized;
     }
   }
 
@@ -1845,6 +1930,8 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
   }
 
   private async fetchCadFxRate(): Promise<number> {
+    const cached = this.fxRate;
+    if (cached && this.now() - cached.fetchedAtMs < QUOTE_TTL_MS) return cached.value;
     return this.coalesce("fx:CAD", async () => {
       const chart = await this.fetchChart("CAD=X", "1d", "5m");
       const rate = finiteNumber(chart.meta.regularMarketPrice);
@@ -1855,7 +1942,9 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
           503,
         );
       }
-      return Math.round(rate * 10_000);
+      const value = Math.round(rate * 10_000);
+      this.fxRate = { value, fetchedAtMs: this.now() };
+      return value;
     });
   }
 
@@ -1870,16 +1959,8 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
           scrIds: "most_actives",
           count: "25",
         });
-        const response = await this.fetcher(
+        const response = await this.yahooFetch(
           `${YAHOO_MOST_ACTIVE_URL}?${params.toString()}`,
-          {
-            cache: "no-store",
-            headers: {
-              Accept: "application/json",
-              "User-Agent": "Mozilla/5.0 LubanMarketLab/0.1",
-            },
-            signal: AbortSignal.timeout(MARKET_DATA_TIMEOUT_MS),
-          },
         );
         if (!response.ok) {
           throw new AppError(
@@ -1912,7 +1993,13 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
       });
     } catch {
       // Popular picks are a nicety: an old list, or none, beats an error.
-      return cached?.value ?? [];
+      // It is served for a minute before Yahoo is asked again.
+      const value = cached?.value ?? [];
+      this.state.mostActive = {
+        value,
+        fetchedAtMs: this.now() - POPULAR_TTL_MS + MARKET_REFRESH_INTERVAL_MS,
+      };
+      return value;
     }
   }
 
@@ -1926,26 +2013,11 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
     });
     let response: Response;
     try {
-      response = await this.fetcher(`${YAHOO_SEARCH_URL}?${params.toString()}`, {
-        cache: "no-store",
-        headers: {
-          Accept: "application/json",
-          "User-Agent": "Mozilla/5.0 LubanMarketLab/0.1",
-        },
-        signal: AbortSignal.timeout(MARKET_DATA_TIMEOUT_MS),
-      });
+      response = await this.yahooFetch(`${YAHOO_SEARCH_URL}?${params.toString()}`);
     } catch (error) {
       throw normalizeProviderError(error, "The market symbol search");
     }
 
-    if (response.status === 429) {
-      throw new AppError(
-        "MARKET_DATA_RATE_LIMITED",
-        "The free market data service is busy. Try again shortly.",
-        503,
-        { retryAfterSeconds: 60 },
-      );
-    }
     if (!response.ok) {
       throw new AppError(
         "MARKET_DATA_UNAVAILABLE",
@@ -2002,29 +2074,13 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
     });
     let response: Response;
     try {
-      response = await this.fetcher(
+      response = await this.yahooFetch(
         `${YAHOO_CHART_URL}/${encodeURIComponent(symbol)}?${params.toString()}`,
-        {
-          cache: "no-store",
-          headers: {
-            Accept: "application/json",
-            "User-Agent": "Mozilla/5.0 LubanMarketLab/0.1",
-          },
-          signal: AbortSignal.timeout(MARKET_DATA_TIMEOUT_MS),
-        },
       );
     } catch (error) {
       throw normalizeProviderError(error, `The market data request for ${symbol}`);
     }
 
-    if (response.status === 429) {
-      throw new AppError(
-        "MARKET_DATA_RATE_LIMITED",
-        "The free market data service is busy. Try again shortly.",
-        503,
-        { retryAfterSeconds: 60 },
-      );
-    }
     if (!response.ok) {
       throw new AppError(
         "MARKET_DATA_UNAVAILABLE",
@@ -2044,6 +2100,44 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
       );
     }
     return parseYahooChart(payload, symbol);
+  }
+
+  /**
+   * Every Yahoo request goes through here: a few at a time, and none while a
+   * rate limit cools down. A 429 trips the breaker for this instance and,
+   * through the shared cache, for the others.
+   * shortcut: time spent waiting for a slot is outside the 8 s timeout, so a
+   * hanging Yahoo makes a large refresh queue; count the wait if that bites.
+   */
+  private async yahooFetch(url: string): Promise<Response> {
+    const slots = this.yahooSlots;
+    if (slots.active < MAX_YAHOO_IN_FLIGHT) slots.active += 1;
+    else await new Promise<void>((resolve) => slots.waiting.push(resolve));
+    try {
+      if (this.now() < this.breakerUntilMs) {
+        throw marketDataRateLimited(this.breakerUntilMs - this.now());
+      }
+      const response = await this.fetcher(url, {
+        cache: "no-store",
+        headers: {
+          Accept: "application/json",
+          "User-Agent": "Mozilla/5.0 LubanMarketLab/0.1",
+        },
+        signal: AbortSignal.timeout(MARKET_DATA_TIMEOUT_MS),
+      });
+      if (response.status === 429) {
+        const trippedAtMs = this.now();
+        this.breakerUntilMs = trippedAtMs + YAHOO_COOLDOWN_MS;
+        await this.writeShared(YAHOO_BREAKER_KEY, {}, trippedAtMs);
+        throw marketDataRateLimited(YAHOO_COOLDOWN_MS);
+      }
+      return response;
+    } finally {
+      // Hand the slot straight to the next waiting request, if any.
+      const next = slots.waiting.shift();
+      if (next) next();
+      else slots.active -= 1;
+    }
   }
 
   private async coalesce<T>(key: string, work: () => Promise<T>): Promise<T> {
@@ -2111,7 +2205,7 @@ async function readRefreshInstruments(): Promise<MarketInstrument[]> {
           OR EXISTS (
             SELECT 1
             FROM holdings AS h
-            WHERE h.symbol = i.symbol AND h.quantity > 0
+            WHERE h.symbol = i.symbol AND h.quantity <> 0
           )
         )
       ORDER BY i.symbol ASC

@@ -1,5 +1,4 @@
 import {
-  assertRequestAllowed,
   getPopularInstruments,
   listQuotes,
   MARKET_SYMBOL_PATTERN,
@@ -9,6 +8,7 @@ import {
   searchMarketInstruments,
   withBuyRules,
 } from "@/lib";
+import { assertMarketDataBudget } from "@/lib/server/quotes";
 
 import {
   ApiError,
@@ -23,16 +23,10 @@ export async function GET(request: Request): Promise<Response> {
   try {
     const user = await requireAuthenticatedUser();
 
-    const searchParams = new URL(request.url).searchParams;
+    // Every branch below can reach the market data provider on a cache miss.
+    assertMarketDataBudget(user.id);
 
-    // Typing suggests as you go, so search gets its own, larger allowance;
-    // every query is cached upstream for ten minutes. Price lookups keep the
-    // tighter one, since each cache miss reaches the market data provider.
-    const isSearch = searchParams.has("q") || searchParams.has("popular");
-    assertRequestAllowed(
-      isSearch ? `quote-search:${user.id}` : `quotes:${user.id}`,
-      isSearch ? 180 : 60,
-    );
+    const searchParams = new URL(request.url).searchParams;
 
     // Search results aren't personal, so the browser may reuse them for a
     // few minutes: repeating a search, even after a reload, is instant.

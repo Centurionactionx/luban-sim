@@ -25,8 +25,10 @@ import {
   normalizeMarketSymbol,
   requireQuote,
 } from "./quotes";
+import { serializePerUser } from "./trading";
 import {
   assertBracketPrices,
+  assertHoldingSlot,
   assertWorkingOrderShape,
   countOpenWorkingOrders,
   insertBracketExits,
@@ -42,8 +44,9 @@ import {
  * time), and fills go through placeOrder like any market order.
  */
 
-/** Waiting orders one person can place per rolling minute. */
+/** Waiting orders one person can place per rolling minute, and per rolling day. */
 const MAX_PLACEMENTS_PER_MINUTE = 30;
+const MAX_PLACEMENTS_PER_DAY = 100;
 const ORDER_TYPES: readonly WorkingOrderType[] = ["LIMIT", "STOP_LOSS", "TAKE_PROFIT"];
 
 interface AccountRow {
@@ -374,6 +377,10 @@ async function replayWorkingOrder(
 export async function placeWorkingOrder(
   input: PlaceWorkingOrderInput,
 ): Promise<WorkingOrderView[]> {
+  return serializePerUser(input.actorUserId?.trim() ?? "", () => placeWorkingOrderNow(input));
+}
+
+async function placeWorkingOrderNow(input: PlaceWorkingOrderInput): Promise<WorkingOrderView[]> {
   const order = normalizeInput(input);
   // A retry returns what the first request created before anything else is
   // checked: the price may have moved since, and a refusal now would make
@@ -445,6 +452,21 @@ export async function placeWorkingOrder(
         429,
       );
     }
+    if (account.role !== "platform_admin") {
+      const lastDay = await tx.get<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM working_orders
+         WHERE actor_user_id = ? AND parent_id IS NULL AND created_at > ?`,
+        [order.actorUserId, new Date(Date.now() - 86_400_000).toISOString()],
+      );
+      if (Number(lastDay?.count ?? 0) >= MAX_PLACEMENTS_PER_DAY) {
+        throw new AppError(
+          "ORDER_RATE_LIMITED",
+          `You've placed ${MAX_PLACEMENTS_PER_DAY} waiting orders in the last 24 hours, the daily limit. Try again later.`,
+          429,
+          { limitPerDay: MAX_PLACEMENTS_PER_DAY },
+        );
+      }
+    }
 
     const open = await countOpenWorkingOrders(tx, teamId);
     const newOrders = 1 + (order.bracket?.takeProfitCents ? 1 : 0) + (order.bracket?.stopLossCents ? 1 : 0);
@@ -458,6 +480,7 @@ export async function placeWorkingOrder(
 
     const reservations = await readReservations(tx, teamId);
     if (order.side === "BUY") {
+      if (account.role !== "platform_admin") await assertHoldingSlot(tx, teamId, order.symbol);
       const spendable = Number(account.cash_cents) - reservations.cashCents;
       if (reservedCashCents > spendable) {
         throw new AppError(
@@ -481,7 +504,7 @@ export async function placeWorkingOrder(
           "INSUFFICIENT_SHARES",
           sellable < held
             ? `Only ${Math.max(0, sellable)} ${unitWord(quote.assetClass, sellable)} of ${order.symbol} can be sold; the rest are held for other waiting sell orders.`
-            : `The ${account.role === "platform_admin" ? "test account" : "team"} only owns ${held} ${unitWord(quote.assetClass, held)} of ${order.symbol}.`,
+            : `The ${account.role === "platform_admin" ? "test account" : "team"} only owns ${Math.max(0, held)} ${unitWord(quote.assetClass, held)} of ${order.symbol}. Short sales are market orders only.`,
           409,
           { availableShares: Math.max(0, sellable), requestedShares: order.quantity },
         );
@@ -572,6 +595,13 @@ export async function placeWorkingOrder(
  * were still waiting for it.
  */
 export async function cancelWorkingOrder(input: {
+  actorUserId: string;
+  workingOrderId: string;
+}): Promise<WorkingOrderView> {
+  return serializePerUser(input.actorUserId, () => cancelWorkingOrderNow(input));
+}
+
+async function cancelWorkingOrderNow(input: {
   actorUserId: string;
   workingOrderId: string;
 }): Promise<WorkingOrderView> {

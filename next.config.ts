@@ -23,12 +23,19 @@ const nextConfig: NextConfig = {
         { key: "X-Frame-Options", value: "DENY" },
         { key: "Referrer-Policy", value: "no-referrer" },
         { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
-        { key: "Content-Security-Policy", value: "frame-ancestors 'none'; object-src 'none'; base-uri 'self'" },
+      ],
+    }, {
+      // Pages get their nonce-based CSP from proxy.ts, which skips static
+      // files. This one is static with no injection point, so it keeps a
+      // policy without script-src rather than hashes of its inline scripts.
+      source: "/offline.html",
+      headers: [
+        { key: "Content-Security-Policy", value: "frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'" },
       ],
     }, {
       // The offline-page service worker (public/sw.js). Never cached, so a
-      // fix reaches everyone on their next visit; its CSP (which replaces the
-      // one above for this file) keeps the worker to this origin.
+      // fix reaches everyone on their next visit; its CSP keeps the worker
+      // to this origin.
       source: "/sw.js",
       headers: [
         { key: "Content-Type", value: "application/javascript; charset=utf-8" },

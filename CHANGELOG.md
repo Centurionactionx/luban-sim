@@ -5,6 +5,16 @@ Releases before v1.28.0 didn't have numbers, so they're listed by date.
 
 <!-- Generated from lib/changelog.ts by `pnpm changelog`. Edit that file, not this one. -->
 
+## Unreleased: Short selling
+
+### New
+
+- Short selling. Sell more than your team owns and the rest is sold short: you get the cash now and owe the shares back. Buying them back later (a buy to cover) locks in the gain or loss. Shorts show as negative holdings, follow the same one-holding and 25-stock limits, and are market orders only.
+
+### Improved
+
+- Cash from short sales is owed back, so it doesn't count as buying power. Covering a short is always allowed, even if it leaves your team's cash below zero.
+
 ## v1.40.0: A clearer portfolio summary and leaderboard (2026-10-06)
 
 ### New

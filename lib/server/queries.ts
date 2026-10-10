@@ -23,6 +23,7 @@ import type {
   TradeSide,
 } from "../contracts";
 import { AppError } from "../errors";
+import { applyFill, type Position } from "../order-math";
 import { getAdminTradingTeamId } from "./admin-trading";
 import { getSessionUser } from "./auth";
 import type { DbExecutor } from "./database";
@@ -255,16 +256,14 @@ export function mapGrouping(
 
 export interface RealizedGains {
   totalCents: number;
-  /** Each sell's realized gain, keyed by order id. */
-  bySellOrderId: Map<string, number>;
+  /** Realized gain of each sell or cover that closed shares, keyed by order id. */
+  byClosingOrderId: Map<string, number>;
 }
 
 /**
- * Gains locked in by a portfolio's sells. Replays its fills in the order
- * they changed the portfolio, using the trade engine's own average-cost
- * math: a buy blends its cost into the average (rounded to the cent), a sell
- * realizes its proceeds minus the average cost of the shares sold, and
- * selling out starts the next buy from a fresh average.
+ * Gains locked in by a portfolio's closing fills: sells of held shares and
+ * buys that cover a short. Replays its fills in the order they changed the
+ * portfolio through the trade engine's own average-cost math (applyFill).
  */
 export async function readRealizedGains(
   teamId: string,
@@ -284,37 +283,25 @@ export async function readRealizedGains(
      ORDER BY portfolio_version ASC, created_at ASC, id ASC`,
     [teamId],
   );
-  const positions = new Map<string, { quantity: number; averageCostCents: number }>();
-  const bySellOrderId = new Map<string, number>();
+  const positions = new Map<string, Position>();
+  const byClosingOrderId = new Map<string, number>();
   let totalCents = 0;
 
   for (const fill of fills) {
-    const quantity = Number(fill.quantity);
-    const grossCents = Number(fill.gross_cents);
-    const position = positions.get(fill.symbol) ?? { quantity: 0, averageCostCents: 0 };
-
-    if (fill.side === "BUY") {
-      const quantityAfter = position.quantity + quantity;
-      positions.set(fill.symbol, {
-        quantity: quantityAfter,
-        averageCostCents: Math.round(
-          (position.quantity * position.averageCostCents + grossCents) / quantityAfter,
-        ),
-      });
-      continue;
+    const next = applyFill(
+      positions.get(fill.symbol) ?? { quantity: 0, averageCostCents: 0 },
+      fill.side,
+      Number(fill.quantity),
+      Number(fill.gross_cents),
+    );
+    positions.set(fill.symbol, next);
+    if (next.closedQuantity > 0) {
+      byClosingOrderId.set(fill.id, next.realizedCents);
+      totalCents += next.realizedCents;
     }
-
-    const realizedCents = grossCents - quantity * position.averageCostCents;
-    bySellOrderId.set(fill.id, realizedCents);
-    totalCents += realizedCents;
-    const quantityAfter = Math.max(0, position.quantity - quantity);
-    positions.set(fill.symbol, {
-      quantity: quantityAfter,
-      averageCostCents: quantityAfter === 0 ? 0 : position.averageCostCents,
-    });
   }
 
-  return { totalCents, bySellOrderId };
+  return { totalCents, byClosingOrderId };
 }
 
 export interface PortfolioCalculation {
@@ -350,7 +337,7 @@ export async function calculatePortfolio(
       SELECT h.symbol, h.quantity, h.average_cost_cents, i.industry
       FROM holdings h
       LEFT JOIN instruments i ON i.symbol = h.symbol
-      WHERE h.team_id = ? AND h.quantity > 0
+      WHERE h.team_id = ? AND h.quantity <> 0
       ORDER BY h.symbol ASC
     `,
     [teamId],
@@ -404,6 +391,10 @@ export async function calculatePortfolio(
     0,
   );
   const cashCents = Number(team.cash_cents);
+  const shortLiabilityCents = interim.reduce(
+    (total, holding) => total + Math.max(0, -holding.marketValueCents),
+    0,
+  );
   const totalValueCents = cashCents + holdingsValueCents;
   const sandboxFunding = team.sandbox_owner_user_id
     ? await database.get<{ amount_cents: number }>(
@@ -441,9 +432,10 @@ export async function calculatePortfolio(
       marketValueCents: holding.marketValueCents,
       costBasisCents: holding.costBasisCents,
       gainLossCents: holding.gainLossCents,
+      // A short's cost basis is negative; its gain is still against the sale.
       gainLossPercent: roundPercent(
         holding.gainLossCents,
-        holding.costBasisCents,
+        Math.abs(holding.costBasisCents),
       ),
       portfolioWeightPercent: roundPercent(
         holding.marketValueCents,
@@ -453,7 +445,7 @@ export async function calculatePortfolio(
       assetClass: holding.quote.assetClass ?? "STOCK",
       lotSize: holding.quote.lotSize ?? 1,
       reservedQuantity: Math.min(
-        holding.quantity,
+        Math.max(0, holding.quantity),
         reservations.sharesBySymbol.get(holding.quote.symbol) ?? 0,
       ),
       ...mapGrouping(holding.quote, holding.storedIndustry),
@@ -475,8 +467,10 @@ export async function calculatePortfolio(
           : 0,
       dayChangeCents,
       dayChangePercent: roundPercent(dayChangeCents, priorValueCents),
-      // Cash set aside for waiting buy orders can't be spent twice.
-      buyingPowerCents: cashCents - reservedCashCents,
+      // Cash set aside for waiting buy orders can't be spent twice, and short
+      // sale proceeds are owed back (at today's price), so neither funds buys.
+      buyingPowerCents: cashCents - reservedCashCents - shortLiabilityCents,
+      shortLiabilityCents,
       reservedCashCents,
       unrealizedGainCents,
       realizedGainCents: realized.totalCents,
@@ -691,22 +685,19 @@ async function readOrders(
     parameters,
   );
 
-  // A sell's realized gain depends on every earlier fill of its portfolio,
+  // A closing fill's realized gain depends on every earlier fill of its portfolio,
   // so each portfolio on the page is replayed once.
   const realizedByTeam = new Map<string, Map<string, number>>();
   for (const teamIdOnPage of new Set(rows.map((row) => row.team_id))) {
     realizedByTeam.set(
       teamIdOnPage,
-      (await readRealizedGains(teamIdOnPage, db)).bySellOrderId,
+      (await readRealizedGains(teamIdOnPage, db)).byClosingOrderId,
     );
   }
 
   return rows.map((row) => ({
     ...orderRowToView(row),
-    realizedGainCents:
-      row.side === "SELL"
-        ? (realizedByTeam.get(row.team_id)?.get(row.id) ?? null)
-        : null,
+    realizedGainCents: realizedByTeam.get(row.team_id)?.get(row.id) ?? null,
   }));
 }
 

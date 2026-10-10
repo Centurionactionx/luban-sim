@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 
 import type { DemoUser, SessionUser, UserRole, UserStatus } from "../contracts";
 import { AppError } from "../errors";
+import { isDemoLoginAllowed } from "./auth-mode";
 import { getDb } from "./db";
 
 export const SESSION_COOKIE_NAME = "luban_session";
@@ -183,7 +184,9 @@ export async function createSessionToken(
 export async function getSessionFromToken(
   token: string | null | undefined,
 ): Promise<SessionUser | null> {
-  if (!token || token.length < 32 || token.length > 256) {
+  // Demo cookies stop working wherever demo login is off, including for pages
+  // that read the cookie directly.
+  if (!isDemoLoginAllowed() || !token || token.length < 32 || token.length > 256) {
     return null;
   }
 

@@ -1,6 +1,7 @@
 import { Analytics } from "@vercel/analytics/next";
 import type { Metadata, Viewport } from "next";
 import { IBM_Plex_Mono, Space_Grotesk } from "next/font/google";
+import { headers } from "next/headers";
 import type { ReactNode } from "react";
 
 import { ServiceWorkerRegistration } from "@/components/service-worker-registration";
@@ -55,17 +56,21 @@ export const viewport: Viewport = {
 };
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
+  // The CSP nonce from proxy.ts. Reading it renders every page per request,
+  // which nonces need: a prerendered page's scripts would carry none.
+  const nonce = (await headers()).get("x-nonce") ?? undefined;
   // Applies a saved light/dark choice before the first paint.
   const head = (
     <head>
-      <script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
+      <script nonce={nonce} dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
     </head>
   );
   const body = (
     <body>
       {children}
       <ServiceWorkerRegistration />
-      <Analytics />
+      {/* Its script is served only by Vercel; elsewhere it 404s as a page error. */}
+      {process.env.VERCEL === "1" && <Analytics />}
     </body>
   );
 
@@ -82,6 +87,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
       >
         {head}
         <ClerkProvider
+          nonce={nonce}
           appearance={{
             // The Luban logo heads the sign-in and sign-up cards, which stay
             // white in both themes.

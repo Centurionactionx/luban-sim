@@ -9,6 +9,7 @@ import {
   refreshQuote,
   replayOrder,
 } from "@/lib";
+import { assertMarketDataBudget } from "@/lib/server/quotes";
 
 import {
   requireTrustedOrigin,
@@ -82,6 +83,7 @@ export async function POST(request: Request): Promise<Response> {
     // this pre-quote throttle additionally stops unknown-symbol spam from
     // reaching the upstream provider without ever entering the engine.
     assertRequestAllowed(`order-quote:${user.id}`, 30);
+    assertMarketDataBudget(user.id);
     const quote = await refreshQuote(order.symbol);
     if (!quote) {
       throw new ApiError(

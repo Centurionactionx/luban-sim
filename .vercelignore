@@ -1,0 +1,9 @@
+# Never upload local-only data with a CLI deploy: database dumps and rosters
+# hold personal data, and .env files hold credentials.
+/backups
+/private
+/data
+.env*
+/coverage
+/playwright-report
+/test-results

@@ -1,9 +1,12 @@
+import { timingSafeEqual } from "node:crypto";
+
 import { cookies } from "next/headers";
 import { ZodError } from "zod";
 
 import {
   AppError,
   SESSION_TTL_SECONDS,
+  assertRequestAllowed,
   canHostCompetitions,
   getSessionFromToken,
   isDemoLoginAllowed,
@@ -138,9 +141,13 @@ export async function getAuthenticatedUser(): Promise<SessionUser | null> {
   if (isManagedAuthMode()) {
     // Imported on demand so demo-mode processes never load the Clerk SDK,
     // which refuses to run without provider keys.
-    const { getManagedSessionUser } = await import(
+    const { getManagedSessionUser, getManagedUserId } = await import(
       "@/lib/server/managed-identity"
     );
+    // Flood guard ahead of the identity lookups' database queries; the
+    // userId comes from the session token alone (local verification).
+    const subject = await getManagedUserId();
+    if (subject) assertRequestAllowed(`user:${subject}`, 120);
     return getManagedSessionUser();
   }
 
@@ -189,14 +196,19 @@ export async function requireHostUser(): Promise<SessionUser> {
     );
   }
 
+  await requireAdminMfa(user);
+
+  return user;
+}
+
+/** Managed mode: hosts and admins must have a verified second factor (a no-op for students). */
+export async function requireAdminMfa(user: SessionUser): Promise<void> {
   if (isManagedAuthMode()) {
     const { assertAdminMfaSatisfied } = await import(
       "@/lib/server/managed-identity"
     );
     await assertAdminMfaSatisfied(user);
   }
-
-  return user;
 }
 
 export async function requirePlatformAdmin(): Promise<SessionUser> {
@@ -210,14 +222,19 @@ export async function requirePlatformAdmin(): Promise<SessionUser> {
     );
   }
 
-  if (isManagedAuthMode()) {
-    const { assertAdminMfaSatisfied } = await import(
-      "@/lib/server/managed-identity"
-    );
-    await assertAdminMfaSatisfied(user);
-  }
+  await requireAdminMfa(user);
 
   return user;
+}
+
+/** True when the request carries `Authorization: Bearer <CRON_SECRET>`; compared in constant time. */
+export function isCronAuthorized(request: Request): boolean {
+  const secret = process.env.CRON_SECRET?.trim();
+  if (!secret) return false;
+  const header = request.headers.get("authorization") ?? "";
+  const expected = Buffer.from(`Bearer ${secret}`);
+  const received = Buffer.from(header);
+  return received.length === expected.length && timingSafeEqual(received, expected);
 }
 
 export function sessionCookieOptions(request: Request) {
@@ -366,7 +383,9 @@ export function handleRouteError(error: unknown): Response {
 
   if (
     error instanceof Error &&
-    (("code" in error && error.code === "SQLITE_BUSY") ||
+    // PostgreSQL 55P03/57014: the per-transaction lock or statement timeout fired.
+    (("code" in error &&
+      (error.code === "SQLITE_BUSY" || error.code === "55P03" || error.code === "57014")) ||
       error.message.toLowerCase().includes("database is locked"))
   ) {
     return json(

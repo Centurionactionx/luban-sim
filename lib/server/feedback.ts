@@ -24,6 +24,8 @@ import { assertRequestAllowed } from "./request-throttle";
 
 /** Sends per person per minute. Enough to correct a typo, not to flood. */
 export const FEEDBACK_SUBMISSIONS_PER_MINUTE = 5;
+/** Sends per person in any rolling 24 hours, counted in the feedback table. */
+const FEEDBACK_SUBMISSIONS_PER_DAY = 10;
 export const MAX_FEEDBACK_LIST_LIMIT = 500;
 
 export interface SubmitFeedbackInput {
@@ -150,8 +152,22 @@ export async function submitFeedback(input: SubmitFeedbackInput): Promise<Feedba
   const user = await requireActiveUser(input.userId);
   assertRequestAllowed(`feedback:${user.id}`, FEEDBACK_SUBMISSIONS_PER_MINUTE);
 
-  const id = randomUUID();
   const db = await getDb();
+  // shortcut: count and insert aren't atomic, so a race can overshoot by a few; fine for spam control.
+  const lastDay = await db.get<{ count: number }>(
+    "SELECT COUNT(*) AS count FROM feedback WHERE user_id = ? AND created_at > ?",
+    [user.id, new Date(Date.now() - 86_400_000).toISOString()],
+  );
+
+  if (Number(lastDay?.count ?? 0) >= FEEDBACK_SUBMISSIONS_PER_DAY) {
+    throw new AppError(
+      "FEEDBACK_LIMIT_REACHED",
+      `You've sent ${FEEDBACK_SUBMISSIONS_PER_DAY} messages in the last 24 hours, the daily limit. Try again later.`,
+      429,
+    );
+  }
+
+  const id = randomUUID();
   await db.run(
     `INSERT INTO feedback (id, user_id, team_id, topic, message, source, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,

@@ -14,6 +14,7 @@ import {
   refreshQuotesFor,
   watchlistSymbolsFor,
 } from "@/lib";
+import { assertMarketDataBudget } from "@/lib/server/quotes";
 
 import {
   handleRouteError,
@@ -28,8 +29,9 @@ export async function GET(request: Request): Promise<Response> {
   try {
     const user = await requireAuthenticatedUser();
     // Each dashboard read recomputes the whole leaderboard; cap how fast one
-    // client can force that work. Well above any legitimate polling cadence.
-    assertRequestAllowed(`poll:${user.id}`, 120);
+    // client can force that work. The page polls once a minute, plus once
+    // after each trade or symbol switch.
+    assertRequestAllowed(`poll:${user.id}`, 30);
     const authDone = performance.now();
     const params = new URL(request.url).searchParams;
     const refreshMarket = params.get("refreshMarket") !== "0";
@@ -38,6 +40,8 @@ export async function GET(request: Request): Promise<Response> {
       rawSymbol && MARKET_SYMBOL_PATTERN.test(normalizeMarketSymbol(rawSymbol))
         ? normalizeMarketSymbol(rawSymbol)
         : null;
+    // The symbol on screen is refreshed too, which can reach Yahoo.
+    if (focusSymbol) assertMarketDataBudget(user.id);
     const ownSymbols = [
       ...(await watchlistSymbolsFor(user.id)),
       ...(focusSymbol ? [focusSymbol] : []),

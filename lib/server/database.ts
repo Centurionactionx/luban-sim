@@ -194,6 +194,14 @@ export function toPostgresPlaceholders(sql: string): string {
   return output;
 }
 
+// First statement of every transaction, so a stuck lock or runaway query frees
+// its pooled connection with an error instead of holding it. Transaction-local,
+// hence safe through the transaction pooler. 10 s of lock wait outlasts another
+// instance's cold-start migration; 20 s per statement is far above any normal query.
+// shortcut: statements outside a transaction are uncapped, cap them at the pool if that bites.
+const TRANSACTION_TIMEOUTS_SQL =
+  "SELECT set_config('lock_timeout', '10s', true), set_config('statement_timeout', '20s', true)";
+
 function pgExecutor(query: PgQueryFn): DbExecutor {
   return {
     engine: "postgres",
@@ -252,7 +260,8 @@ class PostgresAppDatabase implements AppDatabase {
       return fn(ambient);
     }
 
-    return this.driver.withTransaction((query) => {
+    return this.driver.withTransaction(async (query) => {
+      await query(TRANSACTION_TIMEOUTS_SQL);
       const executor = pgExecutor(query);
       return this.ambientTransaction.run(executor, () => fn(executor));
     });
@@ -267,9 +276,11 @@ class PostgresAppDatabase implements AppDatabase {
 
     // REPEATABLE READ gives every statement in the read the same snapshot,
     // matching SQLite's behavior and the interface contract — a dashboard
-    // never mixes pre-trade cash with post-trade holdings.
+    // never mixes pre-trade cash with post-trade holdings. The isolation level
+    // must precede any query, so the timeouts follow it.
     return this.driver.withTransaction(async (query) => {
       await query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
+      await query(TRANSACTION_TIMEOUTS_SQL);
       const executor = pgExecutor(query);
       return this.ambientTransaction.run(executor, () => fn(executor));
     });

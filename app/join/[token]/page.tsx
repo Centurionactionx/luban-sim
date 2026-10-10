@@ -1,9 +1,11 @@
+import { headers } from "next/headers";
 import Link from "next/link";
 
 import type { InvitationPreview } from "@/lib/contracts";
 import { DISPLAY_TIME_ZONE } from "@/lib/time";
 import { previewInvitation } from "@/lib/server/invitations";
 import { isManagedAuthMode } from "@/lib/server/auth-mode";
+import { assertRequestAllowed } from "@/lib/server/request-throttle";
 import { JoinAcceptPanel } from "@/components/join-accept";
 import { LegalNote } from "@/components/legal-note";
 
@@ -97,6 +99,24 @@ export default async function JoinPage({
         <Link className="button button--primary" href="/">
           Open the demo trading room
         </Link>
+      </StateSheet>
+    );
+  }
+
+  // Anonymous visitors reach the database below; cap lookups per client address.
+  // Generous because a whole class may join at once from one school network.
+  const requestHeaders = await headers();
+  const client =
+    requestHeaders.get("x-real-ip") ??
+    requestHeaders.get("x-forwarded-for")?.split(",")[0].trim() ??
+    "unknown";
+
+  try {
+    assertRequestAllowed(`join:${client}`, 120);
+  } catch {
+    return (
+      <StateSheet titleId="join-busy-title" title="Too many attempts.">
+        <p>Wait a minute, then open your invitation link again.</p>
       </StateSheet>
     );
   }

@@ -12,14 +12,15 @@ LUBAN_DATABASE_PROVIDER=postgres
 LUBAN_DATABASE_URL=postgresql://USER:PASSWORD@DATABASE_HOST:6543/postgres
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=YOUR_PUBLISHABLE_KEY
 CLERK_SECRET_KEY=YOUR_SERVER_SECRET
-LUBAN_REQUIRE_ADMIN_MFA=false
 LUBAN_MARKET_DATA_PROVIDER=yahoo
 LUBAN_APP_URL=https://sim.lubancanada.com
 ```
 
+Host and administrator operations require multi-factor authentication, which needs a paid Clerk plan. Until it is available, Vercel carries `LUBAN_REQUIRE_ADMIN_MFA=false`. To turn enforcement on, go in this order (any other order locks hosts out of host controls): (1) enable MFA in the Clerk dashboard; (2) every host enrolls a second factor and signs in again with it; (3) remove `LUBAN_REQUIRE_ADMIN_MFA` in Vercel and redeploy.
+
 `LUBAN_DATABASE_URL` falls back to `POSTGRES_URL`, then `DATABASE_URL`. The engine is selected only by `LUBAN_DATABASE_PROVIDER`; credentials alone do not select PostgreSQL. Use the provider's pooled connection string. SQLite is a local file and is unsuitable for durable state on an ephemeral serverless filesystem.
 
-Leave `LUBAN_DEMO_MODE` unset on public deployments. Managed mode refuses demo authentication regardless of that flag. Disabling demo mode also rejects previously issued demo cookies. Keep preview and production databases separate, and start managed authentication with a fresh database so invitations created through a previous demo cannot carry over.
+Leave `LUBAN_DEMO_MODE` unset on public deployments. Managed mode and any Vercel deployment (`VERCEL=1`) refuse demo authentication regardless of that flag. Disabling demo mode also rejects previously issued demo cookies. Keep preview and production databases separate, and start managed authentication with a fresh database so invitations created through a previous demo cannot carry over.
 
 ## Domain
 
@@ -31,7 +32,7 @@ The footer shows the version from `package.json` (for example `v1.29.0`), follow
 
 ## Keeping the database active
 
-Supabase's free plan pauses a project after about a week of low activity. `vercel.json` schedules one daily call to `/api/health` (15:00 UTC), which runs a real query against the database. Vercel's Hobby plan allows one scheduled run per day, so do not make the schedule more frequent or the deployment will be rejected. This is a safety net and not a guarantee; Supabase Pro never auto-pauses.
+Supabase's free plan pauses a project after about a week of low activity. `vercel.json` schedules one daily call to `/api/health` (07:00 UTC, about 3 a.m. Eastern). Vercel Cron sends `Authorization: Bearer <CRON_SECRET>` automatically when `CRON_SECRET` is set in Vercel Production, and only that request runs a real query against the database; any other caller gets `{ "ok": true }` with no database work. After that query the same run cleans up (`lib/server/retention.ts`) to keep the free 500 MB database small: it deletes shared market-data cache rows older than 24 hours, order-retry (idempotency) records older than 7 days, and cancelled or expired waiting orders closed more than 14 days ago, and never touches orders, the ledger, activity, snapshots, holdings, teams, users, or feedback. A cleanup failure is logged and shown as `"cleanup": "failed"` in the response without marking the database down. Vercel's Hobby plan allows one scheduled run per day, so do not make the schedule more frequent or the deployment will be rejected. This is a safety net and not a guarantee; Supabase Pro never auto-pauses.
 
 ## Database TLS
 

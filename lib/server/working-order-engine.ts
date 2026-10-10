@@ -8,6 +8,7 @@ import { unitWord } from "../lots";
 import { getMarketDataProvider, marketDataNow, refreshQuote } from "./quotes";
 import { maxPositionPercent, maxQuoteAgeMs, placeOrder } from "./trading";
 import { stockSessionMayBeOpen } from "../market-calendar";
+import { MAX_DISTINCT_HOLDINGS_PER_TEAM } from "../order-math";
 import {
   workingOrderTriggered,
   workingOrdersAvailableTo,
@@ -25,6 +26,9 @@ import { workingOrderLabel } from "./working-orders";
 
 /** Symbols whose quotes are fetched at the same time in one run. */
 const QUOTE_CONCURRENCY = 6;
+
+/** No new symbol starts after this, so a run ends inside the cron route's 60 s. */
+const RUN_DEADLINE_MS = 45_000;
 
 export interface WorkingOrderRunReport {
   checked: number;
@@ -92,6 +96,8 @@ function cancellationReason(error: AppError): string {
       return "This listing can no longer be bought.";
     case "POSITION_LIMIT":
       return `Filling it would have put more than ${maxPositionPercent()}% of the portfolio in one holding.`;
+    case "HOLDINGS_LIMIT":
+      return `The team already held ${MAX_DISTINCT_HOLDINGS_PER_TEAM} different stocks when the price was reached.`;
     case "LOT_TOO_SMALL":
       return "One lot became worth less than $1, so buys are paused.";
     default:
@@ -282,6 +288,8 @@ async function fillOrder(
       },
       {
         systemTriggered: true,
+        // Waiting sells guard shares the team holds; they never open a short.
+        closeOnly: order.side === "SELL",
         releaseWorkingOrderIds: [order.id],
         expectTeamId: order.team_id,
         activityLabel: label,
@@ -377,6 +385,7 @@ async function mapLimited<T, R>(
 export async function runWorkingOrders(at?: Date): Promise<WorkingOrderRunReport> {
   const now = at ?? marketDataNow();
   const nowIso = now.toISOString();
+  const deadline = Date.now() + RUN_DEADLINE_MS;
   const closer = new Closer();
   const report: WorkingOrderRunReport = {
     checked: 0,
@@ -428,19 +437,25 @@ export async function runWorkingOrders(at?: Date): Promise<WorkingOrderRunReport
     report.skippedSymbols.push(symbol);
     return false;
   });
-  const quotes = await mapLimited(symbols, QUOTE_CONCURRENCY, async (symbol) => {
-    try {
-      return await refreshQuote(symbol, now);
-    } catch {
-      return null;
+  // Waiting stop losses first: they cap a loss. Whatever the deadline cuts
+  // short is picked up by the next run.
+  const hasStop = (symbol: string) =>
+    bySymbol.get(symbol)!.some((order) => order.order_type === "STOP_LOSS");
+  symbols.sort((a, b) => Number(hasStop(b)) - Number(hasStop(a)));
+  await mapLimited(symbols, QUOTE_CONCURRENCY, async (symbol) => {
+    if (Date.now() > deadline) {
+      report.skippedSymbols.push(symbol);
+      return;
     }
-  });
-
-  for (const [index, symbol] of symbols.entries()) {
-    const quote = quotes[index];
+    let quote: Quote | null;
+    try {
+      quote = await refreshQuote(symbol, now);
+    } catch {
+      quote = null;
+    }
     if (!usableQuote(quote, now)) {
       report.skippedSymbols.push(symbol);
-      continue;
+      return;
     }
     for (const order of bySymbol.get(symbol)!) {
       if (
@@ -459,7 +474,7 @@ export async function runWorkingOrders(at?: Date): Promise<WorkingOrderRunReport
       if (outcome === "filled") report.filled += 1;
       if (outcome === "cancelled") report.cancelled += 1;
     }
-  }
+  });
   return report;
 }
 

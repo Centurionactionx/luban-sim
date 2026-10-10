@@ -77,7 +77,7 @@ For Vercel and Supabase setup, including PostgreSQL TLS and managed authenticati
 | Ada (Admin) | Platform administrator | Private live-trading and valuation sandboxes |
 
 Demo sessions use opaque, hashed, HTTP-only cookies. They are intentionally not a production sign-in system.
-Production builds reject demo login unless `LUBAN_DEMO_MODE=true`; enable that flag only for a private preview, never as the authentication model for a real deployment.
+Production builds reject demo login unless `LUBAN_DEMO_MODE=true`, and any Vercel deployment (`VERCEL=1`) rejects it whatever the flag says. Demo mode must never be enabled on a deployed site; the flag exists only for local production-mode runs such as the end-to-end suite.
 
 ## Real sign-in (managed mode)
 
@@ -165,7 +165,7 @@ pnpm test:e2e
 | `DELETE /api/admin/valuation-lab` | Platform admin: clear test positions while retaining configured cash |
 | `POST /api/admin/reset` | Restore seeded prototype state (demo mode only) |
 
-All responses are private and `no-store`. Business conflicts return stable error codes such as `INSUFFICIENT_CASH`, `INSUFFICIENT_SHARES`, `TRADING_CLOSED`, and `IDEMPOTENCY_CONFLICT`. Order attempts are capped per trader per rolling minute (`ORDER_RATE_LIMITED`, default 20 via `LUBAN_MAX_ORDERS_PER_MINUTE`) — enough for continuous day trading, low enough to stop runaway scripts.
+All responses are private and `no-store`. Business conflicts return stable error codes such as `INSUFFICIENT_CASH`, `INSUFFICIENT_SHARES`, `TRADING_CLOSED`, and `IDEMPOTENCY_CONFLICT`. Order attempts are capped per trader per rolling minute (`ORDER_RATE_LIMITED`, default 10 via `LUBAN_MAX_ORDERS_PER_MINUTE`) and to 200 per rolling 24 hours — enough for continuous day trading, low enough to stop runaway scripts.
 
 Competitions run on a schedule: the host sets start/end date-times and team starting cash from the host panel, and trading opens and closes automatically at those instants (`scheduled` → `open` → `ended`), with manual pause/resume still available. The window is enforced inside the order transaction, so no trade can slip past the boundary. Starting cash can only change before the first fill.
 

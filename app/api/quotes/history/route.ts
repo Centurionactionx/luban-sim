@@ -1,6 +1,5 @@
 import {
   QUOTE_RANGES,
-  assertRequestAllowed,
   getQuoteHistory,
   isQuoteInterval,
   MARKET_SYMBOL_PATTERN,
@@ -9,6 +8,7 @@ import {
   type QuoteRange,
   withBuyRules,
 } from "@/lib";
+import { assertMarketDataBudget } from "@/lib/server/quotes";
 
 import {
   ApiError,
@@ -23,9 +23,8 @@ export async function GET(request: Request): Promise<Response> {
   try {
     const user = await requireAuthenticatedUser();
 
-    // History cache misses reach the upstream provider; cap the per-person
-    // miss rate the same way as quote search.
-    assertRequestAllowed(`quotes:${user.id}`, 60);
+    // History cache misses reach the upstream provider.
+    assertMarketDataBudget(user.id);
 
     const searchParams = new URL(request.url).searchParams;
     const rawSymbol = searchParams.get("symbol")?.trim();

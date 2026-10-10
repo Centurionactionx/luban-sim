@@ -1,5 +1,5 @@
 import {
-  isManagedAuthMode,
+  isDemoLoginAllowed,
   refreshAllQuotes,
   resetPrototype,
   resetRequestThrottle,
@@ -22,7 +22,7 @@ export async function POST(request: Request): Promise<Response> {
     // membership while real accounts survive, which would strand every
     // invitation-registered student with no way back onto a team. It is a
     // demo-mode tool only.
-    if (isManagedAuthMode()) {
+    if (!isDemoLoginAllowed()) {
       return errorResponse(
         403,
         "RESET_DEMO_ONLY",

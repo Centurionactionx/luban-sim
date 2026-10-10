@@ -7,7 +7,11 @@ import type {
   WorkingOrderType,
 } from "../contracts";
 import { AppError } from "../errors";
-import { MAX_ORDER_PRICE_CENTS } from "../order-math";
+import {
+  MAX_DISTINCT_HOLDINGS_PER_TEAM,
+  MAX_ORDER_PRICE_CENTS,
+  holdingsLimitReached,
+} from "../order-math";
 import type { DbExecutor } from "./database";
 
 /**
@@ -126,6 +130,39 @@ export async function readReservations(
     sharesBySymbol.set(symbol, (sharesBySymbol.get(symbol) ?? 0) + quantity);
   }
   return { cashCents, sharesBySymbol };
+}
+
+/**
+ * Refuses a buy or short sale of a listing the team doesn't hold when its held listings plus
+ * those with a waiting buy already fill the limit. Orders in `excluding` (a
+ * fill's own order) don't count. Must run under the team lock.
+ */
+export async function assertHoldingSlot(
+  executor: DbExecutor,
+  teamId: string,
+  symbol: string,
+  excluding: readonly string[] = [],
+): Promise<void> {
+  const held = await executor.all<{ symbol: string }>(
+    "SELECT symbol FROM holdings WHERE team_id = ? AND quantity <> 0",
+    [teamId],
+  );
+  const waiting = await executor.all<{ id: string; symbol: string }>(
+    "SELECT id, symbol FROM working_orders WHERE team_id = ? AND status = 'WORKING' AND side = 'BUY'",
+    [teamId],
+  );
+  const symbols = [
+    ...held.map((row) => row.symbol),
+    ...waiting.filter((row) => !excluding.includes(row.id)).map((row) => row.symbol),
+  ];
+  if (holdingsLimitReached(symbols, symbol)) {
+    throw new AppError(
+      "HOLDINGS_LIMIT",
+      `Your team already holds (or has waiting buys for) ${MAX_DISTINCT_HOLDINGS_PER_TEAM} different stocks. Close one, or cancel a waiting buy, before opening a new one.`,
+      409,
+      { limit: MAX_DISTINCT_HOLDINGS_PER_TEAM },
+    );
+  }
 }
 
 export async function countOpenWorkingOrders(

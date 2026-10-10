@@ -278,7 +278,9 @@ export interface HoldingView {
   name: string;
   exchange: string;
   listingCurrency: "CAD" | "USD";
+  /** Below zero for a short. */
   quantity: number;
+  /** Average buy price, or average sale price for a short. */
   averageCostCents: number;
   currentPriceCents: number;
   currentPriceCadCents: number;
@@ -332,9 +334,11 @@ export interface PortfolioSummary {
   buyingPowerCents: number;
   /** Cash set aside for waiting buys (already left out of buying power). */
   reservedCashCents: number;
+  /** What buying back every short would cost now (left out of buying power). */
+  shortLiabilityCents: number;
   /** Gain or loss on shares still held: market value minus their cost. */
   unrealizedGainCents: number;
-  /** Gain or loss locked in by sells, each against the average cost then. */
+  /** Gain or loss locked in by sells and covers, each against the average then. */
   realizedGainCents: number;
   asOf: string;
 }

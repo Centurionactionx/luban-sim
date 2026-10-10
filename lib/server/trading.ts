@@ -20,10 +20,12 @@ import {
   MAX_OPEN_WORKING_ORDERS_PER_TEAM,
   MAX_ORDER_QUANTITY,
   MAX_POSITION_PERCENT,
+  applyFill,
   positionRoomCents,
 } from "../order-math";
 import {
   assertBracketPrices,
+  assertHoldingSlot,
   countOpenWorkingOrders,
   insertBracketExits,
   optionalPriceCents,
@@ -39,8 +41,12 @@ import {
   requireQuote,
 } from "./quotes";
 
-const DEFAULT_MAX_ORDERS_PER_MINUTE = 20;
+const DEFAULT_MAX_ORDERS_PER_MINUTE = 10;
 const ORDER_RATE_WINDOW_MS = 60_000;
+// Rolling-day ceiling per student. It also bounds how many idempotency records
+// a looping script can write, which matters on the free database tier.
+const MAX_ORDERS_PER_DAY = 200;
+const ORDER_DAY_WINDOW_MS = 86_400_000;
 const DEFAULT_MAX_QUOTE_AGE_MINUTES = 20;
 
 /**
@@ -48,6 +54,7 @@ const DEFAULT_MAX_QUOTE_AGE_MINUTES = 20;
  * minutes behind, so the default leaves a small margin above that delay
  * while refusing fills at prices from a previous session or a dead feed.
  */
+// Owner accepted the delayed-TSX-quote arbitrage as an intentional loophole on 2026-10-10; don't "fix" it.
 export function maxQuoteAgeMs(): number {
   const raw = Number(process.env.LUBAN_MAX_QUOTE_AGE_MINUTES);
 
@@ -60,7 +67,7 @@ export function maxQuoteAgeMs(): number {
 
 /**
  * Anti-spam ceiling on order attempts per student per rolling minute. The
- * default supports active day trading (an order every three seconds,
+ * default supports active day trading (an order every six seconds,
  * sustained) while stopping runaway scripts and button-mashing. Counted from
  * durable idempotency records inside the write transaction, so it holds
  * across processes and server restarts; genuine idempotent replays are
@@ -219,6 +226,8 @@ export interface FillOptions {
   releaseWorkingOrderIds?: readonly string[];
   /** System-triggered fills don't count toward the per-minute order limit. */
   systemTriggered?: boolean;
+  /** A sell that may only close shares the team holds, never open a short. */
+  closeOnly?: boolean;
   /**
    * Fill against exactly this quote (the one the waiting order was checked
    * on), not whatever the cache holds a moment later. The usual stale,
@@ -329,7 +338,12 @@ function shouldPersistRejection(error: unknown): error is AppError {
     // the 429 forever for that idempotency key.
     error.code !== "ORDER_RATE_LIMITED" &&
     // A run that lost a race for a waiting order: nothing to remember.
-    error.code !== "WORKING_ORDER_NOT_WAITING"
+    error.code !== "WORKING_ORDER_NOT_WAITING" &&
+    // Listing rules (assertBuyAllowed) can change, e.g. ETFs switched on, so
+    // the same key may be retried once they do.
+    error.code !== "ASSET_CLASS_DISABLED" &&
+    error.code !== "SYMBOL_BLOCKED" &&
+    error.code !== "LOT_TOO_SMALL"
   );
 }
 
@@ -380,10 +394,35 @@ type PlaceOrderOutcome =
   | { kind: "receipt"; receipt: TradeReceipt }
   | { kind: "replayed-error"; error: AppError };
 
+const userQueues = new Map<string, Promise<void>>();
+
+/**
+ * Runs `work` after the same user's earlier calls finish, so a burst of
+ * parallel orders holds one pool connection at a time instead of parking them
+ * all on the trader lock. shortcut: this process only, the advisory lock still
+ * orders traders across instances; upgrade if per-instance bursts still hurt.
+ */
+export function serializePerUser<T>(userId: string, work: () => Promise<T>): Promise<T> {
+  const run = (userQueues.get(userId) ?? Promise.resolve()).then(work);
+  const tail = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  userQueues.set(userId, tail);
+  void tail.then(() => {
+    if (userQueues.get(userId) === tail) userQueues.delete(userId);
+  });
+  return run;
+}
+
 export async function placeOrder(
   input: PlaceOrderInput,
   options: FillOptions = {},
 ): Promise<TradeReceipt> {
+  return serializePerUser(input.actorUserId?.trim() ?? "", () => placeOrderNow(input, options));
+}
+
+async function placeOrderNow(input: PlaceOrderInput, options: FillOptions): Promise<TradeReceipt> {
   const normalized = normalizeOrderInput(input, options.systemTriggered);
   const db = await getDb();
 
@@ -464,7 +503,6 @@ export async function placeOrder(
       );
     }
   }
-  if (normalized.side === "BUY") assertBuyAllowed(quote);
   if (normalized.bracket) {
     assertBracketPrices(quote.priceCents, normalized.bracket, "current price");
   }
@@ -477,10 +515,9 @@ export async function placeOrder(
     );
   }
 
-  const heldPrices =
-    normalized.side === "BUY"
-      ? await readHeldPrices(normalized.actorUserId, marketNow)
-      : new Map<string, number>();
+  // Any order may open a position (a sell can open a short), so both sides
+  // need the held prices for the limits and for buying power.
+  const heldPrices = await readHeldPrices(normalized.actorUserId, marketNow);
 
   const outcome = await db.transaction(async (tx): Promise<PlaceOrderOutcome> => {
     await acquireAccountReadLock(tx);
@@ -601,6 +638,27 @@ export async function placeOrder(
         );
       }
       const isAdminSandbox = account.role === "platform_admin";
+      if (!options.systemTriggered && !isAdminSandbox) {
+        const lastDay = await tx.get<{ count: number }>(
+          `SELECT COUNT(*) AS count
+           FROM idempotency_records
+           WHERE actor_user_id = ? AND created_at > ?
+             AND idempotency_key NOT LIKE 'working:%'`,
+          [
+            normalized.actorUserId,
+            new Date(Date.now() - ORDER_DAY_WINDOW_MS).toISOString(),
+          ],
+        );
+
+        if (Number(lastDay?.count ?? 0) >= MAX_ORDERS_PER_DAY) {
+          throw new AppError(
+            "ORDER_RATE_LIMITED",
+            `You've placed ${MAX_ORDERS_PER_DAY} orders in the last 24 hours, the daily limit. Try again later.`,
+            429,
+            { limitPerDay: MAX_ORDERS_PER_DAY },
+          );
+        }
+      }
       if (
         isAdminSandbox &&
         (!account.team_id ||
@@ -720,103 +778,152 @@ export async function placeOrder(
         options.releaseWorkingOrderIds,
       );
       const reservedShares = reservations.sharesBySymbol.get(normalized.symbol) ?? 0;
-      const spendableCashCents = Number(account.cash_cents) - reservations.cashCents;
       const sellableQuantity = currentQuantity - reservedShares;
-      const currentAverageCostCents = Number(holding?.average_cost_cents ?? 0);
+      // A holding below zero is a short. The closing part of an order is a
+      // buy covering a short or a sell of shares held; the rest opens (or
+      // grows) a position, so only it faces the cash and holding limits.
+      const closingQuantity = Math.min(
+        normalized.quantity,
+        Math.max(0, normalized.side === "BUY" ? -currentQuantity : currentQuantity),
+      );
+      const openingQuantity = normalized.quantity - closingQuantity;
+      const openingCents = openingQuantity * quote.priceCadCents;
       const shareWord = unitWord(quote.assetClass, normalized.quantity);
       // Crypto notes also give the token amount, e.g. "3 lots (0.0003 BTC)".
       const amountText =
         quote.assetClass === "CRYPTO"
           ? `${normalized.quantity} ${shareWord} (${formatTokenQuantity(normalized.quantity, quote.lotSize)} ${cryptoTokenSymbol(normalized.symbol)})`
           : `${normalized.quantity} ${shareWord}`;
-      let cashAfterCents: number;
-      let holdingQuantityAfter: number;
-      let averageCostAfterCents: number;
+      // Shares held back for waiting sells (a stop loss, say) stay theirs: a
+      // sell that would reach into them is refused rather than turned into a
+      // short. Fills of waiting sells may only ever close shares.
+      if (
+        normalized.side === "SELL" &&
+        normalized.quantity > sellableQuantity &&
+        (reservedShares > 0 || options.closeOnly)
+      ) {
+        throw new AppError(
+          "INSUFFICIENT_SHARES",
+          reservedShares > 0
+            ? `${reservedShares} ${unitWord(quote.assetClass, reservedShares)} of ${normalized.symbol} ${reservedShares === 1 ? "is" : "are"} held for waiting sell orders. Cancel those first, or sell at most ${Math.max(0, sellableQuantity)}.`
+            : `${isAdminSandbox ? "The test account" : "The team"} only owns ${Math.max(0, currentQuantity)} ${unitWord(quote.assetClass, currentQuantity)} of ${normalized.symbol}.`,
+          409,
+          {
+            availableShares: Math.max(0, sellableQuantity),
+            requestedShares: normalized.quantity,
+            reservedShares,
+          },
+        );
+      }
 
-      if (normalized.side === "BUY") {
-        if (grossCents > spendableCashCents) {
-          throw new AppError(
-            "INSUFFICIENT_CASH",
-            (isAdminSandbox
-              ? "The test account does not have enough buying power for this order."
-              : "The team does not have enough buying power for this order.") +
-              (reservations.cashCents > 0
-                ? " Some cash is set aside for waiting orders."
-                : ""),
-            409,
-            {
-              availableCents: spendableCashCents,
-              requiredCents: grossCents,
-              reservedCents: reservations.cashCents,
-            },
+      if (normalized.bracket && closingQuantity > 0) {
+        throw new AppError(
+          "INVALID_BRACKET",
+          "Take profit and stop loss exits can't be attached to a buy that covers a short.",
+          400,
+        );
+      }
+
+      if (openingQuantity > 0) {
+        // Blocked listings and sub-$1 lots can be neither bought nor shorted.
+        assertBuyAllowed(quote);
+        const held = await tx.all<{
+          symbol: string;
+          quantity: number;
+          average_cost_cents: number;
+        }>(
+          "SELECT symbol, quantity, average_cost_cents FROM holdings WHERE team_id = ?",
+          [account.team_id],
+        );
+        // Holdings read under the lock; one opened since the prices were read
+        // is valued at its cost.
+        const priceOf = (row: { symbol: string; average_cost_cents: number }) =>
+          row.symbol === normalized.symbol
+            ? quote.priceCadCents
+            : (heldPrices.get(row.symbol) ?? Number(row.average_cost_cents));
+
+        if (normalized.side === "BUY") {
+          // A short sale's proceeds are owed back (buying the shares back
+          // costs their current price), so they never fund new buys.
+          const shortLiabilityCents = held.reduce(
+            (total, row) => total + Math.max(0, -Number(row.quantity)) * priceOf(row),
+            0,
           );
+          const buyingPowerCents =
+            Number(account.cash_cents) - reservations.cashCents - shortLiabilityCents;
+          if (openingCents > buyingPowerCents) {
+            throw new AppError(
+              "INSUFFICIENT_CASH",
+              (isAdminSandbox
+                ? "The test account does not have enough buying power for this order."
+                : "The team does not have enough buying power for this order.") +
+                (reservations.cashCents > 0
+                  ? " Some cash is set aside for waiting orders."
+                  : "") +
+                (shortLiabilityCents > 0
+                  ? " Cash from short sales is owed back, so it can't fund buys."
+                  : ""),
+              409,
+              {
+                availableCents: buyingPowerCents,
+                requiredCents: openingCents,
+                reservedCents: reservations.cashCents,
+                shortLiabilityCents,
+              },
+            );
+          }
         }
-        // No single holding may be bought past maxPositionPercent() of the
-        // portfolio, so a team can't stake everything on one listing. Holdings
-        // read under the lock; one bought since the prices were read is valued
-        // at its cost. The admin sandbox is exempt.
+        // No single holding, long or short, may pass maxPositionPercent() of
+        // the portfolio, so a team can't stake everything on one listing. A
+        // team also holds only so many different listings. The admin sandbox
+        // is exempt from both.
         if (!isAdminSandbox) {
-          const held = await tx.all<{
-            symbol: string;
-            quantity: number;
-            average_cost_cents: number;
-          }>(
-            "SELECT symbol, quantity, average_cost_cents FROM holdings WHERE team_id = ?",
-            [account.team_id],
-          );
+          if (currentQuantity === 0) {
+            await assertHoldingSlot(tx, account.team_id, normalized.symbol, options.releaseWorkingOrderIds);
+          }
           const totalValueCents = held.reduce(
-            (total, row) =>
-              total +
-              Number(row.quantity) *
-                (row.symbol === normalized.symbol
-                  ? quote.priceCadCents
-                  : (heldPrices.get(row.symbol) ?? Number(row.average_cost_cents))),
+            (total, row) => total + Number(row.quantity) * priceOf(row),
             Number(account.cash_cents),
           );
           const limitPercent = maxPositionPercent();
+          // An order that crosses zero opens its rest from an empty holding.
           const roomCents = positionRoomCents(
             totalValueCents,
-            currentQuantity * quote.priceCadCents,
+            (closingQuantity > 0 ? 0 : Math.abs(currentQuantity)) * quote.priceCadCents,
             limitPercent,
           );
-          if (grossCents > roomCents) {
+          if (openingCents > roomCents) {
             const roomQuantity = Math.floor(roomCents / quote.priceCadCents);
+            const action = normalized.side === "BUY" ? "buy" : "short";
             throw new AppError(
               "POSITION_LIMIT",
               `One holding can be at most ${limitPercent}% of the team's portfolio value. ` +
                 (roomQuantity > 0
-                  ? `The team can buy up to ${roomQuantity} more ${unitWord(quote.assetClass, roomQuantity)} of ${normalized.symbol}.`
+                  ? `The team can ${action} up to ${roomQuantity + closingQuantity} more ${unitWord(quote.assetClass, roomQuantity + closingQuantity)} of ${normalized.symbol}.`
                   : `The team already holds as much ${normalized.symbol} as that allows.`),
               409,
-              { maxQuantity: roomQuantity, limitPercent },
+              { maxQuantity: roomQuantity + closingQuantity, limitPercent },
             );
           }
         }
-        cashAfterCents = Number(account.cash_cents) - grossCents;
-        holdingQuantityAfter = currentQuantity + normalized.quantity;
-        averageCostAfterCents = Math.round(
-          (currentQuantity * currentAverageCostCents + grossCents) /
-            holdingQuantityAfter,
-        );
-      } else {
-        if (normalized.quantity > sellableQuantity) {
-          throw new AppError(
-            "INSUFFICIENT_SHARES",
-            reservedShares > 0 && normalized.quantity <= currentQuantity
-              ? `${reservedShares} ${unitWord(quote.assetClass, reservedShares)} of ${normalized.symbol} ${reservedShares === 1 ? "is" : "are"} held for waiting sell orders. Cancel those first, or sell at most ${Math.max(0, sellableQuantity)}.`
-              : `${isAdminSandbox ? "The test account" : "The team"} only owns ${currentQuantity} ${unitWord(quote.assetClass, currentQuantity)} of ${normalized.symbol}.`,
-            409,
-            {
-              availableShares: Math.max(0, sellableQuantity),
-              requestedShares: normalized.quantity,
-              reservedShares,
-            },
-          );
-        }
-        cashAfterCents = Number(account.cash_cents) + grossCents;
-        holdingQuantityAfter = currentQuantity - normalized.quantity;
-        averageCostAfterCents = currentAverageCostCents;
       }
+
+      // Covering a short is never refused for cash, so a team can always get
+      // out of one; buying back above the sale price can leave cash negative.
+      const cashAfterCents =
+        Number(account.cash_cents) +
+        (normalized.side === "BUY" ? -grossCents : grossCents);
+      const positionAfter = applyFill(
+        {
+          quantity: currentQuantity,
+          averageCostCents: Number(holding?.average_cost_cents ?? 0),
+        },
+        normalized.side,
+        normalized.quantity,
+        grossCents,
+      );
+      const holdingQuantityAfter = positionAfter.quantity;
+      const averageCostAfterCents = positionAfter.averageCostCents;
 
       const portfolioVersion = Number(account.version) + 1;
       moneyMoved = true;
@@ -894,7 +1001,10 @@ export async function placeOrder(
         ],
       );
 
-      const verb = normalized.side === "BUY" ? "Bought" : "Sold";
+      const shortSale = normalized.side === "SELL" && openingQuantity > 0;
+      const cover = normalized.side === "BUY" && closingQuantity > 0;
+      const verb = shortSale ? "Sold short" : cover ? "Bought to cover" : normalized.side === "BUY" ? "Bought" : "Sold";
+      const action = shortSale ? "SELL SHORT" : cover ? "BUY TO COVER" : normalized.side;
       await tx.run(
         `INSERT INTO ledger_entries (
            id, team_id, order_id, entry_type, amount_cents,
@@ -923,8 +1033,8 @@ export async function placeOrder(
           account.team_id,
           normalized.actorUserId,
           options.activityLabel
-            ? `${options.activityLabel}: ${normalized.side} ${normalized.symbol}`
-            : `${normalized.side} ${normalized.symbol}`,
+            ? `${options.activityLabel}: ${action} ${normalized.symbol}`
+            : `${action} ${normalized.symbol}`,
           options.activityLabel
             ? `${options.activityLabel} triggered: ${account.actor_name}'s order ${verb.toLowerCase()} ${amountText} of ${normalized.symbol}.`
             : `${account.actor_name} ${verb.toLowerCase()} ${amountText} of ${normalized.symbol}.`,

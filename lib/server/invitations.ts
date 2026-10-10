@@ -88,6 +88,9 @@ function hashInvitationToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
+/** randomBytes(32) as base64url: anything else cannot be a real token. */
+const INVITATION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+
 function invitationStateFor(
   row: Pick<InvitationRow, "used_at" | "revoked_at" | "expires_at">,
   nowIso: string,
@@ -115,6 +118,44 @@ function rowToSummary(row: InvitationRow, nowIso: string): InvitationSummary {
     usedAt: row.used_at,
     usedByName: row.used_by_name,
   };
+}
+
+function assertInvitationRedeemable<
+  T extends Pick<InvitationRow, "used_at" | "revoked_at" | "expires_at">,
+>(row: T | undefined, nowIso: string): asserts row is T {
+  if (!row) {
+    throw new AppError(
+      "INVITATION_INVALID",
+      "This invitation link is not valid.",
+      404,
+    );
+  }
+
+  const state = invitationStateFor(row, nowIso);
+
+  if (state === "used") {
+    throw new AppError(
+      "INVITATION_ALREADY_USED",
+      "This invitation has already been used.",
+      409,
+    );
+  }
+
+  if (state === "revoked") {
+    throw new AppError(
+      "INVITATION_REVOKED",
+      "This invitation was revoked. Ask your host for a new one.",
+      410,
+    );
+  }
+
+  if (state === "expired") {
+    throw new AppError(
+      "INVITATION_EXPIRED",
+      "This invitation expired. Ask your host for a new one.",
+      410,
+    );
+  }
 }
 
 function normalizeEmail(value: string | null | undefined): string | null {
@@ -589,7 +630,7 @@ function maskEmail(email: string | null): string | null {
 export async function previewInvitation(
   token: string,
 ): Promise<InvitationPreview | null> {
-  if (!token || token.length < 20 || token.length > 256) {
+  if (!INVITATION_TOKEN_PATTERN.test(token)) {
     return null;
   }
 
@@ -658,7 +699,7 @@ export async function consumeInvitation(
     );
   }
 
-  if (!token || token.length < 20 || token.length > 256) {
+  if (!INVITATION_TOKEN_PATTERN.test(token)) {
     throw new AppError(
       "INVITATION_INVALID",
       "This invitation link is not valid.",
@@ -669,6 +710,17 @@ export async function consumeInvitation(
   const db = await getDb();
   const nowIso = new Date().toISOString();
 
+  // Turn away unknown, used, revoked, and expired tokens before the
+  // exclusive lock, so token spam cannot stall trades (they hold the shared
+  // side of that lock). The transaction below re-checks authoritatively.
+  assertInvitationRedeemable(
+    await db.get<Pick<InvitationRow, "used_at" | "revoked_at" | "expires_at">>(
+      "SELECT used_at, revoked_at, expires_at FROM account_invitations WHERE token_hash = ?",
+      [hashInvitationToken(token)],
+    ),
+    nowIso,
+  );
+
   const userId = await db.transaction(async (tx) => {
     await acquireAdvisoryLock(tx, ADVISORY_LOCK_ACCOUNTS);
     const row = await tx.get<InvitationRow>(
@@ -676,39 +728,7 @@ export async function consumeInvitation(
       [hashInvitationToken(token)],
     );
 
-    if (!row) {
-      throw new AppError(
-        "INVITATION_INVALID",
-        "This invitation link is not valid.",
-        404,
-      );
-    }
-
-    const state = invitationStateFor(row, nowIso);
-
-    if (state === "used") {
-      throw new AppError(
-        "INVITATION_ALREADY_USED",
-        "This invitation has already been used.",
-        409,
-      );
-    }
-
-    if (state === "revoked") {
-      throw new AppError(
-        "INVITATION_REVOKED",
-        "This invitation was revoked. Ask your host for a new one.",
-        410,
-      );
-    }
-
-    if (state === "expired") {
-      throw new AppError(
-        "INVITATION_EXPIRED",
-        "This invitation expired. Ask your host for a new one.",
-        410,
-      );
-    }
+    assertInvitationRedeemable(row, nowIso);
 
     // An invitation carries its creator's authority only while that
     // authority lasts. Account management revokes invitations when a

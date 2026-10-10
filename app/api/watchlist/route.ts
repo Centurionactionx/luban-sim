@@ -7,6 +7,7 @@ import {
   normalizeMarketSymbol,
   refreshQuote,
 } from "@/lib";
+import { assertMarketDataBudget } from "@/lib/server/quotes";
 
 import {
   ApiError,
@@ -47,6 +48,7 @@ export async function POST(request: Request): Promise<Response> {
     requireTrustedOrigin(request);
     const user = await requireAuthenticatedUser();
     assertRequestAllowed(`watchlist:${user.id}`, 30);
+    assertMarketDataBudget(user.id);
     const { symbol } = addSchema.parse(await parseJson(request));
     // Looking the symbol up lists it in the simulator if it is new here.
     const quote = await refreshQuote(symbol);
