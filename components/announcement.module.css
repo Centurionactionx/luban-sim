@@ -36,11 +36,9 @@
 
 .kicker,
 .byline {
-  font-family: var(--font-data);
-  font-size: 11px;
+  font-family: var(--font-ui);
+  font-size: 12.5px;
   font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
 }
 
 .kicker {
@@ -96,10 +94,9 @@
   border-radius: 3px;
   background: var(--positive-wash);
   color: var(--green);
-  font-family: var(--font-data);
-  font-size: 10px;
+  font-family: var(--font-ui);
+  font-size: 12px;
   font-style: normal;
-  letter-spacing: 0.05em;
 }
 
 .formActions {

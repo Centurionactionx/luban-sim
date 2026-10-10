@@ -27,10 +27,10 @@
   color-scheme: light;
   --font-ui: var(--font-space-grotesk), "Helvetica Neue", Arial, sans-serif;
   --font-data: var(--font-plex-mono), "SFMono-Regular", Consolas, monospace;
-  --type-section-title: 14px;
+  --type-section-title: 16px;
   --type-item-title: 12.5px;
-  --type-description: 11.5px;
-  --type-meta: 10px;
+  --type-description: 12.5px;
+  --type-meta: 12px;
 }
 
 /*
@@ -189,7 +189,7 @@ a {
   border: 2px solid var(--ink);
   color: var(--on-bright);
   background: var(--lime);
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   font-weight: 600;
   transform: translateY(-180%);
 }
@@ -272,9 +272,7 @@ a {
 .order-type span,
 .status-footer,
 .route-state__brand {
-  font-family: var(--font-data);
-  text-transform: uppercase;
-  letter-spacing: 0.035em;
+  font-family: var(--font-ui);
 }
 
 .competition-lockup > strong {
@@ -296,12 +294,10 @@ a {
   padding: 4px 8px;
   border: 1px solid currentColor;
   border-radius: 3px;
-  font-family: var(--font-data);
-  font-size: 11px;
+  font-family: var(--font-ui);
+  font-size: 12.5px;
   font-weight: 600;
   line-height: 1;
-  letter-spacing: 0.035em;
-  text-transform: uppercase;
   white-space: nowrap;
 }
 
@@ -346,8 +342,8 @@ a {
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
-  font-family: var(--font-data);
-  font-size: 12px;
+  font-family: var(--font-ui);
+  font-size: 13px;
   white-space: nowrap;
 }
 
@@ -377,126 +373,6 @@ a {
   font-size: 13px;
 }
 
-.simulation-strip {
-  min-height: 48px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  padding: 8px 18px;
-  border-bottom: 2px solid var(--rule);
-  background: var(--quiet-purple-2);
-  font-family: var(--font-data);
-  font-size: 11.5px;
-}
-
-.simulation-strip > div:first-child::before {
-  content: "";
-  width: 8px;
-  height: 8px;
-  flex: 0 0 auto;
-  background: var(--pink);
-}
-
-.simulation-strip > div {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-}
-
-.simulation-strip svg {
-  width: 18px;
-  height: 18px;
-  flex: 0 0 auto;
-}
-
-.simulation-strip strong {
-  color: var(--purple-deep);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.simulation-strip > div:first-child strong {
-  color: var(--ink);
-}
-
-.market-info {
-  position: relative;
-  display: inline-flex;
-  flex: 0 0 auto;
-}
-
-.market-info__trigger {
-  width: 30px;
-  height: 30px;
-  display: grid;
-  place-items: center;
-  padding: 5px;
-  border: 1px solid transparent;
-  border-radius: 50%;
-  color: var(--ink);
-  background: transparent;
-  cursor: help;
-}
-
-.market-info__trigger:hover,
-.market-info__trigger:focus-visible {
-  border-color: var(--purple);
-  color: var(--purple-deep);
-  background: var(--paper);
-  outline: 0;
-}
-
-.market-info__bubble {
-  position: absolute;
-  z-index: 30;
-  top: calc(100% + 8px);
-  right: 0;
-  width: min(290px, calc(100vw - 32px));
-  padding: 11px 12px;
-  border: 1.5px solid var(--rule);
-  border-radius: 4px;
-  color: var(--ink);
-  background: var(--paper);
-  font-family: var(--font-sans);
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 1.45;
-  letter-spacing: normal;
-  text-transform: none;
-  opacity: 0;
-  visibility: hidden;
-  transform: translateY(-3px);
-  transition: opacity 120ms ease, transform 120ms ease, visibility 120ms ease;
-  pointer-events: none;
-}
-
-.market-info__bubble::before {
-  content: "";
-  position: absolute;
-  right: 8px;
-  bottom: 100%;
-  width: 9px;
-  height: 9px;
-  border-top: 1.5px solid var(--rule);
-  border-left: 1.5px solid var(--rule);
-  background: var(--paper);
-  transform: translateY(5px) rotate(45deg);
-}
-
-.market-info:hover .market-info__bubble,
-.market-info:focus-within .market-info__bubble {
-  opacity: 1;
-  visibility: visible;
-  transform: translateY(0);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .market-info__bubble {
-    transition: none;
-  }
-}
-
 .connection-banner {
   min-height: 44px;
   display: flex;
@@ -517,9 +393,8 @@ a {
   border-radius: 3px;
   background: var(--paper);
   color: var(--red);
-  font-family: var(--font-data);
-  font-size: 11px;
-  text-transform: uppercase;
+  font-family: var(--font-ui);
+  font-size: 12.5px;
 }
 
 .trading-grid {
@@ -625,7 +500,7 @@ a {
 
 .panel-heading__aside {
   color: var(--purple-deep);
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   font-size: var(--type-meta);
   white-space: nowrap;
 }
@@ -785,12 +660,10 @@ a {
   border-radius: 3px;
   background: var(--purple);
   color: var(--paper);
-  font-family: var(--font-data);
-  font-size: 8.5px;
+  font-family: var(--font-ui);
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.025em;
   line-height: 1.15;
-  text-transform: uppercase;
   white-space: nowrap;
 }
 
@@ -807,8 +680,8 @@ a {
 .metric-grid dd .admin-cash-editor__feedback {
   min-height: 11px;
   color: var(--muted);
-  font-family: var(--font-body);
-  font-size: 9px;
+  font-family: var(--font-ui);
+  font-size: 12px;
   line-height: 1.3;
 }
 
@@ -895,7 +768,7 @@ a {
   place-items: center;
   border: 1px dashed var(--hairline);
   color: var(--muted);
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   font-size: var(--type-description);
   text-align: center;
 }
@@ -1178,7 +1051,7 @@ a {
   border-top: 1px solid var(--hairline);
   padding-top: 6px;
   color: var(--muted);
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   font-size: var(--type-meta);
 }
 
@@ -1195,6 +1068,68 @@ a {
 
 .holdings-section {
   border-top: 1px solid var(--rule);
+}
+
+/* Holdings, value history, waiting orders and trades share one tabbed panel. */
+.portfolio-views {
+  border-top: 1px solid var(--rule);
+}
+
+/* Equal tabs that always fit: a long label wraps instead of hiding a tab. */
+.view-tabs {
+  display: flex;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.view-tabs button {
+  flex: 1 1 0;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 46px;
+  padding: 6px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.25;
+  text-align: center;
+}
+
+.view-tabs button:hover {
+  color: var(--ink);
+}
+
+.view-tabs button[aria-selected="true"] {
+  border-bottom-color: var(--purple);
+  color: var(--purple-deep);
+}
+
+.view-tabs__count {
+  min-width: 18px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--quiet-purple);
+  color: var(--purple-deep);
+  font-size: 10px;
+  text-align: center;
+}
+
+/* The tab row already divides; the chart keeps its own outlined box. */
+.portfolio-views > section:not(.portfolio-chart) {
+  border-top: 0;
+}
+
+.portfolio-views > .portfolio-chart {
+  margin-top: 20px;
+  padding-top: 14px;
 }
 
 .subheading-row {
@@ -1237,11 +1172,10 @@ a {
 }
 
 .data-table thead th {
+  font-family: var(--font-ui);
   color: var(--muted);
-  font-size: 9.5px;
+  font-size: 12px;
   font-weight: 500;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
 }
 
 .data-table th:first-child,
@@ -1372,9 +1306,8 @@ a {
   border: 1.5px solid var(--rule);
   border-radius: 4px;
   background: var(--paper);
-  font-family: var(--font-data);
-  font-size: 11.5px;
-  text-transform: uppercase;
+  font-family: var(--font-ui);
+  font-size: 12.5px;
 }
 
 .symbol-search input:focus-visible {
@@ -1482,11 +1415,9 @@ a {
   border-bottom: 1px solid var(--hairline);
   background: var(--quiet-purple-2);
   color: var(--muted);
-  font-family: var(--font-data);
-  font-size: 10px;
+  font-family: var(--font-ui);
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
 .symbol-suggestions__note {
@@ -1512,10 +1443,8 @@ a {
   align-items: center;
   gap: 4px 8px;
   color: var(--muted);
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   font-size: var(--type-meta);
-  letter-spacing: 0.035em;
-  text-transform: uppercase;
 }
 
 .quote-meta__status {
@@ -1589,8 +1518,8 @@ a {
 }
 
 .quote-price > span {
-  font-family: var(--font-data);
-  font-size: 12px;
+  font-family: var(--font-ui);
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -1602,7 +1531,7 @@ a {
 
 .quote-summary > .quote-lot-note {
   color: var(--ink);
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   font-size: var(--type-description);
 }
 
@@ -1634,9 +1563,14 @@ a {
   font-weight: 600;
 }
 
+.quote-band__status {
+  font-family: var(--font-ui);
+}
+
 .quote-band__meta {
   margin-left: auto;
   color: var(--muted);
+  font-family: var(--font-ui);
   font-size: var(--type-meta);
 }
 
@@ -1655,14 +1589,12 @@ a {
   border-radius: 3px;
   background: var(--quiet-purple-2);
   color: var(--purple-deep);
-  font-family: var(--font-data);
-  font-size: 9.5px;
+  font-family: var(--font-ui);
+  font-size: 12px;
   font-style: normal;
   font-weight: 600;
-  letter-spacing: 0.035em;
   line-height: 1.1;
   text-decoration: none;
-  text-transform: uppercase;
   vertical-align: middle;
 }
 
@@ -1719,8 +1651,8 @@ a {
 
 .chart-kind {
   color: var(--muted);
-  font-family: var(--font-data);
-  font-size: 10px;
+  font-family: var(--font-ui);
+  font-size: 12px;
 }
 
 .order-ticket {
@@ -1740,10 +1672,9 @@ a {
   min-height: 44px;
   border: 0;
   background: var(--paper);
-  font-family: var(--font-data);
-  font-size: 12px;
+  font-family: var(--font-ui);
+  font-size: 13px;
   font-weight: 600;
-  text-transform: uppercase;
 }
 
 .side-control button + button {
@@ -1781,9 +1712,8 @@ a {
 }
 
 .order-type strong {
-  font-family: var(--font-data);
-  font-size: 11px;
-  text-transform: uppercase;
+  font-family: var(--font-ui);
+  font-size: 12.5px;
 }
 
 
@@ -1809,11 +1739,9 @@ a {
   padding: 10px 15px;
   border: 1.5px solid var(--rule);
   border-radius: 4px;
-  font-family: var(--font-data);
-  font-size: 11.5px;
+  font-family: var(--font-ui);
+  font-size: 12.5px;
   font-weight: 600;
-  letter-spacing: 0.015em;
-  text-transform: uppercase;
 }
 
 .button svg {
@@ -1914,11 +1842,9 @@ a {
   border-radius: 3px;
   background: var(--paper);
   color: var(--purple-deep);
-  font-family: var(--font-data);
-  font-size: 10px;
+  font-family: var(--font-ui);
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
   cursor: pointer;
 }
 
@@ -2002,7 +1928,7 @@ a {
 
 .presence-list small {
   color: var(--purple-deep);
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   font-size: var(--type-meta);
 }
 
@@ -2064,10 +1990,8 @@ a {
   display: block;
   margin-top: 2px;
   color: var(--purple-deep);
-  font-family: var(--font-data);
-  font-size: 9px;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
+  font-family: var(--font-ui);
+  font-size: 12px;
 }
 
 .activity-list li.activity-list__empty {
@@ -2090,12 +2014,6 @@ a {
   background: var(--positive-wash);
 }
 
-.leaderboard-section .table-scroll {
-  margin: 12px 10px 0;
-  border: 1px solid var(--hairline);
-  border-radius: 4px;
-}
-
 /* Leaderboard: rank, team, a return bar on a scale shared by every row,
    value, and (where allowed) a map button. */
 .leaderboard-bars {
@@ -2115,12 +2033,11 @@ a {
 }
 
 .leaderboard-bars thead th {
+  font-family: var(--font-ui);
   border-bottom: 1.5px solid var(--rule);
   color: var(--muted);
   font-size: var(--type-meta);
   font-weight: 500;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
   white-space: nowrap;
 }
 
@@ -2136,12 +2053,12 @@ a {
 .leaderboard-bars th:first-child,
 .leaderboard-bars td:first-child {
   width: 34px;
-  padding-left: 10px;
+  padding-left: 18px;
 }
 
 .leaderboard-bars th:last-child,
 .leaderboard-bars td:last-child {
-  padding-right: 10px;
+  padding-right: 18px;
 }
 
 .leaderboard-bars__rank span {
@@ -2191,11 +2108,9 @@ a {
   border-radius: 999px;
   background: var(--lime);
   color: var(--on-bright);
-  font-family: var(--font-data);
-  font-size: 9.5px;
+  font-family: var(--font-ui);
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
   vertical-align: 2px;
 }
 
@@ -2313,14 +2228,13 @@ a {
 
 /* Your team below the top five: a labelled break, then its row. */
 .leaderboard-bars__gap td {
+  font-family: var(--font-ui);
   padding: 10px 10px 6px;
   border-top: 1.5px dashed var(--purple);
   border-bottom: 0;
   color: var(--purple-deep);
   font-size: var(--type-meta);
   font-weight: 600;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
 }
 
 .leaderboard-bars tr.is-pinned > * {
@@ -2329,9 +2243,9 @@ a {
 }
 
 .snapshot-note {
-  margin: 9px 12px 15px;
+  margin: 9px 18px 15px;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 12px;
 }
 
 .host-status {
@@ -2356,13 +2270,12 @@ a {
 
 .host-status span {
   color: var(--muted);
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   font-size: var(--type-meta);
-  text-transform: uppercase;
 }
 
 .host-status strong {
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   font-size: var(--type-item-title);
   text-transform: capitalize;
 }
@@ -2782,46 +2695,6 @@ a {
     padding-top: 10px;
   }
 
-  .simulation-strip {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 7px;
-    padding: 12px 14px 12px 18px;
-  }
-
-  .simulation-strip > div {
-    align-items: flex-start;
-  }
-
-  .simulation-strip > div:first-child {
-    display: grid;
-    grid-template-columns: 8px 18px minmax(0, 1fr);
-    column-gap: 8px;
-    row-gap: 4px;
-    align-items: center;
-  }
-
-  .simulation-strip > div:first-child::before {
-    grid-column: 1;
-    grid-row: 1;
-  }
-
-  .simulation-strip > div:first-child svg {
-    grid-column: 2;
-    grid-row: 1;
-  }
-
-  .simulation-strip > div:first-child strong {
-    grid-column: 3;
-    grid-row: 1;
-  }
-
-  .simulation-strip > div:first-child span {
-    grid-column: 2 / -1;
-    grid-row: 2;
-    line-height: 1.45;
-  }
-
   .panel-heading {
     min-height: 52px;
     padding-inline: 14px;
@@ -2986,13 +2859,12 @@ a {
 
   .holdings-table th::before,
   .holdings-table td::before {
+    font-family: var(--font-ui);
     content: attr(data-label);
     display: block;
     margin-bottom: 3px;
     color: var(--muted);
-    font-size: 9px;
-    letter-spacing: 0.03em;
-    text-transform: uppercase;
+    font-size: 12px;
   }
 
   .holdings-table th:first-child {
@@ -3038,7 +2910,6 @@ a {
 
   .presence-list,
   .activity-list,
-  .leaderboard-section .table-scroll,
   .host-status,
   .host-actions {
     margin-left: 10px;
@@ -3201,11 +3072,9 @@ a {
 
 .invitation-facts dt {
   color: var(--muted);
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   font-size: var(--type-meta);
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
 }
 
 .invitation-facts dd {
@@ -3337,8 +3206,6 @@ a {
 .accounts-list h2 {
   font-size: var(--type-section-title);
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
 }
 
 .accounts-form-grid {
@@ -3356,11 +3223,9 @@ a {
 
 .accounts-form-grid label > span {
   color: var(--muted);
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   font-size: var(--type-meta);
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
 }
 
 .accounts-form-grid select,
@@ -3430,12 +3295,10 @@ a {
   padding: 8px 10px;
   border-bottom: 2px solid var(--rule);
   color: var(--muted);
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   font-size: var(--type-meta);
   font-weight: 600;
   text-align: left;
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
   white-space: nowrap;
 }
 
@@ -3450,10 +3313,9 @@ a {
   padding: 3px 8px;
   border: 1px solid currentColor;
   border-radius: 3px;
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   font-size: var(--type-meta);
   font-weight: 600;
-  text-transform: uppercase;
 }
 
 .invite-state--active {
@@ -3573,13 +3435,11 @@ a {
   border-radius: 4px;
   background: transparent;
   color: var(--ink);
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   font-size: var(--type-meta);
   font-weight: 600;
-  letter-spacing: 0.02em;
   text-align: left;
   text-decoration: none;
-  text-transform: uppercase;
   white-space: nowrap;
 }
 
@@ -3715,8 +3575,6 @@ a {
   display: block;
   font-size: var(--type-item-title);
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
 }
 
 .host-schedule__heading span {
@@ -3734,11 +3592,9 @@ a {
 
 .host-schedule label > span {
   color: var(--muted);
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   font-size: var(--type-meta);
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
 }
 
 .host-schedule input {
@@ -3832,10 +3688,8 @@ a {
 
 .order-type--select label {
   color: var(--muted);
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   font-size: var(--type-meta);
-  letter-spacing: 0.035em;
-  text-transform: uppercase;
 }
 
 .order-type select,
@@ -3846,8 +3700,8 @@ a {
   border: 1.5px solid var(--rule);
   border-radius: 4px;
   background: var(--quiet-purple-2);
-  font-family: var(--font-data);
-  font-size: 12px;
+  font-family: var(--font-ui);
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -3970,10 +3824,8 @@ a {
 .ticket-bracket__title {
   grid-column: 1 / -1;
   color: var(--muted);
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   font-size: var(--type-meta);
-  letter-spacing: 0.035em;
-  text-transform: uppercase;
 }
 
 .ticket-condition {
@@ -3999,10 +3851,8 @@ a {
 .ticket-condition > label,
 .ticket-condition > .ticket-label-row label {
   color: var(--muted);
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   font-size: var(--type-meta);
-  letter-spacing: 0.035em;
-  text-transform: uppercase;
 }
 
 .ticket-condition input {
@@ -4125,13 +3975,12 @@ a {
 
   .working-orders-table th::before,
   .working-orders-table td::before {
+    font-family: var(--font-ui);
     content: attr(data-label);
     display: block;
     margin-bottom: 3px;
     color: var(--muted);
-    font-size: 9px;
-    letter-spacing: 0.03em;
-    text-transform: uppercase;
+    font-size: 12px;
   }
 
   .working-orders-table th:first-child {
@@ -4175,18 +4024,10 @@ a {
   background: transparent;
 }
 
-/* Header and prototype strip read as one top bar. */
 .app-header {
   border: 2px solid var(--rule);
-  border-radius: var(--tile-radius) var(--tile-radius) 0 0;
+  border-radius: var(--tile-radius);
   background: var(--paper);
-}
-
-.simulation-strip {
-  margin-top: calc(-1 * var(--tile-gap));
-  border: 2px solid var(--rule);
-  border-top: 0;
-  border-radius: 0 0 var(--tile-radius) var(--tile-radius);
 }
 
 .connection-banner {
@@ -4352,11 +4193,9 @@ a {
   border-radius: 3px;
   background: var(--paper);
   color: var(--purple-deep);
-  font-family: var(--font-data);
-  font-size: 10.5px;
+  font-family: var(--font-ui);
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.035em;
-  text-transform: uppercase;
   white-space: nowrap;
   cursor: pointer;
 }
@@ -4419,7 +4258,7 @@ html:has(dialog[open]) {
 .chart-dialog__identity span,
 .chart-dialog__price small {
   color: var(--muted);
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   font-size: var(--type-meta);
 }
 
@@ -4687,8 +4526,8 @@ html:has(dialog[open]) {
   border-radius: 4px;
   background: var(--paper);
   color: var(--ink);
-  font-family: var(--font-data);
-  font-size: 12px;
+  font-family: var(--font-ui);
+  font-size: 13px;
   cursor: pointer;
 }
 
@@ -4713,8 +4552,8 @@ html:has(dialog[open]) {
   align-items: center;
   gap: 8px;
   color: var(--muted);
-  font-family: var(--font-data);
-  font-size: 12px;
+  font-family: var(--font-ui);
+  font-size: 13px;
 }
 
 /* Confirmation before filling the ticket with the whole buying power. */
@@ -4785,11 +4624,9 @@ html:has(dialog[open]) {
   border-radius: 4px;
   background: transparent;
   color: var(--muted);
-  font-family: var(--font-data);
-  font-size: 12px;
+  font-family: var(--font-ui);
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.035em;
-  text-transform: uppercase;
   cursor: pointer;
 }
 
@@ -4864,11 +4701,9 @@ html:has(dialog[open]) {
   border-radius: 4px;
   background: var(--paper);
   color: var(--purple-deep);
-  font-family: var(--font-data);
-  font-size: 9.5px;
+  font-family: var(--font-ui);
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.035em;
-  text-transform: uppercase;
   cursor: pointer;
 }
 
@@ -4929,11 +4764,9 @@ html:has(dialog[open]) {
 
 .portfolio-map__control-label {
   color: var(--muted);
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   font-size: var(--type-meta);
   font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
 .portfolio-map__segments {
@@ -4997,11 +4830,9 @@ html:has(dialog[open]) {
   border-radius: 4px;
   background: var(--paper);
   color: var(--purple-deep);
-  font-family: var(--font-data);
-  font-size: 10.5px;
+  font-family: var(--font-ui);
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.035em;
-  text-transform: uppercase;
   cursor: pointer;
 }
 
@@ -5069,7 +4900,7 @@ html:has(dialog[open]) {
   display: block;
   overflow: hidden;
   padding-inline: 5px;
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   white-space: nowrap;
   text-overflow: ellipsis;
 }
@@ -5078,10 +4909,8 @@ html:has(dialog[open]) {
   /* Its own ink, so the strip stays legible over the cash backdrop. */
   background: var(--ink);
   color: var(--paper);
-  font-size: 11px;
+  font-size: 12.5px;
   font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
 /* Industry strips: a step lighter than the canvas, like Finviz's. */
@@ -5168,7 +4997,7 @@ html:has(dialog[open]) {
 
 .portfolio-map__card-head small {
   color: var(--muted);
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   font-size: var(--type-meta);
 }
 
@@ -5237,7 +5066,7 @@ html:has(dialog[open]) {
   justify-content: space-between;
   gap: 8px 16px;
   color: var(--muted);
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   font-size: var(--type-meta);
 }
 
@@ -5315,12 +5144,10 @@ html:has(dialog[open]) {
   border-radius: 3px;
   background: var(--quiet-purple);
   color: var(--purple-deep);
-  font-family: var(--font-data);
-  font-size: 11px;
+  font-family: var(--font-ui);
+  font-size: 12.5px;
   font-weight: 600;
-  letter-spacing: 0.035em;
   text-decoration: none;
-  text-transform: uppercase;
   white-space: nowrap;
 }
 
@@ -5351,11 +5178,9 @@ html:has(dialog[open]) {
   border-radius: 6px;
   background: var(--paper);
   color: var(--ink);
-  font-family: var(--font-data);
-  font-size: 11px;
+  font-family: var(--font-ui);
+  font-size: 12.5px;
   font-weight: 600;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
   white-space: nowrap;
   cursor: pointer;
 }
@@ -5519,7 +5344,7 @@ html:has(dialog[open]) {
 
 .activity-bell__head span {
   color: var(--purple-deep);
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   font-size: var(--type-meta);
 }
 
@@ -5650,11 +5475,9 @@ html:has(dialog[open]) {
 .feedback-topic legend,
 .feedback-form__label-row label {
   color: var(--muted);
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   font-size: var(--type-description);
   font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
 }
 
 .feedback-topic legend {
@@ -5699,10 +5522,9 @@ html:has(dialog[open]) {
 }
 
 .feedback-topic__option span {
-  font-family: var(--font-data);
-  font-size: 12px;
+  font-family: var(--font-ui);
+  font-size: 13px;
   font-weight: 600;
-  text-transform: uppercase;
 }
 
 .feedback-topic__option small {
@@ -5855,11 +5677,10 @@ html:has(dialog[open]) {
   align-items: center;
   padding: 0 14px;
   background: var(--paper);
-  font-family: var(--font-data);
-  font-size: 12px;
+  font-family: var(--font-ui);
+  font-size: 13px;
   font-weight: 600;
   text-decoration: none;
-  text-transform: uppercase;
 }
 
 .feedback-filter a + a {
@@ -5928,10 +5749,9 @@ html:has(dialog[open]) {
   padding: 3px 8px;
   border: 1px solid currentColor;
   border-radius: 3px;
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   font-size: var(--type-meta);
   font-weight: 600;
-  text-transform: uppercase;
 }
 
 .feedback-tag--website {
@@ -5991,11 +5811,9 @@ html:has(dialog[open]) {
   border-radius: 999px;
   background: var(--paper);
   color: var(--purple-deep);
-  font-family: var(--font-data);
-  font-size: 10.5px;
+  font-family: var(--font-ui);
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.035em;
-  text-transform: uppercase;
   white-space: nowrap;
 }
 
@@ -6158,10 +5976,8 @@ html:has(dialog[open]) {
   min-width: 34px;
   padding: 1px 5px;
   border-radius: 3px;
-  font-size: 9.5px;
-  letter-spacing: 0.04em;
+  font-size: 12px;
   text-align: center;
-  text-transform: uppercase;
 }
 
 .side-tag--buy {
@@ -6236,13 +6052,12 @@ html:has(dialog[open]) {
 
   .trade-history-table th::before,
   .trade-history-table td::before {
+    font-family: var(--font-ui);
     content: attr(data-label);
     display: block;
     margin-bottom: 3px;
     color: var(--muted);
-    font-size: 9px;
-    letter-spacing: 0.03em;
-    text-transform: uppercase;
+    font-size: 12px;
   }
 
   .trade-history-table th:first-child {
@@ -6344,11 +6159,9 @@ html:has(dialog[open]) {
   display: inline-block;
   padding: 2px 7px;
   border-radius: 3px;
-  font-family: var(--font-data);
-  font-size: 10.5px;
+  font-family: var(--font-ui);
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
 }
 
 .changelog-kind--added {
@@ -6404,7 +6217,6 @@ html:has(dialog[open]) {
 
 /* Tiles */
 :root[data-theme="dark"] .app-header,
-:root[data-theme="dark"] .simulation-strip,
 :root[data-theme="dark"] .connection-banner,
 :root[data-theme="dark"] .room-column,
 :root[data-theme="dark"] .room-column + .room-column,
@@ -6421,17 +6233,11 @@ html:has(dialog[open]) {
   box-shadow: var(--tile-shadow);
 }
 
-:root[data-theme="dark"] .simulation-strip {
-  border-top: 1px solid var(--hairline);
-  background: var(--tile-sheen), var(--quiet-purple-2);
-}
-
 /* Inner panels: a step brighter than the tile, edged by a hairline. */
 :root[data-theme="dark"] .metric-grid,
 :root[data-theme="dark"] .quote-chart,
 :root[data-theme="dark"] .portfolio-chart,
 :root[data-theme="dark"] .presence-list,
-:root[data-theme="dark"] .leaderboard-section .table-scroll,
 :root[data-theme="dark"] .empty-state {
   border-color: var(--rule);
   background-color: var(--raised);
@@ -6516,11 +6322,9 @@ html:has(dialog[open]) {
 }
 
 .display-name-form label {
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   font-size: var(--type-meta);
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
 }
 
 .display-name-form__row {
@@ -6548,11 +6352,9 @@ html:has(dialog[open]) {
   display: block;
   margin-top: 14px;
   margin-bottom: 6px;
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   font-size: var(--type-meta);
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
 }
 
 .name-prompt__input {

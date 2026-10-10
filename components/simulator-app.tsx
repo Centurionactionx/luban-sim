@@ -61,6 +61,8 @@ import {
   MAX_OPEN_WORKING_ORDERS_PER_TEAM,
   MAX_ORDER_PRICE_CENTS,
   MAX_ORDER_QUANTITY,
+  MAX_POSITION_PERCENT,
+  positionRoomCents,
   priceInputToCents,
   reservedCadCentsPerUnit,
 } from "@/lib/order-math";
@@ -2608,6 +2610,9 @@ function WatchlistTable({
   );
 }
 
+/** The tabs that share the portfolio column below the summary. */
+type PortfolioView = "holdings" | "chart" | "orders" | "trades";
+
 /* ──────────────────────────── Trade history ─────────────────────────── */
 
 function formatTradeTime(iso: string): string {
@@ -2800,6 +2805,7 @@ export function SimulatorApp({
     message: "Ready for a simulated order.",
   });
   const [portfolioRange, setPortfolioRange] = useState("7D");
+  const [portfolioView, setPortfolioView] = useState<PortfolioView>("holdings");
   const [quoteRange, setQuoteRange] = useState<QuoteRange>("1D");
   // Null means the range's own default bar size.
   const [quoteInterval, setQuoteInterval] = useState<QuoteInterval | null>(null);
@@ -3308,6 +3314,17 @@ export function SimulatorApp({
   const openWorkingOrderCount = dashboard.workingOrders.filter(
     (order) => order.status === "WORKING" || order.status === "PENDING_PARENT",
   ).length;
+  const showWorkingOrders = workingOrdersEnabled || dashboard.workingOrders.length > 0;
+  const portfolioViews: Array<{ id: PortfolioView; label: string; count?: number }> = [
+    { id: "holdings", label: "Holdings", count: dashboard.holdings.length },
+    { id: "chart", label: "Value history" },
+    ...(showWorkingOrders
+      ? [{ id: "orders" as const, label: "Waiting orders", count: openWorkingOrderCount }]
+      : []),
+    { id: "trades", label: "Trade history" },
+  ];
+  const activePortfolioView =
+    portfolioView === "orders" && !showWorkingOrders ? "holdings" : portfolioView;
   const newWorkingOrderCount = (isWaitingOrder ? 1 : 0) + bracketLegs;
   // A limit buy sets aside its cost at the limit, in CAD, exactly the way the
   // server does (same helper): rounded up per share, with a 2% currency
@@ -3485,14 +3502,21 @@ export function SimulatorApp({
     }
     return rows;
   }, [dashboard.workingOrders]);
-  // The most a single order can be: everything affordable when buying,
-  // everything held when selling. Whole units only.
+  // The most a single order can be: everything affordable (and within the
+  // one-holding cap, which the admin sandbox skips) when buying, everything
+  // held when selling. Whole units only.
+  const buyLimitCents = isPlatformAdmin
+    ? portfolio.buyingPowerCents
+    : Math.min(
+        portfolio.buyingPowerCents,
+        positionRoomCents(portfolio.totalValueCents, heldQuantity * selectedQuote.priceCadCents),
+      );
   const maxOrderQuantity =
     side === "BUY"
       ? ticketUnitCadCents > 0
         ? Math.min(
             MAX_ORDER_QUANTITY,
-            Math.max(0, Math.floor(portfolio.buyingPowerCents / ticketUnitCadCents)),
+            Math.max(0, Math.floor(buyLimitCents / ticketUnitCadCents)),
           )
         : 0
       : freeQuantity;
@@ -4528,7 +4552,8 @@ export function SimulatorApp({
             <strong>{dashboard.competition.name}</strong>
             <span className={`state-tag state-tag--${dashboard.competition.phase}`}>
               <span className="state-dot" aria-hidden="true" />
-              {dashboard.competition.phase}
+              {dashboard.competition.phase.charAt(0).toUpperCase() +
+                dashboard.competition.phase.slice(1)}
             </span>
             <a
               className="guide-link"
@@ -4726,42 +4751,6 @@ export function SimulatorApp({
           </div>
         </header>
 
-        <section className="simulation-strip" aria-label="Prototype disclosure">
-          <div>
-            <FlaskIcon />
-            <strong>Prototype mode</strong>
-            <span>
-              Simulated trading only. No real money or investment advice.
-            </span>
-          </div>
-          <div>
-            <span>Market data</span>
-            <strong>
-              {connection === "connected"
-                ? `${marketSourceLabel(selectedQuote.source)}${selectedQuote.isStale ? " · STALE" : " · LATEST AVAILABLE"}`
-                : "Connecting…"}
-            </strong>
-            <span className="market-info">
-              <button
-                className="market-info__trigger"
-                type="button"
-                aria-label="About the market data"
-                aria-describedby="market-data-tooltip"
-              >
-                <InfoIcon />
-              </button>
-              <span
-                className="market-info__bubble"
-                id="market-data-tooltip"
-                role="tooltip"
-              >
-                {selectedQuote.source === "YAHOO_FINANCE"
-                  ? "Quotes and timestamped chart bars come from Yahoo Finance. Market responses are cached for at least 60 seconds to protect the free feed, may be delayed, and can be unavailable. All orders remain simulated."
-                  : "This environment is using deterministic test market data. All prices and orders are simulated."}
-              </span>
-            </span>
-          </div>
-        </section>
         <AnnouncementBanner announcement={dashboard.announcement} />
 
         {connectionError ? (
@@ -4813,10 +4802,14 @@ export function SimulatorApp({
               >
                 {isPlatformAdmin
                   ? dashboard.team
-                    ? "personal sandbox"
-                    : "set cash to begin"
-                  : dashboard.team?.status ??
-                    (isCompetitionHost ? "view only" : "needs team")}
+                    ? "Personal sandbox"
+                    : "Set cash to begin"
+                  : dashboard.team
+                    ? dashboard.team.status.charAt(0).toUpperCase() +
+                      dashboard.team.status.slice(1)
+                    : isCompetitionHost
+                      ? "View only"
+                      : "Needs team"}
               </span>
             </div>
 
@@ -5002,9 +4995,56 @@ export function SimulatorApp({
               </div>
             </section>
 
-            <section className="portfolio-chart" aria-labelledby="portfolio-chart-title">
+            <div className="portfolio-views">
+            <div
+              className="view-tabs"
+              role="tablist"
+              aria-label="Portfolio views"
+              onKeyDown={(event) => {
+                const ids = portfolioViews.map((view) => view.id);
+                const index = ids.indexOf(activePortfolioView);
+                const next =
+                  event.key === "ArrowRight"
+                    ? ids[(index + 1) % ids.length]
+                    : event.key === "ArrowLeft"
+                      ? ids[(index - 1 + ids.length) % ids.length]
+                      : event.key === "Home"
+                        ? ids[0]
+                        : event.key === "End"
+                          ? ids[ids.length - 1]
+                          : null;
+                if (!next) return;
+                event.preventDefault();
+                setPortfolioView(next);
+                document.getElementById(`portfolio-tab-${next}`)?.focus();
+              }}
+            >
+              {portfolioViews.map((view) => (
+                <button
+                  key={view.id}
+                  id={`portfolio-tab-${view.id}`}
+                  type="button"
+                  role="tab"
+                  aria-selected={activePortfolioView === view.id}
+                  aria-controls={`portfolio-panel-${view.id}`}
+                  tabIndex={activePortfolioView === view.id ? 0 : -1}
+                  onClick={() => setPortfolioView(view.id)}
+                >
+                  {view.label}
+                  {view.count ? <span className="view-tabs__count">{view.count}</span> : null}
+                </button>
+              ))}
+            </div>
+
+            {activePortfolioView === "chart" ? (
+            <section
+              className="portfolio-chart"
+              id="portfolio-panel-chart"
+              role="tabpanel"
+              aria-labelledby="portfolio-chart-title"
+            >
               <div className="chart-header">
-                <h3 id="portfolio-chart-title">Portfolio value history</h3>
+                <h3 id="portfolio-chart-title" className="sr-only">Portfolio value history</h3>
                 <div className="range-tabs" aria-label="Portfolio chart range">
                   {["7D", "1M", "ALL"].map((range) => (
                     <button
@@ -5024,10 +5064,17 @@ export function SimulatorApp({
                 compact
               />
             </section>
+            ) : null}
 
-            <section className="holdings-section" aria-labelledby="holdings-heading">
+            {activePortfolioView === "holdings" ? (
+            <section
+              className="holdings-section"
+              id="portfolio-panel-holdings"
+              role="tabpanel"
+              aria-labelledby="holdings-heading"
+            >
               <div className="subheading-row">
-                <h3 id="holdings-heading">Holdings</h3>
+                <h3 id="holdings-heading" className="sr-only">Holdings</h3>
                 <span>Ranked by market value</span>
                 {dashboard.holdings.length > 0 ? (
                   <button
@@ -5145,14 +5192,17 @@ export function SimulatorApp({
                 </div>
               )}
             </section>
+            ) : null}
 
-            {workingOrdersEnabled || dashboard.workingOrders.length > 0 ? (
+            {activePortfolioView === "orders" ? (
               <section
                 className="working-orders-section"
+                id="portfolio-panel-orders"
+                role="tabpanel"
                 aria-labelledby="working-orders-heading"
               >
                 <div className="subheading-row">
-                  <h3 id="working-orders-heading">Waiting orders</h3>
+                  <h3 id="working-orders-heading" className="sr-only">Waiting orders</h3>
                   <span>
                     {openWorkingOrderCount} of {MAX_OPEN_WORKING_ORDERS_PER_TEAM}
                     {isPlatformAdmin ? "" : " · any teammate can cancel"}
@@ -5259,9 +5309,15 @@ export function SimulatorApp({
               </section>
             ) : null}
 
-            <section className="trade-history-section" aria-labelledby="trade-history-heading">
+            {activePortfolioView === "trades" ? (
+            <section
+              className="trade-history-section"
+              id="portfolio-panel-trades"
+              role="tabpanel"
+              aria-labelledby="trade-history-heading"
+            >
               <div className="subheading-row">
-                <h3 id="trade-history-heading">Trade history</h3>
+                <h3 id="trade-history-heading" className="sr-only">Trade history</h3>
                 <span>
                   {tradeHistoryOpen && tradeHistory
                     ? `Latest ${number.format(tradeHistory.length)}`
@@ -5316,6 +5372,8 @@ export function SimulatorApp({
                 </button>
               ) : null}
             </section>
+            ) : null}
+            </div>
 
             {isPlatformAdmin ? (
               <aside className="shared-callout shared-callout--private">
@@ -5571,7 +5629,7 @@ export function SimulatorApp({
                   <span>{formatPercent(selectedQuote.changePercent)}</span>
                 </>
               ) : (
-                <span>Connecting to market data</span>
+                <span className="quote-band__status">Connecting to market data</span>
               )}
               <span className="quote-band__meta">
                 {quoteLoaded ? (
@@ -6153,8 +6211,17 @@ export function SimulatorApp({
                               </strong>
                               , about{" "}
                               <strong>{formatMoney(maxOrderQuantity * ticketUnitCadCents)}</strong>.
-                              That uses nearly all of the{" "}
-                              {formatMoney(portfolio.buyingPowerCents)} in buying power.
+                              {buyLimitCents < portfolio.buyingPowerCents ? (
+                                <>
+                                  That&rsquo;s as much as the {MAX_POSITION_PERCENT}% limit on one
+                                  holding allows.
+                                </>
+                              ) : (
+                                <>
+                                  That uses nearly all of the{" "}
+                                  {formatMoney(portfolio.buyingPowerCents)} in buying power.
+                                </>
+                              )}
                             </>
                           ) : (
                             <>
@@ -6618,7 +6685,7 @@ export function SimulatorApp({
             <PulseIcon />
             <strong>Local ledger</strong>
             <span className={`connection-state connection-state--${connection}`}>
-              {connection === "connected" ? "Connected" : connection}
+              {connection.charAt(0).toUpperCase() + connection.slice(1)}
             </span>
             <span
               className="status-cadence"

@@ -67,11 +67,9 @@
 
 .facts h3 {
   margin-top: 4px;
-  font-family: var(--font-data);
-  font-size: 12px;
+  font-family: var(--font-ui);
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
 }
 
 .facts ul {

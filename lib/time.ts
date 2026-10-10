@@ -71,3 +71,12 @@ export function zonedInputValueToIso(
   const settled = wallAsUtc - zoneOffsetMs(new Date(firstGuess), timeZone);
   return new Date(settled).toISOString();
 }
+
+/** An instant in words, e.g. "October 8, 2026 at 4:25 p.m. ET". */
+export function formatDisplayDateTime(iso: string): string {
+  return `${new Intl.DateTimeFormat("en-CA", {
+    timeZone: DISPLAY_TIME_ZONE,
+    dateStyle: "long",
+    timeStyle: "short",
+  }).format(new Date(iso))} ET`;
+}

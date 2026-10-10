@@ -9,11 +9,9 @@
 }
 
 .section h2 {
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   font-size: var(--type-meta);
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
 }
 
 .section a {
@@ -54,11 +52,9 @@
 }
 
 .facts h3 {
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   font-size: var(--type-meta);
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
 }
 
 .facts ul {

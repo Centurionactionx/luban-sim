@@ -55,12 +55,10 @@
   padding: 4px 8px;
   border: 1px solid currentColor;
   border-radius: 3px;
-  font-family: var(--font-data);
-  font-size: 10px;
+  font-family: var(--font-ui);
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.035em;
   line-height: 1;
-  text-transform: uppercase;
   white-space: nowrap;
 }
 
@@ -95,14 +93,12 @@
   padding: 9px 13px;
   border: 1.5px solid var(--rule);
   border-radius: 4px;
-  font-family: var(--font-data);
-  font-size: 11px;
+  font-family: var(--font-ui);
+  font-size: 12.5px;
   font-weight: 600;
-  letter-spacing: 0.02em;
   line-height: 1.2;
   text-align: center;
   text-decoration: none;
-  text-transform: uppercase;
   transition:
     color 140ms ease,
     background-color 140ms ease,
@@ -164,10 +160,8 @@
   border-bottom: 1px solid var(--rule);
   background: var(--quiet-purple-2);
   color: var(--muted);
-  font-family: var(--font-data);
-  font-size: 10.5px;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
+  font-family: var(--font-ui);
+  font-size: 12px;
 }
 
 .liveDot,
@@ -227,11 +221,9 @@
 .positionFacts dt,
 .positionValue > span:first-child,
 .purchasePanel label > span {
-  font-family: var(--font-data);
-  font-size: 10px;
+  font-family: var(--font-ui);
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.035em;
-  text-transform: uppercase;
 }
 
 .summaryPrimary p {
@@ -374,15 +366,13 @@
   border-radius: 3px;
   background: #f2fbee;
   color: var(--green);
-  font-family: var(--font-data);
-  font-size: 9px;
+  font-family: var(--font-ui);
+  font-size: 12px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  letter-spacing: 0.025em;
   line-height: 1.25;
   overflow-wrap: anywhere;
   text-align: right;
-  text-transform: uppercase;
 }
 
 .cashEditor form {
@@ -455,10 +445,8 @@
 }
 
 .methodNote strong {
-  font-family: var(--font-data);
-  font-size: 10px;
-  letter-spacing: 0.035em;
-  text-transform: uppercase;
+  font-family: var(--font-ui);
+  font-size: 12px;
 }
 
 .methodNote p {

@@ -16,7 +16,12 @@ import { acquireAccountReadLock, type DbExecutor } from "./database";
 import { cryptoTokenSymbol, formatTokenQuantity, unitWord } from "../lots";
 import { assertTeamLedgerReconciles, getDb } from "./db";
 import { workingOrderExpiresAt } from "../market-calendar";
-import { MAX_OPEN_WORKING_ORDERS_PER_TEAM, MAX_ORDER_QUANTITY } from "../order-math";
+import {
+  MAX_OPEN_WORKING_ORDERS_PER_TEAM,
+  MAX_ORDER_QUANTITY,
+  MAX_POSITION_PERCENT,
+  positionRoomCents,
+} from "../order-math";
 import {
   assertBracketPrices,
   countOpenWorkingOrders,
@@ -27,6 +32,7 @@ import {
 } from "./working-order-book";
 import {
   assertBuyAllowed,
+  getQuote,
   MARKET_SYMBOL_PATTERN,
   marketDataNow,
   normalizeMarketSymbol,
@@ -280,6 +286,37 @@ function parseStoredError(value: string | null): AppError {
   );
 }
 
+/**
+ * Most of a team's portfolio one holding can reach by buying, in percent.
+ * 100 turns the cap off.
+ */
+export function maxPositionPercent(): number {
+  const raw = Number(process.env.LUBAN_MAX_POSITION_PERCENT);
+  return Number.isSafeInteger(raw) && raw >= 1 && raw <= 100 ? raw : MAX_POSITION_PERCENT;
+}
+
+/**
+ * CAD prices of the listings a student's team holds, for the one-holding cap.
+ * Read before the write transaction, like the order's own quote, so no
+ * transaction waits on market data. A listing with no price is left out.
+ */
+async function readHeldPrices(userId: string, at: Date): Promise<Map<string, number>> {
+  const db = await getDb();
+  const rows = await db.all<{ symbol: string }>(
+    `SELECT h.symbol
+     FROM holdings h
+     JOIN team_members tm ON tm.team_id = h.team_id
+     WHERE tm.user_id = ?`,
+    [userId],
+  );
+  const prices = new Map<string, number>();
+  for (const { symbol } of rows) {
+    const quote = await getQuote(symbol, at);
+    if (quote) prices.set(symbol, quote.priceCadCents);
+  }
+  return prices;
+}
+
 function shouldPersistRejection(error: unknown): error is AppError {
   return (
     error instanceof AppError &&
@@ -439,6 +476,11 @@ export async function placeOrder(
       400,
     );
   }
+
+  const heldPrices =
+    normalized.side === "BUY"
+      ? await readHeldPrices(normalized.actorUserId, marketNow)
+      : new Map<string, number>();
 
   const outcome = await db.transaction(async (tx): Promise<PlaceOrderOutcome> => {
     await acquireAccountReadLock(tx);
@@ -708,6 +750,47 @@ export async function placeOrder(
               reservedCents: reservations.cashCents,
             },
           );
+        }
+        // No single holding may be bought past maxPositionPercent() of the
+        // portfolio, so a team can't stake everything on one listing. Holdings
+        // read under the lock; one bought since the prices were read is valued
+        // at its cost. The admin sandbox is exempt.
+        if (!isAdminSandbox) {
+          const held = await tx.all<{
+            symbol: string;
+            quantity: number;
+            average_cost_cents: number;
+          }>(
+            "SELECT symbol, quantity, average_cost_cents FROM holdings WHERE team_id = ?",
+            [account.team_id],
+          );
+          const totalValueCents = held.reduce(
+            (total, row) =>
+              total +
+              Number(row.quantity) *
+                (row.symbol === normalized.symbol
+                  ? quote.priceCadCents
+                  : (heldPrices.get(row.symbol) ?? Number(row.average_cost_cents))),
+            Number(account.cash_cents),
+          );
+          const limitPercent = maxPositionPercent();
+          const roomCents = positionRoomCents(
+            totalValueCents,
+            currentQuantity * quote.priceCadCents,
+            limitPercent,
+          );
+          if (grossCents > roomCents) {
+            const roomQuantity = Math.floor(roomCents / quote.priceCadCents);
+            throw new AppError(
+              "POSITION_LIMIT",
+              `One holding can be at most ${limitPercent}% of the team's portfolio value. ` +
+                (roomQuantity > 0
+                  ? `The team can buy up to ${roomQuantity} more ${unitWord(quote.assetClass, roomQuantity)} of ${normalized.symbol}.`
+                  : `The team already holds as much ${normalized.symbol} as that allows.`),
+              409,
+              { maxQuantity: roomQuantity, limitPercent },
+            );
+          }
         }
         cashAfterCents = Number(account.cash_cents) - grossCents;
         holdingQuantityAfter = currentQuantity + normalized.quantity;

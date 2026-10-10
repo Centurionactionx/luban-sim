@@ -8,11 +8,9 @@
 .label {
   display: block;
   color: var(--muted);
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   font-size: var(--type-meta);
   font-weight: 600;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
 }
 
 .layout {
@@ -40,8 +38,6 @@
 .mainHead h2 {
   font-size: var(--type-section-title);
   font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
 }
 
 .inviteForm {
@@ -188,11 +184,9 @@
   padding: 0 calc(4px + 12px + 1.5px) 7px;
   border-bottom: 1px solid var(--hairline);
   color: var(--muted);
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   font-size: var(--type-meta);
   font-weight: 600;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
 }
 
 .num {
@@ -304,11 +298,9 @@
   border: 0;
   background: none;
   color: var(--purple-deep);
-  font-family: var(--font-data);
-  font-size: 10px;
+  font-family: var(--font-ui);
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
   white-space: nowrap;
 }
 
@@ -451,11 +443,9 @@
     4px 4px,
     4px 4px;
   color: var(--ink);
-  font-family: var(--font-data);
-  font-size: 10px;
+  font-family: var(--font-ui);
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
   appearance: none;
   cursor: pointer;
 }
@@ -625,11 +615,9 @@
 .menuHeading {
   padding: 4px 8px 6px;
   color: var(--muted);
-  font-family: var(--font-data);
+  font-family: var(--font-ui);
   font-size: var(--type-meta);
   font-weight: 600;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
 }
 
 .menuItem {
@@ -774,12 +762,10 @@
   border: 0;
   background: none;
   color: var(--lime);
-  font-family: var(--font-data);
-  font-size: 11px;
+  font-family: var(--font-ui);
+  font-size: 12.5px;
   font-weight: 600;
-  letter-spacing: 0.03em;
   text-decoration: underline;
-  text-transform: uppercase;
   text-underline-offset: 3px;
 }
 

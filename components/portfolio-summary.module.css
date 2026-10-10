@@ -21,11 +21,9 @@
 
 .label {
   color: var(--muted);
-  font-family: var(--font-data);
-  font-size: 8.5px;
+  font-family: var(--font-ui);
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
 }
 
 .label :global(.help-tip) {
@@ -51,10 +49,9 @@
 
 .total > span {
   color: var(--ink);
-  font-family: var(--font-data);
-  font-size: 9px;
+  font-family: var(--font-ui);
+  font-size: 12px;
   font-weight: 600;
-  text-transform: uppercase;
 }
 
 .total > strong {
@@ -226,7 +223,8 @@
 
 .gains dd small {
   color: var(--muted);
-  font-size: 11px;
+  font-family: var(--font-ui);
+  font-size: 12px;
 }
 
 /* ── Footer: snapshot time, and the admin's own test cash ──────────── */
@@ -278,11 +276,9 @@
   border-radius: 3px;
   background: var(--purple);
   color: var(--paper);
-  font-family: var(--font-data);
-  font-size: 8px;
+  font-family: var(--font-ui);
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.025em;
-  text-transform: uppercase;
   white-space: nowrap;
 }
 

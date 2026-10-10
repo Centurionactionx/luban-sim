@@ -17,6 +17,7 @@ import type {
 } from "../contracts";
 import { canHostCompetitions } from "../contracts";
 import { AppError } from "../errors";
+import { formatDisplayDateTime } from "../time";
 import { getSessionUser } from "./auth";
 import {
   ADVISORY_LOCK_ACCOUNTS,
@@ -509,7 +510,7 @@ export async function updateCompetitionSchedule(
 
       if (scheduleChanged) {
         changes.push(
-          `the window to ${startsAt} through ${endsAt}`,
+          `the window to ${formatDisplayDateTime(startsAt)} through ${formatDisplayDateTime(endsAt)}`,
         );
       }
       if (cashChanged) {

@@ -6,7 +6,7 @@ import { acquireAccountReadLock, type DbExecutor } from "./database";
 import { getDb } from "./db";
 import { unitWord } from "../lots";
 import { getMarketDataProvider, marketDataNow, refreshQuote } from "./quotes";
-import { maxQuoteAgeMs, placeOrder } from "./trading";
+import { maxPositionPercent, maxQuoteAgeMs, placeOrder } from "./trading";
 import { stockSessionMayBeOpen } from "../market-calendar";
 import {
   workingOrderTriggered,
@@ -90,6 +90,8 @@ function cancellationReason(error: AppError): string {
     case "ASSET_CLASS_DISABLED":
     case "SYMBOL_BLOCKED":
       return "This listing can no longer be bought.";
+    case "POSITION_LIMIT":
+      return `Filling it would have put more than ${maxPositionPercent()}% of the portfolio in one holding.`;
     case "LOT_TOO_SMALL":
       return "One lot became worth less than $1, so buys are paused.";
     default:
