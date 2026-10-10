@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import {
   deleteAccount,
+  setAccountName,
   setAccountRole,
   setAccountStatus,
   setAccountTeam,
@@ -23,14 +24,16 @@ const updateSchema = z
     status: z.enum(["active", "suspended"]).optional(),
     role: z.enum(["student", "host", "platform_admin"]).optional(),
     teamId: z.string().trim().min(1).max(100).nullable().optional(),
+    name: z.string().max(200).optional(),
   })
   .strict()
   .refine(
     (value) =>
       value.status !== undefined ||
       value.role !== undefined ||
-      value.teamId !== undefined,
-    { message: "Provide a status, role, or team change." },
+      value.teamId !== undefined ||
+      value.name !== undefined,
+    { message: "Provide a name, status, role, or team change." },
   );
 
 export async function PATCH(
@@ -47,6 +50,9 @@ export async function PATCH(
     const account = await db.transaction(async () => {
       let updatedAccount;
 
+      if (update.name !== undefined) {
+        updatedAccount = await setAccountName(user.id, userId, update.name);
+      }
       if (update.role !== undefined) {
         updatedAccount = await setAccountRole(user.id, userId, update.role);
       }

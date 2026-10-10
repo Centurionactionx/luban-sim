@@ -54,6 +54,7 @@ export {
   deleteOwnAccount,
   listAccounts,
   setAccountRole,
+  setAccountName,
   setAccountStatus,
   setAccountTeam,
 } from "./server/account-management";
@@ -73,6 +74,11 @@ export {
   resetPrototype,
   setCompetitionStatus,
   setTeamCash,
+  setTeamHolding,
+  setAnnouncement,
+  clearAnnouncement,
+  ANNOUNCEMENT_TITLE_MAX_LENGTH,
+  ANNOUNCEMENT_BODY_MAX_LENGTH,
   setTeamStatus,
   updateCompetition,
   updateCompetitionSchedule,
@@ -131,6 +137,7 @@ export {
   listActivity,
   listOrders,
   listOrdersForExport,
+  getTeamHistoryForExport,
   MAX_EXPORTED_ORDERS,
   readRealizedGains,
 } from "./server/queries";

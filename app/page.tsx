@@ -1,17 +1,52 @@
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 import {
   AccountControls,
   SignOutControl,
 } from "@/components/account-controls";
-import { SimulatorApp } from "@/components/simulator-app";
+import { SimulatorApp, type DashboardPayload } from "@/components/simulator-app";
+import {
+  SESSION_COOKIE_NAME,
+  getDashboard,
+  getSessionFromToken,
+  isDemoLoginAllowed,
+  listDemoUsers,
+  refreshMissingQuotes,
+} from "@/lib";
+import type { SessionUser } from "@/lib/contracts";
 import { isManagedAuthMode } from "@/lib/server/auth-mode";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * The first dashboard, sent with the page so the trading room opens on real
+ * numbers. Uses stored prices; the browser fetches fresh ones straight after.
+ * Any failure leaves the browser to load it the old way.
+ */
+async function loadInitialDashboard(
+  user: SessionUser | null,
+): Promise<DashboardPayload | undefined> {
+  if (!user) return undefined;
+  try {
+    await refreshMissingQuotes().catch(() => {});
+    const dashboard = await getDashboard(user.id, { focusSymbol: "SHOP.TO" });
+    return {
+      ...dashboard,
+      session: { user, demoUsers: isDemoLoginAllowed() ? await listDemoUsers() : [] },
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 export default async function Home() {
   if (!isManagedAuthMode()) {
-    return <SimulatorApp />;
+    const token = isDemoLoginAllowed()
+      ? (await cookies()).get(SESSION_COOKIE_NAME)?.value
+      : undefined;
+    const user = token ? await getSessionFromToken(token) : null;
+    return <SimulatorApp initialDashboard={await loadInitialDashboard(user)} />;
   }
 
   const { getManagedSessionState } = await import(
@@ -66,6 +101,7 @@ export default async function Home() {
   return (
     <SimulatorApp
       authMode="managed"
+      initialDashboard={await loadInitialDashboard(state.user)}
       accountControls={
         <AccountControls
           name={state.user.name}

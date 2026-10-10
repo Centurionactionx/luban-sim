@@ -7,6 +7,7 @@ import { recordAuthAuditEvent } from "./audit";
 import { getSessionUser } from "./auth";
 import { ADVISORY_LOCK_ACCOUNTS, acquireAdvisoryLock, type DbExecutor } from "./database";
 import { getDb } from "./db";
+import { normalizeDisplayName } from "./display-name";
 import { invitationRolesIssuableBy } from "./invitations";
 
 /**
@@ -246,6 +247,38 @@ export async function setAccountStatus(
       actorUserId: actor.id,
       subjectUserId: userId,
       detail: `${actor.name} ${status === "suspended" ? "suspended" : "restored"} ${target.name}'s account.`,
+    });
+    return rowToAccountView(await loadTarget(tx, userId));
+  });
+}
+
+/** A host renames someone, e.g. to replace an offensive display name. */
+export async function setAccountName(
+  actorUserId: string,
+  userId: string,
+  rawName: unknown,
+): Promise<AccountView> {
+  const name = normalizeDisplayName(rawName);
+  const db = await getDb();
+
+  return db.transaction(async (tx) => {
+    await acquireAdvisoryLock(tx, ADVISORY_LOCK_ACCOUNTS);
+    const actor = await requireAccountManager(actorUserId);
+    const target = await loadTarget(tx, userId);
+    assertActorMayTouch(actor, target);
+
+    if (target.name === name) {
+      return rowToAccountView(target);
+    }
+
+    await tx.run("UPDATE users SET name = ? WHERE id = ?", [name, userId]);
+    // The host's choice settles any pending "pick your name" prompt.
+    await tx.run("DELETE FROM pending_display_names WHERE user_id = ?", [userId]);
+    await recordAuthAuditEvent({
+      type: "ACCOUNT_RENAMED",
+      actorUserId: actor.id,
+      subjectUserId: userId,
+      detail: `${actor.name} renamed "${target.name}" to "${name}".`,
     });
     return rowToAccountView(await loadTarget(tx, userId));
   });

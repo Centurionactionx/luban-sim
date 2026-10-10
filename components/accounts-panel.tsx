@@ -20,6 +20,7 @@ import type {
   AdminTeamSummary,
   CreatedInvitation,
   InvitationSummary,
+  TeamHoldingsView,
   TeamStatus,
   UserRole,
 } from "@/lib/contracts";
@@ -88,6 +89,7 @@ function invitationFor(invitation: InvitationSummary): string {
 
 /** Mirrors the server's limits in lib/server/admin.ts. */
 const TEAM_NAME_MAX_LENGTH = 80;
+const DISPLAY_NAME_MAX_LENGTH = 60;
 const MAX_TEAM_CASH_CENTS = 100_000_000_000_000;
 
 const currency = new Intl.NumberFormat("en-CA", {
@@ -259,6 +261,14 @@ export function AccountsPanel({
   const [editing, setEditing] = useState<Editing | null>(null);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
+  const [renaming, setRenaming] = useState<{ id: string; draft: string } | null>(null);
+  // One team's holdings panel open at a time.
+  const [holdings, setHoldings] = useState<{
+    teamId: string;
+    view: TeamHoldingsView | null;
+    symbol: string;
+    quantity: string;
+  } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -502,6 +512,21 @@ export function AccountsPanel({
     );
   };
 
+  const saveRename = async (event: FormEvent<HTMLFormElement>, account: AccountView) => {
+    event.preventDefault();
+    if (!renaming) return;
+    const name = renaming.draft.trim();
+    if (!name) return;
+    if (name === account.name) {
+      setRenaming(null);
+      return;
+    }
+    if (await patchAccount(account.id, { name })) {
+      setRenaming(null);
+      showToast(`${account.name} is now ${name}.`);
+    }
+  };
+
   const deleteAccount = async (account: AccountView) => {
     setConfirm(null);
     setAccountBusy(account.id);
@@ -594,6 +619,170 @@ export function AccountsPanel({
       { method: "PATCH", body: JSON.stringify({ cashCents }) },
       "The cash balance did not change.",
     );
+
+  const openHoldings = async (team: AdminTeamSummary) => {
+    setMenuOpen(null);
+    setHoldings({ teamId: team.id, view: null, symbol: "", quantity: "" });
+    try {
+      const response = await fetch(`/api/teams/${encodeURIComponent(team.id)}/holdings`, {
+        cache: "no-store",
+        credentials: "same-origin",
+      });
+      const payload = await readJson(response);
+      if (!response.ok) throw new Error(extractError(payload, "Holdings could not be loaded."));
+      setHoldings((current) =>
+        current?.teamId === team.id ? { ...current, view: payload as TeamHoldingsView } : current,
+      );
+    } catch (error) {
+      setHoldings(null);
+      showToast(error instanceof Error ? error.message : "Holdings could not be loaded.", "error");
+    }
+  };
+
+  /** Sets a team's quantity in one symbol; 0 removes it. Cash doesn't move. */
+  const putHolding = async (team: AdminTeamSummary, symbol: string, quantity: number) => {
+    setTeamBusy(team.id);
+    try {
+      const response = await fetch(`/api/admin/teams/${encodeURIComponent(team.id)}/holdings`, {
+        method: "PUT",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol, quantity }),
+      });
+      const payload = await readJson(response);
+      if (!response.ok) throw new Error(extractError(payload, "The holding did not change."));
+      setHoldings((current) =>
+        current?.teamId === team.id
+          ? { teamId: team.id, view: payload as TeamHoldingsView, symbol: "", quantity: "" }
+          : current,
+      );
+      showToast(
+        quantity === 0
+          ? `${symbol.toUpperCase()} removed from ${team.name}.`
+          : `${team.name} now holds ${quantity} ${symbol.toUpperCase()}.`,
+      );
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : "The holding did not change.", "error");
+    } finally {
+      setTeamBusy(null);
+    }
+  };
+
+  const submitHolding = (event: FormEvent<HTMLFormElement>, team: AdminTeamSummary) => {
+    event.preventDefault();
+    if (!holdings) return;
+    const quantity = Number(holdings.quantity);
+    if (!holdings.symbol.trim() || holdings.quantity.trim() === "" || !Number.isInteger(quantity) || quantity < 0) {
+      showToast("Enter a symbol and a whole quantity of 0 or more.", "error");
+      return;
+    }
+    void putHolding(team, holdings.symbol.trim(), quantity);
+  };
+
+  const renderHoldings = (team: AdminTeamSummary) => {
+    if (holdings?.teamId !== team.id) return null;
+    const working = teamBusy === team.id;
+    return (
+      <div className={styles.holdings} role="region" aria-label={`Holdings for ${team.name}`}>
+        {holdings.view === null ? (
+          <p className={styles.empty}>Loading holdings…</p>
+        ) : holdings.view.holdings.length === 0 ? (
+          <p className={styles.empty}>No holdings.</p>
+        ) : (
+          <div className={styles.holdingsScroll}>
+          <table className={styles.holdingsTable}>
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th className={styles.num}>Qty</th>
+                <th className={`${styles.num} ${styles.avgCost}`}>Avg cost</th>
+                <th className={styles.num}>Value</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {holdings.view.holdings.map((row) => (
+                <tr key={row.symbol}>
+                  <td>
+                    <strong>{row.symbol}</strong> <small>{row.name}</small>
+                  </td>
+                  <td className={`${styles.num} ${styles.mono}`}>{row.quantity}</td>
+                  <td className={`${styles.num} ${styles.mono} ${styles.avgCost}`}>
+                    {formatMoney(row.averageCostCents)}
+                  </td>
+                  <td className={`${styles.num} ${styles.mono}`}>{formatMoney(row.marketValueCents)}</td>
+                  <td className={styles.num}>
+                    <div className={styles.holdingActions}>
+                    <button
+                      type="button"
+                      className="button button--secondary button--compact"
+                      aria-label={`Edit ${row.symbol}`}
+                      disabled={working}
+                      onClick={() =>
+                        setHoldings({ ...holdings, symbol: row.symbol, quantity: String(row.quantity) })
+                      }
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      className={`button button--compact ${styles.dangerButton}`}
+                      aria-label={`Remove ${row.symbol}`}
+                      disabled={working}
+                      onClick={() => void putHolding(team, row.symbol, 0)}
+                    >
+                      Remove
+                    </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          </div>
+        )}
+        <form className={styles.holdingsForm} onSubmit={(event) => submitHolding(event, team)}>
+          <label>
+            <span className={styles.label}>Symbol</span>
+            <input
+              type="text"
+              value={holdings.symbol}
+              onChange={(event) => setHoldings({ ...holdings, symbol: event.target.value })}
+              placeholder="SHOP.TO"
+              maxLength={24}
+              autoComplete="off"
+              disabled={working}
+            />
+          </label>
+          <label>
+            <span className={styles.label}>Quantity · 0 removes</span>
+            <input
+              type="number"
+              min="0"
+              step="1"
+              inputMode="numeric"
+              value={holdings.quantity}
+              onChange={(event) => setHoldings({ ...holdings, quantity: event.target.value })}
+              disabled={working}
+            />
+          </label>
+          <button className="button button--secondary button--compact" type="submit" disabled={working}>
+            Set holding
+          </button>
+          <button
+            type="button"
+            className="button button--secondary button--compact"
+            onClick={() => setHoldings(null)}
+          >
+            Close
+          </button>
+        </form>
+        <p className={styles.holdingsNote}>
+          Cash doesn&apos;t change. New holdings start at the current price.
+        </p>
+      </div>
+    );
+  };
 
   const addTeam = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -775,7 +964,40 @@ export function AccountsPanel({
               {initials(account.name)}
             </span>
             <span className={styles.who}>
-              <strong>{account.name}</strong>
+              {renaming?.id === account.id ? (
+                <form className={styles.inlineEdit} onSubmit={(event) => void saveRename(event, account)}>
+                  <input
+                    ref={focusOnMount}
+                    type="text"
+                    aria-label={`New name for ${account.name}`}
+                    maxLength={DISPLAY_NAME_MAX_LENGTH}
+                    autoComplete="off"
+                    value={renaming.draft}
+                    onChange={(event) => setRenaming({ id: account.id, draft: event.target.value })}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") {
+                        event.stopPropagation();
+                        setRenaming(null);
+                      }
+                    }}
+                    disabled={rowBusy}
+                  />
+                  <button type="submit" className={styles.saveEdit} aria-label="Save name" disabled={rowBusy}>
+                    ✓
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.cancelEdit}
+                    aria-label="Cancel"
+                    onClick={() => setRenaming(null)}
+                    disabled={rowBusy}
+                  >
+                    ✕
+                  </button>
+                </form>
+              ) : (
+                <strong>{account.name}</strong>
+              )}
               <small>
                 {account.email}
                 {isSelf ? " · you" : ""}
@@ -894,6 +1116,16 @@ export function AccountsPanel({
                     <hr className={styles.menuRule} />
                   </>
                 ) : null}
+                <button
+                  type="button"
+                  className={styles.menuItem}
+                  onClick={() => {
+                    setMenuOpen(null);
+                    setRenaming({ id: account.id, draft: account.name });
+                  }}
+                >
+                  Rename {first}
+                </button>
                 <button
                   type="button"
                   className={styles.menuItem}
@@ -1093,6 +1325,21 @@ export function AccountsPanel({
                 >
                   Set cash
                 </button>
+                <button
+                  type="button"
+                  className={styles.menuItem}
+                  onClick={() => void openHoldings(team)}
+                >
+                  View holdings
+                </button>
+                <a
+                  className={styles.menuItem}
+                  href={`/api/admin/teams/${encodeURIComponent(team.id)}/export`}
+                  download
+                  onClick={() => setMenuOpen(null)}
+                >
+                  Export history (CSV)
+                </a>
                 <hr className={styles.menuRule} />
                 <button
                   type="button"
@@ -1110,6 +1357,7 @@ export function AccountsPanel({
           </div>
         </div>
 
+        {team ? renderHoldings(team) : null}
         {team && confirm?.kind === "disqualify" && confirm.id === team.id
           ? renderConfirm(
               `Disqualify ${team.name}?`,

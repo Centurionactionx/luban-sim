@@ -21,7 +21,7 @@ import {
 import { postgresConnectionOptions } from "./postgres-config";
 
 const DEFAULT_DATABASE_PATH = join(process.cwd(), "data", "luban.sqlite");
-const SCHEMA_VERSION = 17;
+const SCHEMA_VERSION = 18;
 /** Map grouping within a sector; "Other" until the feed reports one. */
 const INSTRUMENT_INDUSTRY_COLUMN = "industry TEXT NOT NULL DEFAULT 'Other'";
 
@@ -436,6 +436,14 @@ const SHARED_TABLE_BODIES = {
   pending_display_names: () => `
       user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
       created_at TEXT NOT NULL`,
+  // The host's current notice to everyone; one per competition, deleted to clear.
+  announcements: () => `
+      competition_id TEXT PRIMARY KEY REFERENCES competitions(id) ON DELETE CASCADE,
+      title TEXT NOT NULL CHECK (length(title) BETWEEN 1 AND 80),
+      body TEXT NOT NULL CHECK (length(body) <= 500),
+      tone TEXT NOT NULL CHECK (tone IN ('normal', 'urgent')),
+      author_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL`,
 } as const;
 
 const WATCHLIST_INDEXES = [
@@ -665,9 +673,9 @@ function instrumentAssetColumns(big: string): string {
  * schema on cold start (fresh databases get the current DDL directly).
  */
 export async function runPostgresMigrations(tx: DbExecutor): Promise<void> {
-  // v17: pre-loaded accounts (claimable emails and placeholder names). New
-  // tables only.
-  for (const name of ["account_claims", "pending_display_names"] as const) {
+  // v17: pre-loaded accounts (claimable emails and placeholder names).
+  // v18: host announcements. New tables only.
+  for (const name of ["account_claims", "pending_display_names", "announcements"] as const) {
     const present = await tx.get<{ present: number }>(
       `SELECT 1 AS present
        FROM information_schema.tables
@@ -946,6 +954,7 @@ async function clearDomainData(
   const tables = [
     "market_cache",
     "watchlist_items",
+    "announcements",
     "working_orders",
     "admin_valuation_positions",
     "admin_valuation_accounts",

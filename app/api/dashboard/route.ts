@@ -24,11 +24,13 @@ import {
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request): Promise<Response> {
+  const started = performance.now();
   try {
     const user = await requireAuthenticatedUser();
     // Each dashboard read recomputes the whole leaderboard; cap how fast one
     // client can force that work. Well above any legitimate polling cadence.
     assertRequestAllowed(`poll:${user.id}`, 120);
+    const authDone = performance.now();
     const params = new URL(request.url).searchParams;
     const refreshMarket = params.get("refreshMarket") !== "0";
     const rawSymbol = params.get("symbol")?.trim();
@@ -54,11 +56,13 @@ export async function GET(request: Request): Promise<Response> {
         refreshQuotesFor(ownSymbols, { onlyMissing: true }).catch(() => {}),
       ]);
     }
+    const quotesDone = performance.now();
     const dashboard = await getDashboard(user.id, {
       focusSymbol,
       historyAfter: params.get("historyAfter"),
       historyTeamId: params.get("historyTeam"),
     });
+    const dashboardDone = performance.now();
     // Backup price check for waiting orders, after the response is sent.
     after(runWorkingOrdersIfDue);
     // Feeds the portfolio history chart; at most one row per team every two
@@ -70,13 +74,26 @@ export async function GET(request: Request): Promise<Response> {
       ).catch(() => {});
     }
 
-    return json({
-      ...dashboard,
-      session: {
-        user,
-        demoUsers: isDemoLoginAllowed() ? await listDemoUsers() : [],
+    const snapshotDone = performance.now();
+    // Server-Timing lets devtools show where each phase's time went.
+    const serverTiming = [
+      `auth;dur=${(authDone - started).toFixed(1)}`,
+      `quotes;desc="${refreshMarket ? "refresh" : "cached"}";dur=${(quotesDone - authDone).toFixed(1)}`,
+      `dashboard;dur=${(dashboardDone - quotesDone).toFixed(1)}`,
+      `snapshot;dur=${(snapshotDone - dashboardDone).toFixed(1)}`,
+      `total;dur=${(snapshotDone - started).toFixed(1)}`,
+    ].join(", ");
+
+    return json(
+      {
+        ...dashboard,
+        session: {
+          user,
+          demoUsers: isDemoLoginAllowed() ? await listDemoUsers() : [],
+        },
       },
-    });
+      { headers: { "Server-Timing": serverTiming } },
+    );
   } catch (error) {
     return handleRouteError(error);
   }

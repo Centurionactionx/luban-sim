@@ -3607,13 +3607,108 @@ a {
 /* ── Host competition schedule ────────────────────────────────────────── */
 
 .host-schedule {
-  display: grid;
-  gap: 10px;
-  margin-top: 14px;
-  padding: 12px;
+  margin-top: 12px;
+  padding: 0;
   border: 1.5px solid var(--rule);
   border-radius: 4px;
   background: var(--quiet-purple-2);
+}
+
+/* The schedule and announcement fold away so the host menu stays short. */
+.host-schedule__heading {
+  position: relative;
+  display: block;
+  padding: 10px 36px 10px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.host-schedule__heading::-webkit-details-marker {
+  display: none;
+}
+
+.host-schedule__heading::after {
+  content: "";
+  position: absolute;
+  top: 16px;
+  right: 14px;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg);
+  transition: transform 0.15s ease;
+}
+
+.host-schedule[open] > .host-schedule__heading::after {
+  top: 19px;
+  transform: rotate(-135deg);
+}
+
+.host-schedule__heading:hover {
+  background: var(--quiet-purple);
+}
+
+.host-schedule__heading:focus-visible {
+  outline: 2px solid var(--purple);
+  outline-offset: -2px;
+}
+
+.host-schedule__body {
+  display: grid;
+  gap: 10px;
+  padding: 0 12px 12px;
+}
+
+/* The competition box takes the phase's colour: green open, red ended. */
+.host-status__phase[data-phase="open"] {
+  background: var(--positive-wash);
+  box-shadow: inset 0 0 0 2px var(--green);
+}
+
+.host-status__phase[data-phase="open"] strong {
+  color: var(--green);
+}
+
+.host-status__phase[data-phase="ended"] {
+  background: var(--negative-wash);
+  box-shadow: inset 0 0 0 2px var(--red);
+}
+
+.host-status__phase[data-phase="ended"] strong {
+  color: var(--red);
+}
+
+.host-status__phase[data-phase="paused"] {
+  background: #fff6e0;
+  box-shadow: inset 0 0 0 2px #b26b00;
+}
+
+.host-status__phase[data-phase="paused"] strong {
+  color: #8a5200;
+}
+
+:root[data-theme="dark"] .host-status__phase[data-phase="paused"] {
+  background: #2c2210;
+  box-shadow: inset 0 0 0 2px #f0b450;
+}
+
+:root[data-theme="dark"] .host-status__phase[data-phase="paused"] strong {
+  color: #f0b450;
+}
+
+.host-status__phase[data-phase="scheduled"] {
+  background: var(--quiet-purple);
+  box-shadow: inset 0 0 0 2px var(--purple);
+}
+
+.host-status__phase[data-phase="scheduled"] strong {
+  color: var(--purple-deep);
+}
+
+.host-status__phase[data-phase="draft"] {
+  background: var(--neutral-wash);
+  box-shadow: inset 0 0 0 2px var(--muted);
 }
 
 .host-schedule__heading strong {
@@ -6795,5 +6890,78 @@ body {
   .chart-dialog {
     width: calc(100vw - 16px - var(--safe-left) - var(--safe-right));
     height: calc(100dvh - 16px - var(--safe-top) - var(--safe-bottom));
+  }
+}
+
+.host-schedule textarea,
+.host-schedule select {
+  min-height: 40px;
+  padding: 7px 9px;
+  border: 1.5px solid var(--rule);
+  border-radius: 4px;
+  background: var(--paper);
+  font: inherit;
+  font-size: 13px;
+}
+
+.host-schedule textarea {
+  resize: vertical;
+}
+
+/* Phones: a host's extra Host controls button gets its own row so the
+   icons and the account picker still fit beside each other below it. */
+@media (max-width: 560px) {
+  .header-tools {
+    flex-wrap: wrap;
+  }
+
+  .header-tools > .header-menu {
+    flex: 1 1 100%;
+  }
+
+  .header-tools > .header-menu > .header-menu__button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .header-tools > .header-menu > .header-menu__panel {
+    left: 0;
+    width: auto;
+  }
+}
+
+/* First load without server data: shimmering tiles instead of placeholder
+   names and balances. */
+.trading-room[data-loading] .competition-lockup > :not(.guide-link),
+.trading-room[data-loading] .header-tools,
+.trading-room[data-loading] .room-column > * {
+  visibility: hidden;
+}
+
+.trading-room[data-loading] .room-column {
+  min-height: 60vh;
+  background: linear-gradient(
+      100deg,
+      transparent 30%,
+      var(--quiet-purple) 50%,
+      transparent 70%
+    )
+    var(--paper);
+  background-size: 250% 100%;
+  animation: room-loading 1.4s ease-in-out infinite;
+}
+
+@keyframes room-loading {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -150% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trading-room[data-loading] .room-column {
+    animation: none;
   }
 }

@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 
 import type {
+  Announcement,
+  AnnouncementTone,
   ActivityItem,
   CompetitionPhase,
   CompetitionStatus,
@@ -637,12 +639,14 @@ async function readOrders(
   requestedTeamId?: string,
 ): Promise<OrderView[]> {
   const user = await requireSessionUser(userId);
-  const teamId =
-    user.role === "platform_admin"
+  // An admin naming a team is overseeing the competition, like a host.
+  const overseeing =
+    user.role === "host" || (user.role === "platform_admin" && requestedTeamId !== undefined);
+  const teamId = overseeing
+    ? requestedTeamId
+    : user.role === "platform_admin"
       ? await getAdminTradingTeamId(user.id)
-      : user.role === "host"
-        ? requestedTeamId
-        : user.teamId;
+      : user.teamId;
 
   if (user.role === "student" && !teamId) {
     return [];
@@ -651,7 +655,7 @@ async function readOrders(
   const conditions: string[] = [];
   const parameters: Array<string | number> = [];
 
-  if (user.role === "host") {
+  if (overseeing) {
     // Hosts may inspect real competition teams, never a private admin row.
     conditions.push("t.sandbox_owner_user_id IS NULL");
   }
@@ -704,6 +708,72 @@ async function readOrders(
         ? (realizedByTeam.get(row.team_id)?.get(row.id) ?? null)
         : null,
   }));
+}
+
+/**
+ * One competition team's full record for a host: every fill plus every
+ * activity event (cash and holding adjustments, status changes, joins).
+ */
+export async function getTeamHistoryForExport(
+  userId: string,
+  teamId: string,
+): Promise<{ teamName: string; orders: OrderView[]; activity: ActivityItem[] }> {
+  const user = await requireSessionUser(userId);
+  if (user.role !== "host" && user.role !== "platform_admin") {
+    throw new AppError("HOST_REQUIRED", "Only hosts can export a team's history.", 403);
+  }
+  const db = await getDb();
+  const team = await db.get<{ name: string }>(
+    "SELECT name FROM teams WHERE id = ? AND sandbox_owner_user_id IS NULL",
+    [teamId],
+  );
+  if (!team) {
+    throw new AppError("TEAM_NOT_FOUND", "That team does not exist.", 404);
+  }
+
+  const orders = await readOrders(userId, MAX_EXPORTED_ORDERS, teamId);
+  const rows = await db.all<ActivityRow>(
+    `
+      SELECT
+        a.id, a.type, a.title, a.detail,
+        a.actor_user_id, u.name AS actor_name,
+        a.team_id, t.name AS team_name, a.created_at
+      FROM activity_events a
+      LEFT JOIN users u ON u.id = a.actor_user_id
+      LEFT JOIN teams t ON t.id = a.team_id
+      WHERE a.team_id = ?
+      ORDER BY a.created_at DESC
+      LIMIT ?
+    `,
+    [teamId, MAX_EXPORTED_ORDERS],
+  );
+  return { teamName: team.name, orders, activity: rows.map(activityRowToItem) };
+}
+
+export async function getAnnouncement(competitionId: string): Promise<Announcement | null> {
+  const db = await getDb();
+  const row = await db.get<{
+    title: string;
+    body: string;
+    tone: AnnouncementTone;
+    author_name: string | null;
+    created_at: string;
+  }>(
+    `SELECT a.title, a.body, a.tone, u.name AS author_name, a.created_at
+     FROM announcements a
+     LEFT JOIN users u ON u.id = a.author_user_id
+     WHERE a.competition_id = ?`,
+    [competitionId],
+  );
+  return row
+    ? {
+        title: row.title,
+        body: row.body,
+        tone: row.tone,
+        authorName: row.author_name ?? "Host",
+        createdAt: row.created_at,
+      }
+    : null;
 }
 
 function activityRowToItem(row: ActivityRow): ActivityItem {
@@ -990,6 +1060,7 @@ export async function getDashboard(
     return {
       currentUser,
       competition,
+      announcement: await getAnnouncement(competition.id),
       team,
       portfolio: calculated?.summary ?? null,
       holdings: calculated?.holdings ?? [],

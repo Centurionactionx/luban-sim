@@ -835,3 +835,89 @@
     margin-left: 0;
   }
 }
+
+.holdings {
+  display: grid;
+  gap: 10px;
+  margin: 8px 4px;
+  padding: 12px 14px;
+  border: 1.5px solid var(--rule);
+  border-radius: 6px;
+}
+
+/* A narrow screen scrolls the table inside its box, not the whole page. */
+.holdingsScroll {
+  overflow-x: auto;
+}
+
+.holdingActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+/* Phones: drop the average cost and stack the row buttons so a row fits. */
+@media (max-width: 560px) {
+  .avgCost {
+    display: none;
+  }
+
+  .holdingActions {
+    flex-direction: column;
+    align-items: flex-end;
+  }
+}
+
+.holdingsNote {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.holdingsTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.holdingsTable th,
+.holdingsTable td {
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--hairline);
+  text-align: left;
+}
+
+.holdingsTable th.num,
+.holdingsTable td.num {
+  text-align: right;
+}
+
+.holdingsTable small {
+  color: var(--muted);
+}
+
+.holdingsForm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
+}
+
+.holdingsForm label {
+  display: grid;
+  flex: 1 1 140px;
+  gap: 5px;
+  min-width: 0;
+}
+
+.holdingsForm input {
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 8px;
+  border: 1.5px solid var(--rule);
+  border-radius: 4px;
+  background: var(--paper);
+}
+
+a.menuItem {
+  text-decoration: none;
+}

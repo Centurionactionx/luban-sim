@@ -387,6 +387,8 @@ export interface ActivityItem {
     | "COMPETITION_SCHEDULE_CHANGED"
     | "TEAM_STATUS_CHANGED"
     | "TEAM_CASH_ADJUSTED"
+    | "TEAM_HOLDING_ADJUSTED"
+    | "ANNOUNCEMENT_POSTED"
     | "TEAM_CREATED"
     | "MEMBER_JOINED"
     | "WORKING_ORDER_PLACED"
@@ -419,9 +421,21 @@ export interface Leaderboard {
   rows: LeaderboardRow[];
 }
 
+export type AnnouncementTone = "normal" | "urgent";
+
+/** The host's notice shown above the trading room. */
+export interface Announcement {
+  title: string;
+  body: string;
+  tone: AnnouncementTone;
+  authorName: string;
+  createdAt: string;
+}
+
 export interface Dashboard {
   currentUser: SessionUser;
   competition: CompetitionSummary;
+  announcement: Announcement | null;
   team: TeamSummary | null;
   portfolio: PortfolioSummary | null;
   holdings: HoldingView[];

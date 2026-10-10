@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
@@ -110,14 +111,17 @@ import {
   UserIcon,
   UsersIcon,
 } from "./simulator-icons";
+import { AnnouncementBanner, AnnouncementForm } from "./announcement";
 import { DisplayNamePrompt, useNamePromptLater } from "./display-name-prompt";
 import { FeedbackButton } from "./feedback-button";
 import { LubanMark, LubanWordmark } from "./luban-logo";
-import { PortfolioMap } from "./portfolio-map";
 import summaryStyles from "./portfolio-summary.module.css";
 import { ThemeToggle } from "./theme-toggle";
 
-type DashboardPayload = Dashboard & {
+// Only shown inside its dialog, so its code downloads when first opened.
+const PortfolioMap = dynamic(() => import("./portfolio-map").then((m) => m.PortfolioMap));
+
+export type DashboardPayload = Dashboard & {
   session: {
     user: SessionUser;
     demoUsers: DemoUser[];
@@ -398,6 +402,7 @@ const fallbackDashboard: DashboardPayload = {
     status: "active",
   },
   competition: fallbackCompetition,
+  announcement: null,
   team: fallbackTeam,
   portfolio: fallbackPortfolio,
   holdings: fallbackHoldings,
@@ -2732,20 +2737,32 @@ export interface SimulatorAppProps {
   authMode?: AuthMode;
   /** Rendered in the header instead of the demo identity switcher. */
   accountControls?: ReactNode;
+  /** The signed-in person's dashboard, built with the page; skips the first load. */
+  initialDashboard?: DashboardPayload;
 }
 
 export function SimulatorApp({
   authMode = "demo",
   accountControls,
+  initialDashboard,
 }: SimulatorAppProps = {}) {
   const isManaged = authMode === "managed";
   const router = useRouter();
-  const [dashboard, setDashboard] = useState<DashboardPayload>(fallbackDashboard);
-  const [connection, setConnection] = useState<ConnectionState>("connecting");
-  const [sessionReady, setSessionReady] = useState(false);
+  const [dashboard, setDashboard] = useState<DashboardPayload>(
+    initialDashboard ?? fallbackDashboard,
+  );
+  const [connection, setConnection] = useState<ConnectionState>(
+    initialDashboard ? "connected" : "connecting",
+  );
+  // A dashboard built with the page proves the session already.
+  const [sessionReady, setSessionReady] = useState(Boolean(initialDashboard));
   const [connectionError, setConnectionError] = useState("");
   const [selectedSymbol, setSelectedSymbol] = useState("SHOP.TO");
-  const [selectedQuote, setSelectedQuote] = useState<Quote>(fallbackQuotes[0]);
+  const [selectedQuote, setSelectedQuote] = useState<Quote>(
+    () =>
+      initialDashboard?.availableSymbols.find((quote) => quote.symbol === "SHOP.TO") ??
+      fallbackQuotes[0],
+  );
   // The symbol on screen right now, and a counter that every new pick bumps,
   // so a slow lookup for an earlier pick can't land on top of a later one.
   const selectedSymbolRef = useRef(selectedSymbol);
@@ -2842,10 +2859,14 @@ export function SimulatorApp({
   // ticket replays idempotently instead of double-filling.
   const pendingOrder = useRef<{ key: string; fingerprint: string } | null>(null);
   const autoLoginAttempted = useRef(false);
-  const knownVersion = useRef(fallbackTeam.version);
+  const knownVersion = useRef(initialDashboard?.team?.version ?? fallbackTeam.version);
   // The portfolio history this page already holds, so each poll only asks
   // for newer points. The last point is always the live value.
-  const historyCache = useRef<{ teamId: string; points: PortfolioPoint[] } | null>(null);
+  const historyCache = useRef<{ teamId: string; points: PortfolioPoint[] } | null>(
+    initialDashboard?.team
+      ? { teamId: initialDashboard.team.id, points: initialDashboard.portfolioHistory }
+      : null,
+  );
   const lastMarketRefreshAttemptAt = useRef(0);
 
   const toggleRailSection = useCallback((section: RailSectionId) => {
@@ -2856,6 +2877,7 @@ export function SimulatorApp({
   }, []);
 
   useEffect(() => {
+    if (sessionReady) return;
     const timer = window.setTimeout(async () => {
       try {
         const response = await fetch("/api/auth/session", {
@@ -2891,7 +2913,7 @@ export function SimulatorApp({
     }, 0);
 
     return () => window.clearTimeout(timer);
-  }, [isManaged, router]);
+  }, [isManaged, router, sessionReady]);
 
   const fetchDashboard = useCallback(async (
     announce = false,
@@ -3615,9 +3637,16 @@ export function SimulatorApp({
     return () => window.removeEventListener("keydown", focusSearch);
   }, []);
 
-  // Load the popular picks in the background as soon as the page opens, so
-  // they are already there when someone clicks the search box.
+  // Load the popular picks in the background shortly after the page opens,
+  // or as soon as someone focuses the search box, so they are ready there
+  // without competing with the first dashboard and chart.
+  const [popularWanted, setPopularWanted] = useState(false);
   useEffect(() => {
+    const timer = window.setTimeout(() => setPopularWanted(true), 3_000);
+    return () => window.clearTimeout(timer);
+  }, []);
+  useEffect(() => {
+    if (!popularWanted) return;
     const controller = new AbortController();
     void (async () => {
       try {
@@ -3638,7 +3667,7 @@ export function SimulatorApp({
       }
     })();
     return () => controller.abort();
-  }, []);
+  }, [popularWanted]);
 
   // Listings already on the page feed the instant suggestions too.
   useEffect(() => {
@@ -4482,7 +4511,12 @@ export function SimulatorApp({
         Skip to order ticket
       </a>
 
-      <div className="trading-room">
+      {/* Until the first dashboard arrives the placeholder data stays hidden. */}
+      <div
+        className="trading-room"
+        data-loading={connection === "connecting" || undefined}
+        aria-busy={connection === "connecting" || undefined}
+      >
         <header className="app-header">
           <a className="brand-lockup" href="#top" aria-label="Luban Market Lab home">
             <LubanMark className="brand-lockup__mark" />
@@ -4514,7 +4548,7 @@ export function SimulatorApp({
             <HeaderMenu label="Host controls" icon={<LockIcon />}>
               <div className="host-menu">
                 <div className="host-status">
-                  <div>
+                  <div className="host-status__phase" data-phase={dashboard.competition.phase}>
                     <span>Competition</span>
                     <strong>{dashboard.competition.phase}</strong>
                   </div>
@@ -4551,18 +4585,19 @@ export function SimulatorApp({
                   <UsersIcon />
                   Team &amp; user management
                 </a>
-                <form
-                  className="host-schedule"
-                  aria-label="Competition schedule"
-                  onSubmit={(event) => void saveCompetitionSchedule(event)}
-                >
-                  <div className="host-schedule__heading">
+                <details className="host-schedule">
+                  <summary className="host-schedule__heading">
                     <strong>Competition schedule</strong>
                     <span>
                       Trading is open between the start and end below. It
                       starts and stops automatically.
                     </span>
-                  </div>
+                  </summary>
+                <form
+                  className="host-schedule__body"
+                  aria-label="Competition schedule"
+                  onSubmit={(event) => void saveCompetitionSchedule(event)}
+                >
                   <label htmlFor="schedule-start">
                     <span>Start date &amp; time (ET)</span>
                     <input
@@ -4615,6 +4650,11 @@ export function SimulatorApp({
                     Save schedule
                   </button>
                 </form>
+                </details>
+                <AnnouncementForm
+                  announcement={dashboard.announcement}
+                  onChanged={() => fetchDashboard(true, false)}
+                />
                 {/* With real sign-in these live in the account menu instead. */}
                 {!isManaged && dashboard.currentUser.role === "platform_admin" ? (
                   <a className="button button--secondary host-accounts-link" href="/admin/valuation-lab">
@@ -4722,6 +4762,7 @@ export function SimulatorApp({
             </span>
           </div>
         </section>
+        <AnnouncementBanner announcement={dashboard.announcement} />
 
         {connectionError ? (
           <div className="connection-banner" role="status">
@@ -5356,7 +5397,10 @@ export function SimulatorApp({
                     value={searchQuery}
                     onChange={(event) => changeSearchQuery(event.target.value)}
                     onKeyDown={handleSearchKeyDown}
-                    onFocus={() => setSuggestionsOpen(true)}
+                    onFocus={() => {
+                      setSuggestionsOpen(true);
+                      setPopularWanted(true);
+                    }}
                     onClick={() => setSuggestionsOpen(true)}
                     onBlur={() => {
                       setSuggestionsOpen(false);

@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 
 import type {
+  Announcement,
+  AnnouncementTone,
   AdminOverview,
   AdminTeamSummary,
   CompetitionStatus,
@@ -29,6 +31,7 @@ import {
 } from "./db";
 import {
   calculatePortfolio,
+  getAnnouncement,
   getCompetitionSummary,
   getTeamSummary,
   listActivity,
@@ -868,6 +871,158 @@ export async function setTeamCash(input: SetTeamCashInput): Promise<AdminOvervie
   });
 
   return getAdminOverview(input.actorUserId);
+}
+
+/**
+ * Sets how many shares (lots) of one symbol a team holds; 0 removes the
+ * holding. Cash is untouched, so this is a grant or removal, not a trade.
+ * An existing holding keeps its average cost; a new one starts at
+ * `priceCadCents` so its gain begins at zero.
+ */
+export async function setTeamHolding(input: {
+  actorUserId: string;
+  teamId: string;
+  symbol: string;
+  quantity: number;
+  priceCadCents: number;
+}): Promise<void> {
+  await requireHost(input.actorUserId);
+  const db = await getDb();
+
+  await db.transaction(async (tx) => {
+    await acquireAdvisoryLock(tx, ADVISORY_LOCK_ACCOUNTS);
+    await requireHost(input.actorUserId);
+    const team = await tx.get<CashTeamRow>(
+      `SELECT id, competition_id, name, cash_cents, version
+       FROM teams WHERE id = ? AND sandbox_owner_user_id IS NULL`,
+      [input.teamId],
+    );
+    if (!team) {
+      throw new AppError("TEAM_NOT_FOUND", "That team does not exist.", 404);
+    }
+
+    const holding = await tx.get<{ quantity: number }>(
+      "SELECT quantity FROM holdings WHERE team_id = ? AND symbol = ?",
+      [team.id, input.symbol],
+    );
+    const previousQuantity = Number(holding?.quantity ?? 0);
+    if (previousQuantity === input.quantity) return;
+
+    const now = new Date().toISOString();
+    if (input.quantity === 0) {
+      await tx.run("DELETE FROM holdings WHERE team_id = ? AND symbol = ?", [
+        team.id,
+        input.symbol,
+      ]);
+    } else if (holding) {
+      await tx.run(
+        "UPDATE holdings SET quantity = ?, updated_at = ? WHERE team_id = ? AND symbol = ?",
+        [input.quantity, now, team.id, input.symbol],
+      );
+    } else {
+      await tx.run(
+        `INSERT INTO holdings (team_id, symbol, quantity, average_cost_cents, updated_at)
+         VALUES (?, ?, ?, ?, ?)`,
+        [team.id, input.symbol, input.quantity, input.priceCadCents, now],
+      );
+    }
+
+    // Bumping the version makes any order racing this edit retry.
+    const changed = await tx.run(
+      "UPDATE teams SET version = version + 1 WHERE id = ? AND version = ?",
+      [team.id, team.version],
+    );
+    if (changed.changes !== 1) {
+      throw new AppError(
+        "ADMIN_CONFLICT",
+        "The team changed while its holdings were being updated.",
+        409,
+      );
+    }
+
+    const actor = await getSessionUser(input.actorUserId);
+    await tx.run(
+      `
+        INSERT INTO activity_events (
+          id, competition_id, team_id, actor_user_id, type,
+          title, detail, created_at
+        ) VALUES (?, ?, ?, ?, 'TEAM_HOLDING_ADJUSTED', ?, ?, ?)
+      `,
+      [
+        randomUUID(),
+        team.competition_id,
+        team.id,
+        input.actorUserId,
+        `${team.name} ${input.symbol} adjusted`,
+        `${actor?.name ?? "Host"} changed ${team.name}'s ${input.symbol} holding from ${previousQuantity} to ${input.quantity}.`,
+        now,
+      ],
+    );
+  });
+}
+
+export const ANNOUNCEMENT_TITLE_MAX_LENGTH = 80;
+export const ANNOUNCEMENT_BODY_MAX_LENGTH = 500;
+
+/** Posts (or replaces) the notice everyone sees above the trading room. */
+export async function setAnnouncement(input: {
+  actorUserId: string;
+  title: string;
+  body: string;
+  tone: AnnouncementTone;
+}): Promise<Announcement> {
+  await requireHost(input.actorUserId);
+  const title = input.title.replace(/\s+/g, " ").trim();
+  const body = input.body.trim();
+  if (!title || title.length > ANNOUNCEMENT_TITLE_MAX_LENGTH) {
+    throw new AppError(
+      "INVALID_ANNOUNCEMENT",
+      `Give the announcement a title of up to ${ANNOUNCEMENT_TITLE_MAX_LENGTH} characters.`,
+      400,
+      { field: "title" },
+    );
+  }
+  if (body.length > ANNOUNCEMENT_BODY_MAX_LENGTH) {
+    throw new AppError(
+      "INVALID_ANNOUNCEMENT",
+      `Keep the message to ${ANNOUNCEMENT_BODY_MAX_LENGTH} characters or fewer.`,
+      400,
+      { field: "body" },
+    );
+  }
+  if (input.tone !== "normal" && input.tone !== "urgent") {
+    throw new AppError("INVALID_ANNOUNCEMENT", "Unknown tone.", 400, { field: "tone" });
+  }
+
+  const competition = await getCompetitionSummary();
+  const db = await getDb();
+  const createdAt = new Date().toISOString();
+  await db.transaction(async (tx) => {
+    await tx.run("DELETE FROM announcements WHERE competition_id = ?", [competition.id]);
+    await tx.run(
+      `INSERT INTO announcements (competition_id, title, body, tone, author_user_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [competition.id, title, body, input.tone, input.actorUserId, createdAt],
+    );
+    await tx.run(
+      `
+        INSERT INTO activity_events (
+          id, competition_id, team_id, actor_user_id, type,
+          title, detail, created_at
+        ) VALUES (?, ?, NULL, ?, 'ANNOUNCEMENT_POSTED', ?, ?, ?)
+      `,
+      [randomUUID(), competition.id, input.actorUserId, title, body || title, createdAt],
+    );
+  });
+
+  return (await getAnnouncement(competition.id))!;
+}
+
+export async function clearAnnouncement(actorUserId: string): Promise<void> {
+  await requireHost(actorUserId);
+  const competition = await getCompetitionSummary();
+  const db = await getDb();
+  await db.run("DELETE FROM announcements WHERE competition_id = ?", [competition.id]);
 }
 
 export async function setCompetitionStatus(

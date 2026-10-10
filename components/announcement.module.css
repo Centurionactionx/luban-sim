@@ -1,0 +1,109 @@
+/* Option B: a paper card under the header with a tone-coloured edge. */
+.banner {
+  --tone: var(--purple);
+  --tone-ink: var(--purple-deep);
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  border: 2px solid var(--rule);
+  border-radius: var(--tile-radius, 10px);
+  background: var(--paper);
+  box-shadow: inset 8px 0 0 var(--tone);
+  padding: 12px 12px 12px 24px;
+}
+
+.banner[data-tone="urgent"] {
+  --tone: var(--red);
+  --tone-ink: var(--red);
+  background: var(--negative-wash);
+}
+
+.content {
+  flex: 1;
+  min-width: 0;
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.icon {
+  color: var(--tone-ink);
+}
+
+.kicker,
+.byline {
+  font-family: var(--font-data);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.kicker {
+  color: var(--tone-ink);
+}
+
+.byline {
+  color: var(--muted);
+}
+
+.title {
+  margin: 6px 0 0;
+  font-size: 16px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.body {
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.banner[data-tone="urgent"] .body {
+  color: var(--ink);
+}
+
+.close {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.close:hover,
+.close:focus-visible {
+  background: var(--quiet-purple);
+}
+
+.live {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border: 1px solid var(--green);
+  border-radius: 3px;
+  background: var(--positive-wash);
+  color: var(--green);
+  font-family: var(--font-data);
+  font-size: 10px;
+  font-style: normal;
+  letter-spacing: 0.05em;
+}
+
+.formActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
