@@ -155,6 +155,8 @@ export interface AdminLogFilters {
   /** Matches the actor, or the subject of an account event. */
   userId?: string;
   symbol?: string;
+  /** Case-insensitive text match on event, detail, team, people, and symbol. */
+  search?: string;
   /** ISO instants, inclusive. */
   from?: string;
   to?: string;

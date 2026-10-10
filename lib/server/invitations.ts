@@ -877,6 +877,12 @@ export async function consumeInvitation(
       detail: `A ${row.role} account was created for ${displayName} through an invitation.`,
       metadata: { invitationId: row.id, role: row.role },
     });
+    await recordAuthAuditEvent({
+      type: "FIRST_SIGN_IN",
+      actorUserId: createdUserId,
+      subjectUserId: createdUserId,
+      detail: `${displayName} signed in for the first time.`,
+    });
 
     return createdUserId;
   });

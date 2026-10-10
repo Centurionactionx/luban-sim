@@ -26,12 +26,30 @@ async function findUserIdByAuthSubject(subject: string): Promise<string | null> 
 
 async function touchLastLogin(userId: string): Promise<void> {
   const db = await getDb();
-  const row = await db.get<{ last_login_at: string | null }>(
-    "SELECT last_login_at FROM users WHERE id = ?",
+  const row = await db.get<{ last_login_at: string | null; name: string }>(
+    "SELECT last_login_at, name FROM users WHERE id = ?",
     [userId],
   );
 
   const now = Date.now();
+
+  if (row && row.last_login_at === null) {
+    // Conditional so two racing first requests log one first sign-in.
+    const { changes } = await db.run(
+      "UPDATE users SET last_login_at = ? WHERE id = ? AND last_login_at IS NULL",
+      [new Date(now).toISOString(), userId],
+    );
+    if (changes > 0) {
+      await recordAuthAuditEvent({
+        type: "FIRST_SIGN_IN",
+        actorUserId: userId,
+        subjectUserId: userId,
+        detail: `${row.name} signed in for the first time.`,
+      });
+    }
+    return;
+  }
+
   const last = row?.last_login_at ? Date.parse(row.last_login_at) : 0;
 
   if (!Number.isFinite(last) || now - last >= LAST_LOGIN_WRITE_INTERVAL_MS) {
@@ -111,6 +129,12 @@ async function maybeBootstrapAdmin(
       actorUserId: createdUserId,
       subjectUserId: createdUserId,
       detail: `A platform_admin account was created for ${displayName} during bootstrap.`,
+    });
+    await recordAuthAuditEvent({
+      type: "FIRST_SIGN_IN",
+      actorUserId: createdUserId,
+      subjectUserId: createdUserId,
+      detail: `${displayName} signed in for the first time.`,
     });
 
     return createdUserId;
@@ -262,6 +286,12 @@ async function claimPreloadedAccount(
       actorUserId: claim.user_id,
       subjectUserId: claim.user_id,
       detail: `${claim.name} signed in for the first time and claimed their pre-loaded account.`,
+    });
+    await recordAuthAuditEvent({
+      type: "FIRST_SIGN_IN",
+      actorUserId: claim.user_id,
+      subjectUserId: claim.user_id,
+      detail: `${claim.name} signed in for the first time.`,
     });
 
     return claim.user_id;

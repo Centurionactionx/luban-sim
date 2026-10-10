@@ -27,6 +27,8 @@ export const metadata: Metadata = {
 
 const PAGE_LIMIT = 200;
 const MAX_CURSOR_LENGTH = 500;
+// Roughly what fits in the collapsed Detail column (42ch); longer text gets Read more.
+const DETAIL_PREVIEW_CHARS = 40;
 
 type RawParams = Record<string, string | string[] | undefined>;
 
@@ -200,8 +202,18 @@ function AdminLogLine({ row }: { row: AdminLogRow }) {
       <td className="admin-log__num">{formatCents(row.priceCadCents)}</td>
       <td className="admin-log__num">{formatCents(row.valueCadCents)}</td>
       <td className="admin-log__num">{formatCents(row.cashAfterCadCents)}</td>
-      <td className="admin-log__detail" title={row.detail}>
-        <span>{row.detail}</span>
+      <td className="admin-log__detail">
+        {row.detail.length > DETAIL_PREVIEW_CHARS ? (
+          <details>
+            <summary>
+              <span className="admin-log__detail-text">{row.detail}</span>
+              <span className="admin-log__more">Read more</span>
+              <span className="admin-log__less">Show less</span>
+            </summary>
+          </details>
+        ) : (
+          <span className="admin-log__detail-text">{row.detail}</span>
+        )}
       </td>
     </tr>
   );
@@ -230,6 +242,8 @@ export default async function AdminLogPage({
   const symbol = firstOf(raw, "symbol").trim().toUpperCase();
   const symbolValid = /^[A-Z0-9.\-_/^=]{1,24}$/.test(symbol) ? symbol : "";
 
+  const search = firstOf(raw, "q").trim().slice(0, 100);
+
   const from = parseDay(firstOf(raw, "from"));
   const to = parseDay(firstOf(raw, "to"));
   const includeSandbox = firstOf(raw, "sandbox") === "1";
@@ -243,6 +257,7 @@ export default async function AdminLogPage({
   if (teamId) filters.teamId = teamId;
   if (userId) filters.userId = userId;
   if (symbolValid) filters.symbol = symbolValid;
+  if (search) filters.search = search;
   const fromIso = from ? dayStartIso(from) : null;
   if (fromIso) filters.from = fromIso;
   const toIso = to ? dayEndIso(to) : null;
@@ -281,6 +296,7 @@ export default async function AdminLogPage({
   if (userId) {
     summary.push(`person ${options.users.find((user) => user.id === userId)?.name ?? userId}`);
   }
+  if (search) summary.push(`search "${search}"`);
   if (symbolValid) summary.push(`symbol ${symbolValid}`);
   if (from) summary.push(`from ${from}`);
   if (to) summary.push(`to ${to}`);
@@ -316,6 +332,16 @@ export default async function AdminLogPage({
 
         <section className="admin-log" aria-label="Global admin log">
           <form className="admin-log-filters" method="get" action="/admin/log">
+            <label className="admin-log-field admin-log-search">
+              <span>Search</span>
+              <input
+                type="search"
+                name="q"
+                defaultValue={search}
+                maxLength={100}
+                placeholder="Name, team, symbol, or detail"
+              />
+            </label>
             <fieldset>
               <legend>Category</legend>
               {CATEGORY_OPTIONS.map((option) => (

@@ -32,6 +32,7 @@ const AUDIT_LABELS: Record<string, string> = {
   INVITATION_ACCEPTED: "Invitation accepted",
   ACCOUNT_CREATED: "Account created",
   ACCOUNT_CLAIMED: "Account claimed",
+  FIRST_SIGN_IN: "First sign-in",
   ACCOUNT_RENAMED: "Renamed",
   ACCOUNT_TEAM_CHANGED: "Team changed",
   ACCOUNT_DELETED: "Account deleted",
@@ -69,6 +70,8 @@ interface Scope {
   statuses?: AdminLogStatus[];
   sides?: AdminLogSide[];
   symbol?: string;
+  /** Lower-cased LIKE pattern, wildcards escaped. */
+  search?: string;
   teamId?: string;
   includeSandbox: boolean;
   userId?: string;
@@ -157,6 +160,11 @@ function nonEmpty<T>(list: T[] | undefined): T[] | undefined {
   return list?.length ? list : undefined;
 }
 
+function likePattern(search: string | undefined): string | undefined {
+  const text = search?.trim().toLowerCase().slice(0, 100);
+  return text ? `%${text.replace(/[\\%_]/g, (char) => `\\${char}`)}%` : undefined;
+}
+
 function parseCursor(value: string | undefined): Cursor | null {
   const match = /^([^|]+)\|([^|]+)$/.exec(value ?? "");
   if (!match || !Number.isFinite(Date.parse(match[1]))) return null;
@@ -186,6 +194,15 @@ function applyTeam(where: Where, scope: Scope, teamColumn: string): void {
   if (!scope.includeSandbox) where.add("t.sandbox_owner_user_id IS NULL");
 }
 
+function applySearch(where: Where, scope: Scope, columns: string[]): void {
+  if (!scope.search) return;
+  const pattern = scope.search;
+  where.add(
+    `(${columns.map((column) => `LOWER(COALESCE(${column}, '')) LIKE ? ESCAPE '\\'`).join(" OR ")})`,
+    ...columns.map(() => pattern),
+  );
+}
+
 async function fillRows(scope: Scope): Promise<AdminLogRow[]> {
   const where = new Where().add("o.status = 'FILLED'");
   if (scope.sides) {
@@ -194,6 +211,7 @@ async function fillRows(scope: Scope): Promise<AdminLogRow[]> {
   if (scope.symbol) where.add("UPPER(o.symbol) = ?", scope.symbol);
   if (scope.userId) where.add("o.actor_user_id = ?", scope.userId);
   applyTeam(where, scope, "o.team_id");
+  applySearch(where, scope, ["o.symbol", "t.name", "u.name"]);
   applyTime(where, scope, "o.created_at", "('order:' || o.id)");
 
   const db = await getDb();
@@ -252,6 +270,7 @@ async function rejectionRows(scope: Scope, sides: AdminLogSide[] | undefined): P
   if (scope.symbol) where.add("UPPER(r.symbol) = ?", scope.symbol);
   if (scope.userId) where.add("r.actor_user_id = ?", scope.userId);
   applyTeam(where, scope, "r.team_id");
+  applySearch(where, scope, ["r.symbol", "r.message", "t.name", "u.name"]);
   applyTime(where, scope, "r.created_at", "('reject:' || r.id)");
 
   const db = await getDb();
@@ -307,6 +326,7 @@ async function activityRows(
   }
   if (scope.userId) where.add("a.actor_user_id = ?", scope.userId);
   applyTeam(where, scope, "a.team_id");
+  applySearch(where, scope, ["a.title", "a.detail", "t.name", "u.name"]);
   applyTime(where, scope, "a.created_at", "('activity:' || a.id)");
 
   const db = await getDb();
@@ -361,6 +381,7 @@ async function auditRows(scope: Scope, categories: Array<"SECURITY" | "ACCOUNT">
     }
   }
   if (scope.userId) where.add("(e.actor_user_id = ? OR e.subject_user_id = ?)", scope.userId, scope.userId);
+  applySearch(where, scope, ["e.type", "e.detail", "actor.name", "subject.name"]);
   applyTime(where, scope, "e.created_at", "('audit:' || e.id)");
 
   const db = await getDb();
@@ -425,6 +446,7 @@ export async function listAdminLog(
     statuses: nonEmpty(filters.statuses),
     sides: nonEmpty(filters.sides),
     symbol: filters.symbol?.trim().toUpperCase() || undefined,
+    search: likePattern(filters.search),
     teamId: filters.teamId || undefined,
     includeSandbox: filters.includeSandbox === true,
     userId: filters.userId || undefined,

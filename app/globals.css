@@ -6225,12 +6225,58 @@ html:has(dialog[open]) {
   font-variant-numeric: tabular-nums;
 }
 
-.admin-log__detail span {
+.admin-log__detail summary {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.admin-log__detail summary::-webkit-details-marker {
+  display: none;
+}
+
+.admin-log__detail-text {
   display: block;
   max-width: 42ch;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.admin-log__more,
+.admin-log__less {
+  flex: none;
+  color: var(--purple);
+  font-size: 0.75rem;
+  text-decoration: underline;
+}
+
+.admin-log__less,
+.admin-log__detail details[open] .admin-log__more {
+  display: none;
+}
+
+.admin-log__detail details[open] .admin-log__less {
+  display: inline;
+}
+
+/* Opened: the full text wraps inside this one cell; other rows stay single-line. */
+.admin-log__detail details[open] .admin-log__detail-text {
+  max-width: 60ch;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.admin-log-search {
+  flex-basis: 100%;
+}
+
+.admin-log-search input {
+  width: min(100%, 28rem);
+  font-size: 0.9rem;
+  padding: 4px 6px;
 }
 
 .admin-log-tag,

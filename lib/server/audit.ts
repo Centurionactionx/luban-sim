@@ -17,6 +17,7 @@ export type AuthAuditType =
   | "ADMIN_BOOTSTRAPPED"
   | "ACCOUNT_RELINKED"
   | "ACCOUNT_CLAIMED"
+  | "FIRST_SIGN_IN"
   | "ACCESS_DENIED";
 
 export interface RecordAuthAuditInput {
