@@ -53,3 +53,15 @@ next-env.d.ts
 
 # Participant rosters and other personal data
 /private/
+
+# AI coding agent files and notes
+AGENTS.md
+CLAUDE.md
+AUDIT.md
+.claude/
+.codex/
+.cursor/
+.impeccable/
+
+# test suites stay local
+/tests/
