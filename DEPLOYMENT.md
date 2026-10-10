@@ -1,6 +1,6 @@
 # Deploying Luban Market Lab
 
-The current simulator supports SQLite for local development and PostgreSQL for durable hosting. Managed sign-in is implemented with Clerk. The separate `codex/supabase-persistence` worktree is an older prototype; use the current simulator for account management and managed authentication.
+The current simulator supports SQLite for local development and PostgreSQL for durable hosting. Managed sign-in is implemented with Clerk.
 
 ## Production configuration
 
@@ -20,11 +20,13 @@ Host and administrator operations require multi-factor authentication, which nee
 
 `LUBAN_DATABASE_URL` falls back to `POSTGRES_URL`, then `DATABASE_URL`. The engine is selected only by `LUBAN_DATABASE_PROVIDER`; credentials alone do not select PostgreSQL. Use the provider's pooled connection string. SQLite is a local file and is unsuitable for durable state on an ephemeral serverless filesystem.
 
-Leave `LUBAN_DEMO_MODE` unset on public deployments. Managed mode and any Vercel deployment (`VERCEL=1`) refuse demo authentication regardless of that flag. Disabling demo mode also rejects previously issued demo cookies. Keep preview and production databases separate, and start managed authentication with a fresh database so invitations created through a previous demo cannot carry over.
+Leave `LUBAN_DEMO_MODE` unset on public deployments. Managed mode and any Vercel deployment (`VERCEL=1`) refuse demo authentication regardless of that flag. Disabling demo mode also rejects previously issued demo cookies. Start managed authentication with a fresh database so invitations created through a previous demo cannot carry over.
+
+Vercel Preview deployments currently use the production database: the Supabase integration sets `POSTGRES_URL` for Production, Preview and Development together. Anything done on a preview URL changes real competition data, so never test there with real student accounts. Do risky testing locally against SQLite or a database snapshot instead.
 
 ## Domain
 
-Production is served at `https://sim.lubancanada.com`, a subdomain of the public site. The simulator stays a separate Vercel project; the public site links to it and shares no code. DNS: `CNAME sim -> cname.vercel-dns.com`. Clerk runs a production instance for `lubancanada.com`, and its DNS records live on the same zone. `luban-sim.vercel.app` redirects to the subdomain.
+Production is served at `https://sim.lubancanada.com`, a subdomain of the public site. The simulator stays a separate Vercel project; the public site links to it and shares no code. DNS: `CNAME sim -> cname.vercel-dns.com`. Production runs on Clerk's development instance (`pk_test_` keys), which shows a "Development mode" badge. A Clerk production instance is set up and DNS-verified on `lubancanada.com`, but switching to it needs a Google OAuth app for Google sign-in and a fresh user pool, so it isn't in use. `luban-sim.vercel.app` redirects to the subdomain.
 
 ## Release numbers
 
@@ -67,7 +69,7 @@ Clerk's own **Delete account** button is hidden on the account page because it w
 
 ETFs and crypto are off by default and controlled by environment variables (see `.env.example`):
 
-- `LUBAN_ENABLE_ETFS=true` lets students search for and buy ETFs listed on NYSE, NYSE Arca, NYSE American, NASDAQ, Cboe BZX and TSX. They trade like stocks: exchange hours and whole shares. Leveraged and inverse ETFs are filtered out by fund name, since the competition has no leverage or short selling.
+- `LUBAN_ENABLE_ETFS=true` lets students search for and buy ETFs listed on NYSE, NYSE Arca, NYSE American, NASDAQ, Cboe BZX and TSX. They trade like stocks: exchange hours and whole shares. Leveraged and inverse ETFs are filtered out by fund name, since the competition has no leverage.
 - `LUBAN_ENABLE_CRYPTO=true` lets students add any crypto pair Yahoo Finance quotes in CAD or USD, as long as it passes the data checks: a price updated in the last 10 minutes, 24-hour volume of at least `LUBAN_CRYPTO_MIN_VOLUME` (default 250,000), and at least four hours of recent price history. USD pairs are converted with the live USD to CAD rate. Crypto trades 24/7 in whole lots. A coin's lot is the smallest power of ten of tokens worth at least $10 CAD when the coin is first added, and it never changes after that.
 
 Both switches are read at request time, but Vercel only applies environment variable changes on a new deployment.
@@ -78,7 +80,7 @@ Adding asset classes changes the published contest rules, which promise particip
 
 1. Back up the production database with `pnpm backup:db` and check the row counts.
 2. Deploy the code with both switches still off in Production. Nothing changes for students yet.
-3. On a preview deployment with its own database, set `LUBAN_ENABLE_ETFS=true` and `LUBAN_ENABLE_CRYPTO=true` and test: search and buy an ETF during market hours, confirm a leveraged ETF such as TQQQ doesn't appear, add a large coin and a small one, buy and sell whole lots, and check the dashboard and leaderboard values.
+3. Locally, against a test database, set `LUBAN_ENABLE_ETFS=true` and `LUBAN_ENABLE_CRYPTO=true` and test: search and buy an ETF during market hours, confirm a leveraged ETF such as TQQQ doesn't appear, add a large coin and a small one, buy and sell whole lots, and check the dashboard and leaderboard values.
 4. Publish the updated contest rules on the public site and email participants with the start time.
 5. At that time, set both variables in Vercel Production and redeploy. Confirm in the production app that ETFs and crypto show up in search.
 
@@ -130,7 +132,7 @@ PostgreSQL orders hold a shared account-administration lock, a per-trader adviso
 
 ## Verification and release
 
-Run `pnpm verify` locally. The browser-test runner forces demo authentication, synthetic market data, and an isolated SQLite file for both build and runtime. It refuses a remote target or reusing an existing server. Tests never require a production database.
+Run `pnpm verify` locally. The `tests/` folder is kept on the maintainer's machine and isn't in the repository, so a fresh clone can lint, typecheck and build but has no test suite. The browser-test runner forces demo authentication, synthetic market data, and an isolated SQLite file for both build and runtime. It refuses a remote target or reusing an existing server. Tests never require a production database.
 
 Unit/integration tests exercise PostgreSQL SQL through embedded PGlite. PGlite is a single-connection engine: a staging test with multiple real PostgreSQL connections is still required to validate pooler behavior and lock contention. Also verify real Clerk sign-in, invitation acceptance, second-factor enforcement, suspension, and the production hostname in staging.
 
