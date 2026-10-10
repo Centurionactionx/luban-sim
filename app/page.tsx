@@ -8,6 +8,7 @@ import {
 import { SimulatorApp, type DashboardPayload } from "@/components/simulator-app";
 import {
   SESSION_COOKIE_NAME,
+  canHostCompetitions,
   getDashboard,
   getSessionFromToken,
   isDemoLoginAllowed,
@@ -106,6 +107,7 @@ export default async function Home() {
         <AccountControls
           name={state.user.name}
           initials={state.user.initials}
+          canHost={canHostCompetitions(state.user.role)}
           isPlatformAdmin={state.user.role === "platform_admin"}
         />
       }

@@ -32,6 +32,7 @@ export const APPLICATION_TABLES = [
   "holdings",
   "orders",
   "idempotency_records",
+  "order_rejections",
   "ledger_entries",
   "activity_events",
   "portfolio_snapshots",

@@ -6083,6 +6083,218 @@ html:has(dialog[open]) {
   color: var(--purple-deep);
 }
 
+/* Global admin log */
+.accounts-sheet.admin-log-sheet {
+  width: 100%;
+}
+
+.admin-log {
+  display: grid;
+  gap: 10px;
+  padding: 14px clamp(10px, 1.6vw, 22px) clamp(14px, 2vw, 22px);
+}
+
+.admin-log-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 12px;
+  font-size: 0.8rem;
+}
+
+.admin-log-filters fieldset {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 2px 8px 4px;
+  border: 1px solid var(--hairline);
+  border-radius: 3px;
+}
+
+.admin-log-filters legend {
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.admin-log-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.admin-log-field {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.admin-log-field select,
+.admin-log-field input {
+  padding: 2px 4px;
+  border: 1px solid var(--hairline);
+  border-radius: 3px;
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.8rem;
+}
+
+.admin-log-filters__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.admin-log-count {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.admin-log-count strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.admin-log-empty {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+/* Scrolls both ways: the table scrolls sideways, and its header sticks while the rows scroll. */
+.admin-log__scroll {
+  max-width: 100%;
+  max-height: min(78vh, 900px);
+  overflow: auto;
+  border: 1px solid var(--hairline);
+}
+
+.admin-log__table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.admin-log__table th,
+.admin-log__table td {
+  padding: 2px 8px;
+  white-space: nowrap;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.admin-log__table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding-top: 5px;
+  padding-bottom: 5px;
+  border-bottom: 2px solid var(--rule);
+  background: var(--paper);
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.admin-log__table tbody td {
+  border-bottom: 1px solid var(--hairline);
+}
+
+.admin-log__table tbody tr:nth-child(even) td {
+  background: var(--quiet-purple-2);
+}
+
+.admin-log__table tbody tr.admin-log__row--rejected td {
+  background: var(--negative-wash);
+}
+
+.admin-log__table time {
+  font-family: var(--font-data);
+}
+
+.admin-log__num {
+  text-align: right;
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+}
+
+.admin-log__detail span {
+  display: block;
+  max-width: 42ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-log-tag,
+.admin-log-side,
+.admin-log-sandbox {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 3px;
+  font-family: var(--font-ui);
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.6;
+}
+
+.admin-log-tag {
+  color: var(--ink);
+}
+
+.admin-log-tag--trade {
+  background: var(--quiet-purple);
+}
+
+.admin-log-tag--working_order {
+  background: var(--neutral-wash);
+}
+
+.admin-log-tag--host {
+  background: var(--positive-wash);
+}
+
+.admin-log-tag--account {
+  background: var(--chart-grid);
+}
+
+.admin-log-tag--security {
+  background: var(--negative-wash);
+}
+
+.admin-log-side {
+  border: 1px solid currentColor;
+}
+
+.admin-log-side--buy,
+.admin-log-side--cover {
+  color: var(--green);
+}
+
+.admin-log-side--sell,
+.admin-log-side--short {
+  color: var(--red);
+}
+
+.admin-log-sandbox {
+  margin-left: 6px;
+  border: 1px dashed var(--muted);
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.admin-log-more {
+  margin: 0;
+  font-size: 0.85rem;
+}
+
 .accounts-sheet.changelog {
   width: min(760px, 100%);
 }

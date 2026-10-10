@@ -539,6 +539,8 @@ async function placeOrderNow(input: PlaceOrderInput, options: FillOptions): Prom
     // even a business rejection, must roll everything back: recording it as a
     // rejection would commit a half-finished fill.
     let moneyMoved = false;
+    // Known once the account resolves; the rejection log records it.
+    let rejectedTeamId: string | null = null;
     try {
       const existing = await tx.get<IdempotencyRecordRow>(
         `SELECT request_fingerprint, outcome_type, result_json, error_json
@@ -620,6 +622,7 @@ async function placeOrderNow(input: PlaceOrderInput, options: FillOptions): Prom
       if (!account) {
         throw new AppError("UNAUTHORIZED", "Sign in before placing an order.", 401);
       }
+      rejectedTeamId = account.team_id;
       // A waiting order's placer who has left its team can never fill it;
       // checked first so no team-status refusal makes it wait forever.
       if (options.expectTeamId && account.team_id !== options.expectTeamId) {
@@ -1143,6 +1146,23 @@ async function placeOrderNow(input: PlaceOrderInput, options: FillOptions): Prom
             normalized.idempotencyKey,
             normalized.fingerprint,
             JSON.stringify(error.toJSON()),
+            new Date().toISOString(),
+          ],
+        );
+        await tx.run(
+          `INSERT INTO order_rejections (
+             id, team_id, actor_user_id, symbol, side, quantity,
+             error_code, message, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            randomUUID(),
+            rejectedTeamId,
+            normalized.actorUserId,
+            normalized.symbol,
+            normalized.side,
+            normalized.quantity,
+            error.code,
+            error.message,
             new Date().toISOString(),
           ],
         );

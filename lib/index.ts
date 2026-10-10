@@ -61,6 +61,8 @@ export {
 
 export type { ManagedResolution } from "./server/accounts";
 
+export { listAdminLog, listAdminLogOptions } from "./server/admin-log";
+
 export {
   COMPETITION_STATUSES,
   MAX_TEAM_CASH_CENTS,

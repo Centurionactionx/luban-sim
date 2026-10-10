@@ -21,7 +21,7 @@ import {
 import { postgresConnectionOptions } from "./postgres-config";
 
 const DEFAULT_DATABASE_PATH = join(process.cwd(), "data", "luban.sqlite");
-const SCHEMA_VERSION = 19;
+const SCHEMA_VERSION = 20;
 /** Map grouping within a sector; "Other" until the feed reports one. */
 const INSTRUMENT_INDUSTRY_COLUMN = "industry TEXT NOT NULL DEFAULT 'Other'";
 
@@ -329,6 +329,19 @@ const SHARED_TABLE_BODIES = {
       portfolio_version ${big} NOT NULL CHECK (portfolio_version >= 0),
       status TEXT NOT NULL CHECK (status IN ('FILLED', 'REJECTED')),
       created_at TEXT NOT NULL`,
+  // Rejected orders kept past the idempotency window (retention prunes
+  // idempotency_records after 7 days). Symbol, side, and quantity are the
+  // requested values; nothing filled.
+  order_rejections: (big: string) => `
+      id TEXT PRIMARY KEY,
+      team_id TEXT REFERENCES teams(id) ON DELETE CASCADE,
+      actor_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      symbol TEXT,
+      side TEXT,
+      quantity ${big},
+      error_code TEXT NOT NULL,
+      message TEXT NOT NULL,
+      created_at TEXT NOT NULL`,
   idempotency_records: () => `
       actor_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       idempotency_key TEXT NOT NULL,
@@ -512,6 +525,8 @@ const SCHEMA_INDEXES = [
   "CREATE INDEX IF NOT EXISTS idx_activity_competition_created ON activity_events (competition_id, created_at DESC)",
   "CREATE INDEX IF NOT EXISTS idx_activity_team_created ON activity_events (team_id, created_at DESC)",
   "CREATE INDEX IF NOT EXISTS idx_orders_team_created ON orders (team_id, created_at DESC)",
+  "CREATE INDEX IF NOT EXISTS idx_orders_created ON orders (created_at DESC)",
+  "CREATE INDEX IF NOT EXISTS idx_order_rejections_created ON order_rejections (created_at DESC)",
   "CREATE INDEX IF NOT EXISTS idx_holdings_symbol_quantity ON holdings (symbol, quantity)",
   "CREATE INDEX IF NOT EXISTS idx_idempotency_order ON idempotency_records (order_id)",
   "CREATE INDEX IF NOT EXISTS idx_idempotency_actor_created ON idempotency_records (actor_user_id, created_at)",
@@ -754,7 +769,8 @@ export async function runPostgresMigrations(tx: DbExecutor): Promise<void> {
   );
 
   // Tables added after v1: valuation lab (v8), working orders (v12), feedback
-  // (v14), watchlists (v15), market cache (v16), claims (v17), announcements (v18).
+  // (v14), watchlists (v15), market cache (v16), claims (v17), announcements (v18),
+  // order rejections (v20).
   const backfillValuationAccounts = !relations.has("admin_valuation_accounts");
   for (const [name, body] of Object.entries(SHARED_TABLE_BODIES)) {
     if (!relations.has(name)) {
@@ -913,6 +929,7 @@ async function clearDomainData(
     "activity_events",
     "ledger_entries",
     "idempotency_records",
+    "order_rejections",
     "orders",
     "holdings",
     "account_invitations",

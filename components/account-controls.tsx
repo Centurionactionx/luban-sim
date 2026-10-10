@@ -8,6 +8,7 @@ import {
   ChatIcon,
   ChevronDownIcon,
   FlaskIcon,
+  HistoryIcon,
   SignOutIcon,
   UserIcon,
 } from "./simulator-icons";
@@ -25,16 +26,20 @@ const CLOSE_DELAY_MS = 180;
 export function AccountControls({
   name,
   initials,
+  canHost = false,
   isPlatformAdmin = false,
 }: {
   name: string;
   initials: string;
+  /** Hosts and platform admins. */
+  canHost?: boolean;
   isPlatformAdmin?: boolean;
 }) {
   return (
     <AccountMenu
       name={name}
       initials={initials}
+      canHost={canHost}
       isPlatformAdmin={isPlatformAdmin}
       signOut={
         <SignOutControl
@@ -50,11 +55,13 @@ export function AccountControls({
 export function AccountMenu({
   name,
   initials,
+  canHost,
   isPlatformAdmin,
   signOut,
 }: {
   name: string;
   initials: string;
+  canHost: boolean;
   isPlatformAdmin: boolean;
   signOut: ReactNode;
 }) {
@@ -137,6 +144,14 @@ export function AccountMenu({
               Account
             </Link>
           </li>
+          {canHost ? (
+            <li>
+              <a className="account-controls__item" href="/admin/log">
+                <HistoryIcon />
+                Global log
+              </a>
+            </li>
+          ) : null}
           {isPlatformAdmin ? (
             <>
               <li>

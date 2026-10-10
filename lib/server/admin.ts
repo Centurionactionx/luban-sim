@@ -67,7 +67,7 @@ interface MutableTeamRow {
   version: number;
 }
 
-async function requireHost(actorUserId: string): Promise<void> {
+export async function requireHost(actorUserId: string): Promise<void> {
   const user = await getSessionUser(actorUserId);
 
   if (!user) {

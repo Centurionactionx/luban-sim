@@ -4688,6 +4688,10 @@ export function SimulatorApp({
                   <UsersIcon />
                   Team &amp; user management
                 </a>
+                <a className="button button--secondary host-accounts-link" href="/admin/log">
+                  <HistoryIcon />
+                  Global log
+                </a>
                 <details className="host-schedule">
                   <summary className="host-schedule__heading">
                     <strong>Competition schedule</strong>

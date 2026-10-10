@@ -118,6 +118,63 @@ export interface AuthAuditEventView {
   createdAt: string;
 }
 
+/** Global admin log: trades, rejections, working orders, host changes and account events in one feed. */
+export type AdminLogCategory = "TRADE" | "WORKING_ORDER" | "HOST" | "ACCOUNT" | "SECURITY";
+export type AdminLogStatus = "FILLED" | "REJECTED" | "PLACED" | "CANCELLED" | "EXPIRED";
+export type AdminLogSide = "BUY" | "SELL" | "SHORT" | "COVER";
+
+export interface AdminLogRow {
+  /** Source-prefixed so ids from different tables never collide: "order:…", "reject:…", "activity:…", "audit:…". */
+  id: string;
+  createdAt: string;
+  category: AdminLogCategory;
+  /** Short label such as "Filled", "Rejected", "Cash adjusted", "Renamed". */
+  event: string;
+  status: AdminLogStatus | null;
+  teamId: string | null;
+  teamName: string | null;
+  /** True for a platform admin's own sandbox trading team. */
+  sandbox: boolean;
+  actorName: string | null;
+  subjectName: string | null;
+  symbol: string | null;
+  side: AdminLogSide | null;
+  quantity: number | null;
+  priceCadCents: number | null;
+  valueCadCents: number | null;
+  cashAfterCadCents: number | null;
+  detail: string;
+}
+
+export interface AdminLogFilters {
+  categories?: AdminLogCategory[];
+  statuses?: AdminLogStatus[];
+  sides?: AdminLogSide[];
+  /** A team id, or "sandbox" for every admin sandbox team. */
+  teamId?: string;
+  /** Matches the actor, or the subject of an account event. */
+  userId?: string;
+  symbol?: string;
+  /** ISO instants, inclusive. */
+  from?: string;
+  to?: string;
+  /** Sandbox rows are hidden unless this is true or teamId is "sandbox". */
+  includeSandbox?: boolean;
+  /** Opaque cursor from a previous page's nextCursor. */
+  before?: string;
+  limit?: number;
+}
+
+export interface AdminLogPage {
+  rows: AdminLogRow[];
+  nextCursor: string | null;
+}
+
+export interface AdminLogOptions {
+  teams: Array<{ id: string; name: string; sandbox: boolean }>;
+  users: Array<{ id: string; name: string; role: UserRole }>;
+}
+
 /**
  * Feedback is about either the public website (lubancanada.com) or this
  * simulator. The sender is the signed-in account, so there is no email field.
