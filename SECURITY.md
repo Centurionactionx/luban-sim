@@ -1,6 +1,6 @@
 # Security
 
-**Joseph Wang**, Lead Developer and AI Security Engineer
+**Joseph (Chengyou) Wang**, Lead Developer and AI Security Engineer
 
 Market Lab runs a real competition with real students, and the people most likely to poke at it are the students themselves, often with an AI agent doing the poking. So the protections here are aimed at two things. Nobody should be able to give their team money the market didn't give them, and nobody should be able to knock the site offline or burn through its hosting budget mid-competition. This page lists what's in place.
 
