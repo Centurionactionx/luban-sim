@@ -4,6 +4,8 @@ Market Lab is the paper-trading simulator Luban runs for its student stock compe
 
 It's live at [sim.lubancanada.com](https://sim.lubancanada.com). No real money moves anywhere. There's no brokerage connection, and nothing in the app is investment advice.
 
+Built and secured by Joseph Wang, Lead Developer and AI Security Engineer. See [SECURITY.md](SECURITY.md) for the protections in place.
+
 ## Stack
 
 - Next.js 16 (App Router) and React 19, TypeScript throughout
