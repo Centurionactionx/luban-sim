@@ -2843,6 +2843,7 @@ export function SimulatorApp({
   const [chartStyle, setChartStyle] = useState<ChartStyle>("line");
   const chartDialogRef = useRef<HTMLDialogElement>(null);
   const maxConfirmRef = useRef<HTMLDialogElement>(null);
+  const buyBlockedRef = useRef<HTMLDialogElement>(null);
   // The portfolio map renders only while its dialog is open (view not null).
   const mapDialogRef = useRef<HTMLDialogElement>(null);
   // A pre-loaded account still named "User 1" is asked for a name on arrival,
@@ -3483,6 +3484,12 @@ export function SimulatorApp({
   const competitionEndedEarly =
     dashboard.competition.status === "ended" &&
     dashboard.competition.endsAt > dashboard.serverTime;
+  // A listing that can't be bought or shorted (e.g. a penny stock) leaves the
+  // button live so a click explains why in a popup; a banner says so up front.
+  const buyBlockedReason =
+    selectedQuote.buyBlockedReason && (action === "BUY" || action === "SHORT")
+      ? selectedQuote.buyBlockedReason
+      : null;
   const tradeBlockedReason: string | null =
     connection !== "connected"
       ? "Wait for the simulator to reconnect before trading."
@@ -3490,8 +3497,6 @@ export function SimulatorApp({
         ? "Trading waits for a fresh market quote."
         : tradingHaltReason
           ? tradingHaltReason
-          : selectedQuote.buyBlockedReason && (action === "BUY" || action === "SHORT")
-            ? selectedQuote.buyBlockedReason
             : isPlatformAdmin && !hasAdminTradingAccount
             ? "Set your admin test cash before placing an order."
             : isCompetitionHost
@@ -4186,6 +4191,10 @@ export function SimulatorApp({
     event.preventDefault();
     if (tradeBlockedReason) {
       setTicketStatus({ kind: "error", message: tradeBlockedReason });
+      return;
+    }
+    if (buyBlockedReason) {
+      buyBlockedRef.current?.showModal();
       return;
     }
 
@@ -5690,6 +5699,14 @@ export function SimulatorApp({
                   </span>
                 </p>
               ) : null}
+              {selectedQuote.buyBlockedReason ? (
+                <p className="quote-halt" id="quote-buy-blocked">
+                  <LockIcon />
+                  <span>
+                    <strong>Unavailable to buy.</strong> {selectedQuote.buyBlockedReason}
+                  </span>
+                </p>
+              ) : null}
             </section>
 
             {/* The day's move, tinted green or red, with where the quote came from. */}
@@ -6677,6 +6694,31 @@ export function SimulatorApp({
                             : `Place simulated ${side.toLowerCase()}`}
                     <ArrowIcon />
                   </button>
+                  <dialog
+                    ref={buyBlockedRef}
+                    className="confirm-dialog"
+                    role="alertdialog"
+                    aria-labelledby="buy-blocked-title"
+                    aria-describedby="buy-blocked-body"
+                    onClick={(event) => {
+                      if (event.target === event.currentTarget) event.currentTarget.close();
+                    }}
+                  >
+                    <h2 id="buy-blocked-title">
+                      Can&rsquo;t {action === "SHORT" ? "short" : "buy"} {selectedQuote.symbol}
+                    </h2>
+                    <p id="buy-blocked-body">{buyBlockedReason}</p>
+                    <div className="confirm-dialog__actions">
+                      <button
+                        type="button"
+                        className="button button--primary"
+                        autoFocus
+                        onClick={() => buyBlockedRef.current?.close()}
+                      >
+                        OK
+                      </button>
+                    </div>
+                  </dialog>
                   <button
                     className="ticket-receipt__clear"
                     type="button"

@@ -5,15 +5,39 @@ Releases before v1.28.0 didn't have numbers, so they're listed by date.
 
 <!-- Generated from lib/changelog.ts by `pnpm changelog`. Edit that file, not this one. -->
 
-## Unreleased: Short selling
+## v1.50.0: Short selling (2026-10-14)
 
 ### New
 
 - Short selling. The order ticket has a new Action menu: Buy, Sell, Short and Buy to cover. Short sells shares your team doesn't own, a bet that the price will fall: you get the cash now and owe the shares back. Buy to cover buys them back and locks in the gain or loss. Shorts show as negative holdings, follow the same one-holding and 25-stock limits, and are market orders only.
+- Announcements, normal or urgent, can show at the top of the trading room. You can dismiss them.
+- Pre-loaded accounts. Sign in with the email you gave on the registration form and you land straight on your team. If your account still has a placeholder name like "User 1", a "Set your name" pop-up asks for one, and the notifications menu reminds you until you save it.
+- Clicking a symbol in Waiting orders or Trade history loads its chart and quote.
 
 ### Improved
 
 - Cash from short sales is owed back, so it doesn't count as buying power. Covering a short is always allowed, even if it leaves your team's cash below zero.
+- No single holding can grow past 25% of your team's total value. The ticket's Max button and its confirmation both respect the cap.
+- Holdings, value history, waiting orders and trades share one tabbed area under the portfolio summary.
+- Labels use the regular font at readable sizes instead of small uppercase monospace.
+- The "Prototype mode" strip under the header is gone.
+- Day orders skip market holidays: TSX holidays for CAD listings and US holidays for USD ones. The ticket shows when a day order will really expire.
+- If a stock can't be bought (its asset class is turned off, the symbol is blocked, or a crypto lot is worth under $1), the ticket tells you before you try.
+- Stocks and ETFs under $1 can't be bought or shorted. A banner on the quote says so, and you can still sell or buy to cover.
+- The trading room opens on your real portfolio instead of placeholder numbers. Shimmering tiles show while it loads, and the portfolio map loads only when you open it.
+- The order ticket stays side by side on 1280px screens, and a wide estimated total wraps.
+- Schedule changes in the activity feed read as dates and times.
+
+### Fixed
+
+- A slow lookup for an earlier symbol could replace the stock you'd just picked.
+- A competition that ended early still showed a future end date.
+- An order request that hangs now times out after 20 seconds and offers a safe retry that won't place the order twice.
+- The stale-quote notice clears once a fresh price arrives.
+
+### Security
+
+- Order limits: 10 market orders a minute and 200 a day per student, and at most 25 different stocks per team.
 
 ## v1.40.0: A clearer portfolio summary and leaderboard (2026-10-06)
 

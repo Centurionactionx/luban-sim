@@ -33,12 +33,30 @@ export const CHANGE_KIND_LABELS: Record<ChangeKind, string> = {
 
 export const CHANGELOG: readonly ChangelogRelease[] = [
   {
-    version: "Unreleased",
-    date: null,
+    version: "1.50.0",
+    date: "2026-10-14",
     title: "Short selling",
     changes: [
       { kind: "added", text: "Short selling. The order ticket has a new Action menu: Buy, Sell, Short and Buy to cover. Short sells shares your team doesn't own, a bet that the price will fall: you get the cash now and owe the shares back. Buy to cover buys them back and locks in the gain or loss. Shorts show as negative holdings, follow the same one-holding and 25-stock limits, and are market orders only." },
+      { kind: "added", text: "Announcements, normal or urgent, can show at the top of the trading room. You can dismiss them." },
+      { kind: "added", text: "Pre-loaded accounts. Sign in with the email you gave on the registration form and you land straight on your team. If your account still has a placeholder name like \"User 1\", a \"Set your name\" pop-up asks for one, and the notifications menu reminds you until you save it." },
+      { kind: "added", text: "Clicking a symbol in Waiting orders or Trade history loads its chart and quote." },
       { kind: "changed", text: "Cash from short sales is owed back, so it doesn't count as buying power. Covering a short is always allowed, even if it leaves your team's cash below zero." },
+      { kind: "changed", text: "No single holding can grow past 25% of your team's total value. The ticket's Max button and its confirmation both respect the cap." },
+      { kind: "changed", text: "Holdings, value history, waiting orders and trades share one tabbed area under the portfolio summary." },
+      { kind: "changed", text: "Labels use the regular font at readable sizes instead of small uppercase monospace." },
+      { kind: "changed", text: "The \"Prototype mode\" strip under the header is gone." },
+      { kind: "changed", text: "Day orders skip market holidays: TSX holidays for CAD listings and US holidays for USD ones. The ticket shows when a day order will really expire." },
+      { kind: "changed", text: "If a stock can't be bought (its asset class is turned off, the symbol is blocked, or a crypto lot is worth under $1), the ticket tells you before you try." },
+      { kind: "changed", text: "Stocks and ETFs under $1 can't be bought or shorted. A banner on the quote says so, and you can still sell or buy to cover." },
+      { kind: "changed", text: "The trading room opens on your real portfolio instead of placeholder numbers. Shimmering tiles show while it loads, and the portfolio map loads only when you open it." },
+      { kind: "changed", text: "The order ticket stays side by side on 1280px screens, and a wide estimated total wraps." },
+      { kind: "changed", text: "Schedule changes in the activity feed read as dates and times." },
+      { kind: "fixed", text: "A slow lookup for an earlier symbol could replace the stock you'd just picked." },
+      { kind: "fixed", text: "A competition that ended early still showed a future end date." },
+      { kind: "fixed", text: "An order request that hangs now times out after 20 seconds and offers a safe retry that won't place the order twice." },
+      { kind: "fixed", text: "The stale-quote notice clears once a fresh price arrives." },
+      { kind: "security", text: "Order limits: 10 market orders a minute and 200 a day per student, and at most 25 different stocks per team." },
     ],
   },
   {

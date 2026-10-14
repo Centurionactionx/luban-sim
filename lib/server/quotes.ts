@@ -114,6 +114,12 @@ export function isSymbolBlocked(symbol: string): boolean {
 
 /** A crypto lot worth less than this (CAD cents) can be sold but not bought. */
 export const MIN_CRYPTO_LOT_CAD_CENTS = 100;
+/**
+ * A stock or ETF priced under this (cents, in its own currency) can be sold
+ * or covered but not bought or shorted: whole-cent prices round sub-$1 shares
+ * by up to 10% or more, which would let a bot harvest the rounding.
+ */
+export const MIN_STOCK_PRICE_CENTS = 100;
 
 /**
  * Why a new buy of this quote would be refused, or null. The one place these
@@ -137,6 +143,12 @@ function buyRefusal(quote: Quote): { code: string; message: string } | null {
     return {
       code: "LOT_TOO_SMALL",
       message: `One lot of ${quote.symbol} is now worth less than $1, so new buys are paused. You can still sell.`,
+    };
+  }
+  if (quote.assetClass !== "CRYPTO" && quote.priceCents < MIN_STOCK_PRICE_CENTS) {
+    return {
+      code: "PRICE_TOO_LOW",
+      message: `${quote.symbol} is a penny stock (under $1), so it can't be bought or shorted. You can still sell or buy to cover.`,
     };
   }
   return null;
