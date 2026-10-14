@@ -1,6 +1,6 @@
 // Captures the annotated screenshots used by the beginner's how-to guide
 // (lubancanada.com/sim-guide). Each shot is clipped to one feature and marked
-// with red ellipses and numbered badges; the guide text refers to those
+// with red rounded boxes and numbered badges; the guide text refers to those
 // numbers, so keep the target order stable when editing the shot list.
 //
 // It only reads: it signs in as a demo user, opens dialogs, types into fields,
@@ -115,67 +115,52 @@ async function textRectOf(locator) {
 }
 
 /**
- * Sizes an ellipse that surrounds the rect: at least `inflate` px bigger on
- * each axis, and large enough that points `slack` px in from each corner sit
- * inside it, so a tall box isn't cut through at its corners. Uses the
- * smallest such ellipse (axes scaled by sqrt 2) when the minimums allow it.
+ * Grows the rect by inflateX/inflateY on each side (capped so boxes stay
+ * snug), kept inside the viewport so the outline stays whole.
  */
-function fitEllipse(rect, { inflateX = 14, inflateY = 10, slack = 4, fit = true }) {
-  const cx = rect.x + rect.width / 2;
-  const cy = rect.y + rect.height / 2;
-  let rx = rect.width / 2 + inflateX;
-  let ry = rect.height / 2 + inflateY;
-  // Never wider than the space to the viewport edge, so the ring stays whole.
-  const maxRx = Math.max(rx, Math.min(cx, VIEWPORT.width - cx) - 10);
-  if (fit) {
-    const a = Math.max(0, rect.width / 2 - slack);
-    const b = Math.max(0, rect.height / 2 - slack);
-    if (a * Math.SQRT2 >= rx && b * Math.SQRT2 >= ry && a * Math.SQRT2 <= maxRx) {
-      rx = a * Math.SQRT2;
-      ry = b * Math.SQRT2;
-    } else if (a * Math.SQRT2 < rx || a * Math.SQRT2 > maxRx) {
-      rx = Math.min(Math.max(rx, a * Math.SQRT2), maxRx);
-      ry = Math.max(ry, b / Math.sqrt(1 - (a / rx) ** 2));
-    } else {
-      rx = Math.min(maxRx, Math.max(rx, a / Math.sqrt(1 - (b / ry) ** 2)));
-    }
-  }
-  return { cx, cy, rx, ry };
+function fitBox(rect, { inflateX = 8, inflateY = 6 }) {
+  const padX = Math.min(inflateX, 6);
+  const padY = Math.min(inflateY, 5);
+  const left = Math.max(6, rect.x - padX);
+  const top = rect.y - padY;
+  const right = Math.min(VIEWPORT.width - 6, rect.x + rect.width + padX);
+  return { x: left, y: top, width: right - left, height: rect.height + padY * 2 };
 }
 
 /**
- * Draws red ellipses + numbered badges around each target (numbered in order)
- * and returns the viewport rects the overlays cover, so the clip can include
- * them. Target options: inflateX/inflateY (minimum growth), slack, fit, and
- * badgeAngle (degrees around the ellipse; 135 = upper left, the default).
- * Badges sit just outside the stroke so they never cover the circled feature.
- * Overlays go inside the open dialog when there is one, so they render in the
- * top layer above it.
+ * Draws red rounded boxes + numbered badges around each target (numbered in
+ * order) and returns the viewport rects the overlays cover, so the clip can
+ * include them. Target options: inflateX/inflateY (padding) and badgeAngle
+ * (degrees around the box; 135 = top-left corner, the default, 90 = top
+ * middle, 180 = left middle). Badges sit on the outline, nudged outward, so
+ * they never cover the boxed feature. Overlays go inside the open dialog when
+ * there is one, so they render in the top layer above it.
  */
 async function annotate(page, targets) {
-  // A target may circle several rects under one number; the badge goes on the first.
+  // A target may box several rects under one number; the badge goes on the first.
   const rings = targets.flatMap((target, index) =>
     [target.rect].flat().map((rect, part) => ({ ...target, rect, number: index + 1, badge: part === 0 })),
   );
   const shapes = rings.map((target) => {
-    const { cx, cy, rx, ry } = fitEllipse(target.rect, target);
+    const shape = fitBox(target.rect, target);
     const angle = ((target.badgeAngle ?? 135) * Math.PI) / 180;
-    const cos = Math.cos(angle);
-    const sin = Math.sin(angle);
-    // Outward normal at that point of the ellipse (screen y points down).
-    const nx = cos / rx;
-    const ny = -sin / ry;
-    const length = Math.hypot(nx, ny);
-    const offset = BADGE_SIZE / 2 - 4;
+    // Squash the unit circle onto the square: 45-degree steps land on corners.
+    const clamp = (v) => Math.max(-1, Math.min(1, v * Math.SQRT2));
+    const ux = clamp(Math.cos(angle));
+    const uy = clamp(-Math.sin(angle)); // screen y points down
+    // Push straight out from an edge, or diagonally out from a corner.
+    const nx = Math.abs(ux) === 1 ? ux : 0;
+    const ny = Math.abs(uy) === 1 ? uy : 0;
+    const length = Math.hypot(nx, ny) || 1;
+    const offset = BADGE_SIZE / 2 - 6;
+    const px = shape.x + (shape.width / 2) * (1 + ux);
+    const py = shape.y + (shape.height / 2) * (1 + uy);
     return {
       number: target.number,
       badge: target.badge,
-      x: cx - rx,
-      y: cy - ry,
-      width: rx * 2,
-      height: ry * 2,
-      badgeX: cx + rx * cos + (nx / length) * offset - BADGE_SIZE / 2,
-      badgeY: cy - ry * sin + (ny / length) * offset - BADGE_SIZE / 2,
+      ...shape,
+      badgeX: px + (nx / length) * offset - BADGE_SIZE / 2,
+      badgeY: py + (ny / length) * offset - BADGE_SIZE / 2,
     };
   });
 
@@ -193,13 +178,13 @@ async function annotate(page, targets) {
     const covered = [];
 
     for (const shape of shapes) {
-      const ellipse = document.createElement("div");
-      ellipse.style.cssText = `position: absolute; box-sizing: border-box;
+      const outline = document.createElement("div");
+      outline.style.cssText = `position: absolute; box-sizing: border-box;
         left: ${shape.x - origin.left}px; top: ${shape.y - origin.top}px;
         width: ${shape.width}px; height: ${shape.height}px;
-        border: 4px solid #e0001b; border-radius: 50%;
+        border: 4px solid #e0001b; border-radius: 12px;
         box-shadow: 0 0 0 2px #fff; pointer-events: none; z-index: 2147483647;`;
-      layer.append(ellipse);
+      layer.append(outline);
 
       covered.push({ x: shape.x - 2, y: shape.y - 2, width: shape.width + 4, height: shape.height + 4 });
       if (!shape.badge) continue;
@@ -277,13 +262,19 @@ async function hoverPlot(page, plot, fraction) {
   await page.waitForTimeout(300);
 }
 
+/** Switch the portfolio column to one of its tabs. */
+async function openPortfolioTab(page, name) {
+  await page.getByRole("tab", { name }).click();
+  await page.waitForTimeout(800);
+}
+
 // --- Shot list ---------------------------------------------------------------
 // Each entry sets the page up, then returns { region, targets }. Targets are
 // numbered in the order listed; the guide text depends on that order.
 
 const shots = {
   async "01-overview"(page) {
-    // The columns run past the fold; circle the part that is on screen.
+    // The columns run past the fold; box the part that is on screen.
     const visible = (locator) => async () => {
       const r = await rectOf(locator);
       const bottom = Math.min(r.y + r.height, VIEWPORT.height - 14);
@@ -292,27 +283,24 @@ const shots = {
     return {
       fullViewport: true,
       targets: [
-        { rect: visible(page.locator(".room-column--portfolio")), inflateX: 0, inflateY: 0, fit: false, badgeAngle: 90 },
-        { rect: visible(page.locator(".room-column--workbench")), inflateX: 0, inflateY: 0, fit: false, badgeAngle: 90 },
-        { rect: visible(page.locator(".room-column--team")), inflateX: 0, inflateY: 0, fit: false, badgeAngle: 90 },
+        { rect: visible(page.locator(".room-column--portfolio")), inflateX: 0, inflateY: 0, badgeAngle: 90 },
+        { rect: visible(page.locator(".room-column--workbench")), inflateX: 0, inflateY: 0, badgeAngle: 90 },
+        { rect: visible(page.locator(".room-column--team")), inflateX: 0, inflateY: 0, badgeAngle: 90 },
       ],
     };
   },
 
   async "02-header"(page) {
     const lockup = page.locator(".competition-lockup");
-    const strip = page.locator(".simulation-strip");
     return {
       region: page.locator(".app-header"),
-      extraRegion: strip,
       targets: [
         { rect: box(lockup.locator("strong"), lockup.locator(".state-tag")) },
         { rect: box(page.locator(".guide-link")) },
-        { rect: box(page.locator(".theme-toggle")), inflateX: 10, inflateY: 10 },
-        { rect: box(page.getByRole("button", { name: "Send feedback" })), inflateX: 10, inflateY: 10 },
+        { rect: box(page.locator(".theme-toggle")), inflateX: 3, inflateY: 3 },
+        { rect: box(page.getByRole("button", { name: "Send feedback" })), inflateX: 3, inflateY: 3 },
         // A fresh browser hasn't seen any activity, so the bell shows its bubble.
-        { rect: box(page.locator(".activity-bell__button")), inflateX: 10, inflateY: 10 },
-        { rect: box(strip.locator(":scope > div").last()), inflateY: 8, badgeAngle: 180 },
+        { rect: box(page.locator(".activity-bell__button")), inflateX: 3, inflateY: 3 },
       ],
     };
   },
@@ -324,23 +312,26 @@ const shots = {
       region: card,
       targets: [
         { rect: box(card.getByText("Total portfolio value (CAD)"), card.locator("strong").first()), inflateX: 10, inflateY: 8 },
-        { rect: box(term("Daily return")), inflateX: 2, inflateY: 4, fit: false, badgeAngle: 160 },
-        { rect: box(term("Total return")), inflateX: 2, inflateY: 4, fit: false, badgeAngle: 20 },
-        { rect: box(card.locator(":scope > div").nth(1)), inflateX: 10, inflateY: 8, slack: 12, badgeAngle: 0 },
-        { rect: box(term(/^Unrealized/)), inflateX: 6, inflateY: 6, slack: 12 },
-        { rect: box(term(/^Realized/)), inflateX: 6, inflateY: 6, slack: 12, badgeAngle: 45 },
+        { rect: box(term("Daily return")), inflateX: 2, inflateY: 4, badgeAngle: 160 },
+        { rect: box(term("Total return")), inflateX: 2, inflateY: 4, badgeAngle: 20 },
+        { rect: box(card.locator(":scope > div").nth(1)), inflateX: 10, inflateY: 8, badgeAngle: 0 },
+        { rect: box(term(/^Unrealized/)), inflateX: 6, inflateY: 6, badgeAngle: 225 },
+        { rect: box(term(/^Realized/)), inflateX: 6, inflateY: 6, badgeAngle: 315 },
       ],
     };
   },
 
   async "04-portfolio-history"(page) {
+    await openPortfolioTab(page, "Value history");
     const chart = page.locator(".portfolio-chart");
     return {
       region: chart,
+      extraRegion: page.getByRole("tablist", { name: "Portfolio views" }),
       targets: [
         { rect: box(chart.locator(".range-tabs")) },
         { rect: box(chart.locator(".chart__badge").first()) },
       ],
+      reload: true,
     };
   },
 
@@ -368,9 +359,9 @@ const shots = {
       extraRegion: page.locator(".quote-band"),
       targets: [
         { rect: text(page.locator(".quote-meta")), inflateX: 10, inflateY: 6, badgeAngle: 180 },
-        { rect: text(page.locator(".quote-price").locator("strong, span").first()), slack: 10, badgeAngle: 180 },
+        { rect: text(page.locator(".quote-price").locator("strong, span").first()), badgeAngle: 180 },
         { rect: box(page.locator(".watch-toggle")), inflateX: 10, inflateY: 10, badgeAngle: 0 },
-        { rect: box(page.locator(".quote-band")), inflateX: 8, inflateY: 6, slack: 8, badgeAngle: 225 },
+        { rect: box(page.locator(".quote-band")), inflateX: 8, inflateY: 6, badgeAngle: 225 },
       ],
     };
   },
@@ -404,7 +395,7 @@ const shots = {
       keepScroll: true,
       targets: [
         { rect: box(dialog.locator(".chart-style")), inflateX: 10, inflateY: 8 },
-        { rect: box(dialog.locator(".chart__readout")), inflateX: 10, inflateY: 8, slack: 0 },
+        { rect: box(dialog.locator(".chart__readout")), inflateX: 10, inflateY: 8 },
         { rect: box(dialog.locator(".chart__study")), inflateX: 10, inflateY: 8, badgeAngle: 0 },
         { rect: box(footer.locator(".range-tabs"), footer.locator(".chart-dates__toggle")), inflateX: 10, inflateY: 8 },
         { rect: box(footer.locator(".chart-interval")), inflateX: 10, inflateY: 8 },
@@ -420,12 +411,12 @@ const shots = {
     return {
       region: ticket.locator(".ticket-layout"),
       targets: [
-        { rect: box(ticket.locator(".side-control")) },
-        { rect: box(ticket.locator(".order-type")), inflateX: 10, inflateY: 8 },
+        { rect: box(ticket.locator(".order-type").first()), inflateX: 10, inflateY: 8 },
+        { rect: box(ticket.locator(".order-type").nth(1)), inflateX: 10, inflateY: 8, badgeAngle: 180 },
         { rect: box(ticket.locator("#order-quantity")), badgeAngle: 180 },
         { rect: box(ticket.locator(".ticket-max")), inflateX: 10, inflateY: 8 },
-        { rect: box(receipt.locator("dl")), inflateX: 8, inflateY: 6, fit: false, badgeAngle: 0 },
-        { rect: box(receipt.locator("button[type=submit]")) },
+        { rect: box(receipt.locator("dl")), inflateX: 8, inflateY: 6, badgeAngle: 0 },
+        { rect: box(receipt.locator("button[type=submit]")), badgeAngle: 180 },
         { rect: box(receipt.getByRole("button", { name: "Clear ticket" })), badgeAngle: 180 },
       ],
     };
@@ -464,10 +455,10 @@ const shots = {
     return {
       region: ticket,
       targets: [
-        { rect: box(ticket.locator(".order-type")), inflateX: 10, inflateY: 8 },
+        { rect: box(ticket.locator(".order-type").nth(1)), inflateX: 10, inflateY: 8 },
         { rect: box(ticket.locator("#order-trigger-price")), badgeAngle: 0 },
         { rect: box(ticket.locator("#order-time-in-force")), badgeAngle: 0 },
-        { rect: box(ticket.locator(".ticket-bracket")), inflateX: 10, inflateY: 8, slack: 16 },
+        { rect: box(ticket.locator(".ticket-bracket")), inflateX: 10, inflateY: 8 },
       ],
       reload: true,
     };
@@ -478,9 +469,10 @@ const shots = {
     const row = section.locator("tbody tr").first();
     return {
       region: section,
+      extraRegion: page.getByRole("tablist", { name: "Portfolio views" }),
       targets: [
-        { rect: text(row.locator(".symbol-button")), inflateX: 8, inflateY: 6, slack: 0 },
-        { rect: text(row.locator("td").nth(0)), inflateX: 8, inflateY: 6, slack: 0, badgeAngle: 270 },
+        { rect: text(row.locator(".symbol-button")), inflateX: 8, inflateY: 6 },
+        { rect: text(row.locator("td").nth(0)), inflateX: 8, inflateY: 6, badgeAngle: 270 },
         { rect: text(row.locator('[data-label="Avg cost"]')), inflateX: 8, inflateY: 6, badgeAngle: 270 },
         { rect: text(row.locator('[data-label="Market value"]')), inflateX: 8, inflateY: 6, badgeAngle: 270 },
         { rect: text(row.locator('[data-label="Gain/loss"]')), inflateX: 8, inflateY: 6, badgeAngle: 270 },
@@ -502,10 +494,10 @@ const shots = {
       region: dialog,
       keepScroll: true,
       targets: [
-        { rect: box(control("Color by")), inflateX: 10, inflateY: 8, slack: 0 },
-        { rect: box(control("Size by")), inflateX: 10, inflateY: 8, slack: 0 },
+        { rect: box(control("Color by")), inflateX: 10, inflateY: 8 },
+        { rect: box(control("Size by")), inflateX: 10, inflateY: 8 },
         { rect: box(dialog.locator(".portfolio-map__toggle")), inflateX: 10, inflateY: 8 },
-        { rect: box(tile), inflateX: 0, inflateY: 0, fit: false, badgeAngle: 90 },
+        { rect: box(tile), inflateX: 0, inflateY: 0, badgeAngle: 90 },
         { rect: box(dialog.locator(".portfolio-map__legend ol")), inflateX: 10, inflateY: 8 },
       ],
       reload: true,
@@ -513,15 +505,18 @@ const shots = {
   },
 
   async "14-waiting-orders"(page) {
+    await openPortfolioTab(page, "Waiting orders");
     const section = page.locator(".working-orders-section");
     const row = section.locator("tbody tr").first();
     return {
       region: section,
+      extraRegion: page.getByRole("tablist", { name: "Portfolio views" }),
       targets: [
         { rect: text(row.locator("[data-label=Order]")), inflateX: 8, inflateY: 6 },
         { rect: text(row.locator("[data-label=Lasts]")), inflateX: 8, inflateY: 6 },
         { rect: box(row.getByRole("button", { name: /^Cancel/ })), inflateX: 8, inflateY: 6 },
       ],
+      reload: true,
     };
   },
 
@@ -538,7 +533,7 @@ const shots = {
       keepScroll: true,
       targets: [
         { rect: box(bell.locator(".activity-bell__button")), inflateX: 10, inflateY: 10, badgeAngle: 315 },
-        { rect: box(entry), inflateX: 8, inflateY: 6, slack: 12 },
+        { rect: box(entry), inflateX: 8, inflateY: 6 },
         { rect: box(entry.locator(".activity-state")), inflateX: 10, inflateY: 8 },
       ],
       after: () => page.keyboard.press("Escape"),
@@ -551,11 +546,11 @@ const shots = {
       region: page.locator(".presence-section"),
       extraRegion: section,
       targets: [
-        { rect: box(page.locator(".presence-list")), inflateX: 10, inflateY: 8, slack: 12 },
-        { rect: text(section.locator("tr.is-current .leaderboard-bars__name")), inflateX: 8, inflateY: 6, badgeAngle: 180 },
+        { rect: box(page.locator(".presence-list")), inflateX: 10, inflateY: 8 },
+        { rect: text(section.locator("tr.is-current .leaderboard-bars__name")), inflateX: 8, inflateY: 2, badgeAngle: 180 },
         // The value column folds under each team's name in the narrow rail.
-        { rect: text(section.locator("tr.is-current .leaderboard-bars__inline-value")), inflateX: 10, inflateY: 6, badgeAngle: 225 },
-        { rect: box(section.locator("tr.is-current .leaderboard-bars__return")), inflateX: 6, inflateY: 4, slack: 0, badgeAngle: 90 },
+        { rect: text(section.locator("tr.is-current .leaderboard-bars__inline-value")), inflateX: 10, inflateY: 2, badgeAngle: 225 },
+        { rect: box(section.locator("tr.is-current .leaderboard-bars__return")), inflateX: 6, inflateY: 4, badgeAngle: 90 },
       ],
     };
   },
@@ -567,7 +562,7 @@ const shots = {
       targets: [
         { rect: box(footer.locator(".connection-state")) },
         { rect: text(footer.locator(":scope > div").filter({ hasText: "Last team sync" })) },
-        { rect: box(footer.locator(".status-footer__version")), inflateX: 10, inflateY: 8 },
+        { rect: box(footer.locator(".status-footer__version")), inflateX: 10, inflateY: 8, badgeAngle: 0 },
       ],
     };
   },
@@ -580,23 +575,26 @@ const shots = {
       targets: [
         { rect: box(section.locator(".panel-heading__aside")), inflateX: 10, inflateY: 8, badgeAngle: 180 },
         { rect: box(section.locator("thead .sort-button").first()), inflateX: 10, inflateY: 8, badgeAngle: 180 },
-        { rect: box(row.locator(".watchlist-table__spark")), inflateX: 8, inflateY: 6 },
+        { rect: box(row.locator(".watchlist-table__spark")), inflateX: 8, inflateY: 6, badgeAngle: 90 },
         { rect: box(row.locator(".watchlist-table__remove button")), inflateX: 8, inflateY: 8, badgeAngle: 45 },
       ],
     };
   },
 
   async "19-trade-history"(page) {
+    await openPortfolioTab(page, "Trade history");
     const section = page.locator(".trade-history-section");
     const sale = section.locator("tbody tr").filter({ has: page.locator(".side-tag--sell") }).first();
     return {
       region: section,
+      extraRegion: page.getByRole("tablist", { name: "Portfolio views" }),
       targets: [
         { rect: text(sale.locator("[data-label=Trade]")), inflateX: 8, inflateY: 6 },
         { rect: text(sale.locator("[data-label=Realized]")), inflateX: 8, inflateY: 6, badgeAngle: 270 },
         { rect: box(section.getByRole("link", { name: "Export every trade as CSV" })) },
         { rect: box(section.locator(".trade-history-toggle")), inflateX: 10, inflateY: 8 },
       ],
+      reload: true,
     };
   },
 };
