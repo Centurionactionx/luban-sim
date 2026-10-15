@@ -345,7 +345,8 @@ function shouldPersistRejection(error: unknown): error is AppError {
     // the same key may be retried once they do.
     error.code !== "ASSET_CLASS_DISABLED" &&
     error.code !== "SYMBOL_BLOCKED" &&
-    error.code !== "LOT_TOO_SMALL"
+    error.code !== "LOT_TOO_SMALL" &&
+    error.code !== "PRICE_TOO_LOW"
   );
 }
 

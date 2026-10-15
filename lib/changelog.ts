@@ -33,6 +33,16 @@ export const CHANGE_KIND_LABELS: Record<ChangeKind, string> = {
 
 export const CHANGELOG: readonly ChangelogRelease[] = [
   {
+    version: "1.50.1",
+    date: "2026-10-15",
+    title: "Fixes for crypto and waiting orders",
+    changes: [
+      { kind: "fixed", text: "Crypto can be traded in the evening again. From 8 p.m. to midnight Toronto time, every pair was paused for \"not enough recent price history\"." },
+      { kind: "fixed", text: "A waiting buy no longer gets cancelled when the price drops under $1 (or a crypto lot is worth under $1). It keeps waiting and fills if the price comes back up within your limit." },
+      { kind: "fixed", text: "A scheduled time in the hour skipped when clocks spring forward is saved an hour later instead of an hour earlier." },
+    ],
+  },
+  {
     version: "1.50.0",
     date: "2026-10-14",
     title: "Short selling",

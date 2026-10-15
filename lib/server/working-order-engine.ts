@@ -78,6 +78,9 @@ const TRANSIENT_CODES = new Set([
   "TEAM_NOT_ACTIVE",
   "WORKING_ORDER_NOT_WAITING",
   "WORKING_ORDER_PRICE_MOVED",
+  // A crypto lot or a stock can climb back above $1, so the buy waits instead.
+  "LOT_TOO_SMALL",
+  "PRICE_TOO_LOW",
 ]);
 
 function cancellationReason(error: AppError): string {
@@ -98,8 +101,6 @@ function cancellationReason(error: AppError): string {
       return `Filling it would have put more than ${maxPositionPercent()}% of the portfolio in one holding.`;
     case "HOLDINGS_LIMIT":
       return `The team already held ${MAX_DISTINCT_HOLDINGS_PER_TEAM} different stocks when the price was reached.`;
-    case "LOT_TOO_SMALL":
-      return "One lot became worth less than $1, so buys are paused.";
     default:
       return error.message;
   }

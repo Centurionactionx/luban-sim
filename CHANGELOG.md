@@ -5,6 +5,14 @@ Releases before v1.28.0 didn't have numbers, so they're listed by date.
 
 <!-- Generated from lib/changelog.ts by `pnpm changelog`. Edit that file, not this one. -->
 
+## v1.50.1: Fixes for crypto and waiting orders (2026-10-15)
+
+### Fixed
+
+- Crypto can be traded in the evening again. From 8 p.m. to midnight Toronto time, every pair was paused for "not enough recent price history".
+- A waiting buy no longer gets cancelled when the price drops under $1 (or a crypto lot is worth under $1). It keeps waiting and fills if the price comes back up within your limit.
+- A scheduled time in the hour skipped when clocks spring forward is saved an hour later instead of an hour earlier.
+
 ## v1.50.0: Short selling (2026-10-14)
 
 ### New
