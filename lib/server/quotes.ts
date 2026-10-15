@@ -595,7 +595,11 @@ export function cryptoQualityProblem(
   if (volume === null || volume < cryptoMinVolume()) {
     return "it does not have enough trading volume";
   }
-  if (closes.filter((value) => value !== null).length < CRYPTO_MIN_HISTORY_POINTS) {
+  // Yahoo's 1d crypto chart restarts at 00:00 UTC, so early in the day ask
+  // for 80% of the bars that could exist yet instead of a flat 48.
+  const barsSoFar = Math.floor((nowMs % 86_400_000) / (5 * 60_000));
+  const minPoints = Math.min(CRYPTO_MIN_HISTORY_POINTS, Math.floor(barsSoFar * 0.8));
+  if (closes.filter((value) => value !== null).length < minPoints) {
     return "it does not have enough recent price history";
   }
   return null;

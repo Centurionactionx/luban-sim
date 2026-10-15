@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 export async function GET(): Promise<Response> {
   try {
     const user = await requireHostUser();
-    assertRequestAllowed(`poll:${user.id}`, 120);
+    assertRequestAllowed(`poll-overview:${user.id}`, 120);
     await refreshAllQuotes();
     return json(await getAdminOverview(user.id));
   } catch (error) {

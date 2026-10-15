@@ -70,7 +70,7 @@ Clerk's own **Delete account** button is hidden on the account page because it w
 ETFs and crypto are off by default and controlled by environment variables (see `.env.example`):
 
 - `LUBAN_ENABLE_ETFS=true` lets students search for and buy ETFs listed on NYSE, NYSE Arca, NYSE American, NASDAQ, Cboe BZX and TSX. They trade like stocks: exchange hours and whole shares. Leveraged and inverse ETFs are filtered out by fund name, since the competition has no leverage.
-- `LUBAN_ENABLE_CRYPTO=true` lets students add any crypto pair Yahoo Finance quotes in CAD or USD, as long as it passes the data checks: a price updated in the last 10 minutes, 24-hour volume of at least `LUBAN_CRYPTO_MIN_VOLUME` (default 250,000), and at least four hours of recent price history. USD pairs are converted with the live USD to CAD rate. Crypto trades 24/7 in whole lots. A coin's lot is the smallest power of ten of tokens worth at least $10 CAD when the coin is first added, and it never changes after that.
+- `LUBAN_ENABLE_CRYPTO=true` lets students add any crypto pair Yahoo Finance quotes in CAD or USD, as long as it passes the data checks: a price updated in the last 10 minutes, 24-hour volume of at least `LUBAN_CRYPTO_MIN_VOLUME` (default 250,000), and at least four hours of recent price history (less just after 00:00 UTC, when Yahoo's daily chart restarts). USD pairs are converted with the live USD to CAD rate. Crypto trades 24/7 in whole lots. A coin's lot is the smallest power of ten of tokens worth at least $10 CAD when the coin is first added, and it never changes after that.
 
 Both switches are read at request time, but Vercel only applies environment variable changes on a new deployment.
 

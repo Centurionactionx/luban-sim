@@ -53,7 +53,7 @@ export function isoToZonedInputValue(
 /**
  * The instant a `datetime-local` value names when read as wall time in the
  * zone, or null when it isn't a valid value. A wall time skipped by a
- * daylight-saving jump resolves to the instant just after the jump.
+ * daylight-saving jump moves forward by the gap (2:30 a.m. becomes 3:30 a.m.).
  */
 export function zonedInputValueToIso(
   value: string,
@@ -66,10 +66,13 @@ export function zonedInputValueToIso(
   if (Number.isNaN(wallAsUtc)) return null;
 
   // Guess with the offset at the wall time, then correct once with the offset
-  // at the guessed instant; that settles every daylight-saving boundary.
+  // at the guessed instant. The two disagree only inside a spring-forward gap,
+  // where the first guess is the one that lands after the jump.
   const firstGuess = wallAsUtc - zoneOffsetMs(new Date(wallAsUtc), timeZone);
   const settled = wallAsUtc - zoneOffsetMs(new Date(firstGuess), timeZone);
-  return new Date(settled).toISOString();
+  const inGap =
+    zoneOffsetMs(new Date(settled), timeZone) !== zoneOffsetMs(new Date(firstGuess), timeZone);
+  return new Date(inGap ? firstGuess : settled).toISOString();
 }
 
 /** An instant in words, e.g. "October 8, 2026 at 4:25 p.m. ET". */

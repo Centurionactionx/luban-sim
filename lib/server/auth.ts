@@ -6,7 +6,7 @@ import { isDemoLoginAllowed } from "./auth-mode";
 import { getDb } from "./db";
 
 export const SESSION_COOKIE_NAME = "luban_session";
-export const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
+export const SESSION_TTL_SECONDS = 60 * 60 * 24 * 14;
 
 export interface SessionCookieOptions {
   httpOnly: true;
