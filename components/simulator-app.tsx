@@ -2383,7 +2383,7 @@ function LeaderboardTable({
 
 /* ───────────────────────────── Watchlist ───────────────────────────── */
 
-const SPARKLINE_TTL_MS = 5 * 60_000;
+const SPARKLINE_TTL_MS = 15 * 60_000;
 const SPARKLINE_CONCURRENCY = 2;
 const sparklineCache = new Map<
   string,
@@ -2411,21 +2411,26 @@ function runSparklineJob<T>(job: () => Promise<T>): Promise<T> {
 /**
  * Today's closes for a watchlist row, remembered for a few minutes and
  * fetched two at a time so a full watchlist never crowds out the main
- * chart's requests.
+ * chart's requests. Once its market is closed the day's line is final, so a
+ * loaded one is kept until the page reloads.
  */
-function loadSparklineCloses(symbol: string): Promise<number[] | null> {
+function loadSparklineCloses(symbol: string, live: boolean): Promise<number[] | null> {
   const cached = sparklineCache.get(symbol);
-  if (cached && Date.now() - cached.at < SPARKLINE_TTL_MS) return cached.closes;
+  if (cached && (!live || Date.now() - cached.at < SPARKLINE_TTL_MS)) return cached.closes;
   const closes = runSparklineJob(async () => {
     try {
       const response = await fetch(
         `/api/quotes/history?symbol=${encodeURIComponent(symbol)}&range=1D`,
         { cache: "no-store", credentials: "same-origin" },
       );
-      if (!response.ok) return null;
+      if (!response.ok) {
+        sparklineCache.delete(symbol); // retry on the next redraw
+        return null;
+      }
       const payload = (await response.json()) as { history?: QuoteHistory };
       return (payload.history?.points ?? []).map((point) => point.closeCents);
     } catch {
+      sparklineCache.delete(symbol);
       return null;
     }
   });
@@ -2433,18 +2438,26 @@ function loadSparklineCloses(symbol: string): Promise<number[] | null> {
   return closes;
 }
 
-function Sparkline({ symbol, refreshKey }: { symbol: string; refreshKey: number }) {
+function Sparkline({
+  symbol,
+  live,
+  refreshKey,
+}: {
+  symbol: string;
+  live: boolean;
+  refreshKey: number;
+}) {
   const [closes, setCloses] = useState<number[] | null>(null);
 
   useEffect(() => {
     let live = true;
-    void loadSparklineCloses(symbol).then((next) => {
+    void loadSparklineCloses(symbol, live).then((next) => {
       if (live) setCloses(next);
     });
     return () => {
       live = false;
     };
-  }, [symbol, refreshKey]);
+  }, [symbol, live, refreshKey]);
 
   if (!closes || closes.length < 2) {
     return <span className="sparkline sparkline--empty" aria-hidden="true" />;
@@ -2607,7 +2620,11 @@ function WatchlistTable({
                   {item.quote ? <ChangeValue percent={item.quote.changePercent} /> : "—"}
                 </td>
                 <td data-label="Today" className="watchlist-table__spark">
-                  <Sparkline symbol={item.symbol} refreshKey={sparkKey} />
+                  <Sparkline
+                    symbol={item.symbol}
+                    live={item.quote?.marketOpen ?? true}
+                    refreshKey={sparkKey}
+                  />
                 </td>
                 <td data-label="" className="watchlist-table__remove">
                   <button
@@ -6867,8 +6884,8 @@ export function SimulatorApp({
               data-team-sync-ms={TEAM_SYNC_INTERVAL_MS}
               data-market-refresh-ms={MARKET_REFRESH_INTERVAL_MS}
             >
-              <span>{`Team ledger every ${marketsIdle ? "5 minutes" : "60 seconds"}`}</span>
-              <span>{`Market prices every ${marketsIdle ? "5 minutes" : "60 seconds"}`}</span>
+              <span>{`Team ledger every ${marketsIdle ? "5 minutes" : "2 minutes"}`}</span>
+              <span>{`Market prices every ${marketsIdle ? "5 minutes" : "2 minutes"}`}</span>
             </span>
           </div>
           <div>
