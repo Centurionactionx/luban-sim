@@ -122,6 +122,7 @@ import { FeedbackButton } from "./feedback-button";
 import { LubanMark, LubanWordmark } from "./luban-logo";
 import summaryStyles from "./portfolio-summary.module.css";
 import { ThemeToggle } from "./theme-toggle";
+import { WrappedBanner, WrappedPublishForm } from "./wrapped-publish";
 
 // Only shown inside its dialog, so its code downloads when first opened.
 const PortfolioMap = dynamic(() => import("./portfolio-map").then((m) => m.PortfolioMap));
@@ -387,6 +388,7 @@ const fallbackCompetition: CompetitionSummary = {
   status: "active",
   phase: "open",
   tradingOpen: true,
+  wrappedPublished: false,
   baseCurrency: "CAD",
   startingCashCents: 10000000,
   startsAt: "2026-08-24T14:20:00.000Z",
@@ -4788,6 +4790,11 @@ export function SimulatorApp({
                   announcement={dashboard.announcement}
                   onChanged={() => fetchDashboard(true, false)}
                 />
+                <WrappedPublishForm
+                  ended={dashboard.competition.phase === "ended"}
+                  published={dashboard.competition.wrappedPublished}
+                  onChanged={() => fetchDashboard(true, false)}
+                />
                 {/* With real sign-in these live in the account menu instead. */}
                 {!isManaged && dashboard.currentUser.role === "platform_admin" ? (
                   <a className="button button--secondary host-accounts-link" href="/admin/valuation-lab">
@@ -4860,6 +4867,7 @@ export function SimulatorApp({
         </header>
 
         <AnnouncementBanner announcement={dashboard.announcement} />
+        {dashboard.competition.wrappedPublished ? <WrappedBanner /> : null}
 
         {connectionError ? (
           <div className="connection-banner" role="status">

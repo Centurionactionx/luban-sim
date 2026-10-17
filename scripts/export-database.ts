@@ -48,6 +48,7 @@ export const APPLICATION_TABLES = [
   "account_claims",
   "pending_display_names",
   "announcements",
+  "competition_wrapped",
 ] as const;
 
 type Query = (sql: string) => Promise<{ rows: Record<string, unknown>[] }>;

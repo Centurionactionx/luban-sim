@@ -1,0 +1,26 @@
+/* Same paper card as the announcement banner, in the lime accent. */
+.banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  border: 2px solid var(--rule);
+  border-radius: var(--tile-radius, 10px);
+  background: var(--lime);
+  color: var(--on-bright);
+  padding: 12px 16px;
+  font-family: var(--font-ui);
+  font-size: 16px;
+  text-decoration: none;
+}
+
+.banner span {
+  font-weight: 700;
+  text-decoration: underline;
+}
+
+.banner:focus-visible {
+  outline: 3px solid var(--purple);
+  outline-offset: 2px;
+}

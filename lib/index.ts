@@ -144,6 +144,7 @@ export {
   readRealizedGains,
 } from "./server/queries";
 export type { DashboardOptions, RealizedGains } from "./server/queries";
+export { getWrapped, publishWrapped } from "./server/wrapped";
 
 export {
   QUOTE_DELAY_MINUTES,

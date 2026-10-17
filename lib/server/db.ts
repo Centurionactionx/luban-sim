@@ -21,7 +21,7 @@ import {
 import { postgresConnectionOptions } from "./postgres-config";
 
 const DEFAULT_DATABASE_PATH = join(process.cwd(), "data", "luban.sqlite");
-const SCHEMA_VERSION = 20;
+const SCHEMA_VERSION = 21;
 /** Map grouping within a sector; "Other" until the feed reports one. */
 const INSTRUMENT_INDUSTRY_COLUMN = "industry TEXT NOT NULL DEFAULT 'Other'";
 
@@ -509,6 +509,12 @@ const SHARED_TABLE_BODIES = {
       tone TEXT NOT NULL CHECK (tone IN ('normal', 'urgent')),
       author_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
       created_at TEXT NOT NULL`,
+  // The frozen end-of-competition Wrapped stats; one per competition, replaced on republish.
+  competition_wrapped: () => `
+      competition_id TEXT PRIMARY KEY REFERENCES competitions(id) ON DELETE CASCADE,
+      payload TEXT NOT NULL,
+      published_at TEXT NOT NULL,
+      published_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL`,
 } as const;
 
 const WATCHLIST_INDEXES = [
@@ -770,7 +776,7 @@ export async function runPostgresMigrations(tx: DbExecutor): Promise<void> {
 
   // Tables added after v1: valuation lab (v8), working orders (v12), feedback
   // (v14), watchlists (v15), market cache (v16), claims (v17), announcements (v18),
-  // order rejections (v20).
+  // order rejections (v20), wrapped (v21).
   const backfillValuationAccounts = !relations.has("admin_valuation_accounts");
   for (const [name, body] of Object.entries(SHARED_TABLE_BODIES)) {
     if (!relations.has(name)) {
@@ -922,6 +928,7 @@ async function clearDomainData(
     "market_cache",
     "watchlist_items",
     "announcements",
+    "competition_wrapped",
     "working_orders",
     "admin_valuation_positions",
     "admin_valuation_accounts",

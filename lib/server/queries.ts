@@ -177,6 +177,9 @@ export async function getCompetitionSummary(): Promise<CompetitionSummary> {
     startingCashCents: Number(row.starting_cash_cents),
     startsAt: row.starts_at,
     endsAt: row.ends_at,
+    wrappedPublished: Boolean(
+      await db.get("SELECT 1 FROM competition_wrapped WHERE competition_id = ?", [row.id]),
+    ),
   };
 }
 
@@ -842,7 +845,7 @@ type RankedRow = Omit<LeaderboardRow, "rank" | "isCurrentTeam">;
  */
 const leaderboardCache = new Map<string, { key: string; rows: RankedRow[] }>();
 
-async function buildLeaderboard(user: SessionUser, at: Date): Promise<Leaderboard> {
+export async function buildLeaderboard(user: SessionUser, at: Date): Promise<Leaderboard> {
   const competition = await getCompetitionSummary();
   const db = await getDb();
   const teams = await db.all<TeamRow>(

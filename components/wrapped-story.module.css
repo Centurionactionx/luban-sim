@@ -1,0 +1,235 @@
+/* Full-viewport story. Every tone pairs a background with one ink colour that clears WCAG AA on both gradient stops. */
+.story {
+  --bg: linear-gradient(160deg, #3d2f8f, #5a46b8);
+  --fg: #ffffff;
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: calc(72px + env(safe-area-inset-top)) 24px calc(32px + env(safe-area-inset-bottom));
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  transition: background 0.3s;
+}
+
+.story[data-tone="ink"] {
+  --bg: linear-gradient(160deg, #00171f, #0d3a4a);
+}
+.story[data-tone="lime"] {
+  --bg: linear-gradient(160deg, #96f550, #d2fbaa);
+  --fg: #00171f;
+}
+.story[data-tone="pink"] {
+  --bg: linear-gradient(160deg, #a8234a, #6e1a55);
+}
+.story[data-tone="teal"] {
+  --bg: linear-gradient(160deg, #0b5c63, #0a3f6b);
+}
+.story[data-tone="gold"] {
+  --bg: linear-gradient(160deg, #f7c948, #ffe69a);
+  --fg: #00171f;
+}
+
+.top {
+  position: absolute;
+  inset: calc(12px + env(safe-area-inset-top)) 16px auto;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.bars {
+  flex: 1;
+  display: flex;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.bar {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--fg) 30%, transparent);
+}
+
+.bar[data-done] {
+  background: var(--fg);
+}
+
+.close {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.close:focus-visible,
+.outroLink:focus-visible,
+.zone:focus-visible {
+  outline: 3px solid var(--fg);
+  outline-offset: 2px;
+}
+
+/* The slide ignores taps so the two zones behind it do the navigating. */
+.slide {
+  position: relative;
+  z-index: 1;
+  width: min(560px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  pointer-events: none;
+}
+
+.zone {
+  position: absolute;
+  top: 64px;
+  bottom: 0;
+  z-index: 2;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.zone:disabled {
+  cursor: default;
+}
+.zonePrev {
+  left: 0;
+  width: 35%;
+}
+.zoneNext {
+  right: 0;
+  width: 65%;
+}
+
+.kicker {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.hero {
+  margin: 0;
+  font-size: clamp(40px, 9vw, 72px);
+  font-weight: 700;
+  line-height: 1.02;
+  text-wrap: balance;
+}
+
+.big {
+  margin: 0;
+  font-family: var(--font-data);
+  font-size: clamp(48px, 12vw, 96px);
+  font-weight: 600;
+  line-height: 1;
+  overflow-wrap: anywhere;
+}
+
+.lead {
+  margin: 0;
+  font-size: clamp(18px, 3.5vw, 24px);
+  line-height: 1.35;
+}
+
+.awards,
+.rank,
+.facts {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.award {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 16px 18px;
+  border: 2px solid var(--fg);
+  border-radius: 12px;
+}
+
+.awardLabel {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.awardName {
+  font-size: clamp(26px, 6vw, 38px);
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
+.awardTeam,
+.awardStat {
+  font-size: 17px;
+}
+
+.awardStat {
+  font-family: var(--font-data);
+  font-weight: 600;
+}
+
+.rank li {
+  display: grid;
+  grid-template-columns: 36px 1fr auto;
+  align-items: baseline;
+  gap: 12px;
+  font-size: clamp(18px, 4vw, 24px);
+}
+
+.rank strong {
+  overflow-wrap: anywhere;
+}
+
+.rank span:last-child {
+  font-family: var(--font-data);
+  font-weight: 600;
+}
+
+.rankNo {
+  font-family: var(--font-data);
+  font-weight: 600;
+}
+
+.facts {
+  gap: 8px;
+  font-size: clamp(17px, 3.5vw, 22px);
+}
+
+.outroLink {
+  align-self: flex-start;
+  margin-top: 12px;
+  padding: 12px 20px;
+  border: 2px solid var(--fg);
+  border-radius: 999px;
+  color: var(--fg);
+  font-weight: 700;
+  text-decoration: none;
+  pointer-events: auto;
+}
+
+.stateBox {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(560px, 100%);
+}

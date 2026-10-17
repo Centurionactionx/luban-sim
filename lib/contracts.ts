@@ -238,6 +238,8 @@ export interface CompetitionSummary {
   startingCashCents: number;
   startsAt: string;
   endsAt: string;
+  /** True once the host has published the end-of-competition Wrapped. */
+  wrappedPublished: boolean;
 }
 
 export interface TeamSummary {
@@ -487,6 +489,76 @@ export interface Leaderboard {
   competitionId: string;
   asOf: string;
   rows: LeaderboardRow[];
+}
+
+/** One award on a Wrapped slide; null when nobody qualifies. */
+export interface WrappedAward {
+  /** Team or member who won it. */
+  name: string;
+  /** Team the winner belongs to (same as name for team awards). */
+  teamName: string;
+  valueCents?: number;
+  count?: number;
+  /** Extra context, e.g. the symbol of a best trade. */
+  detail?: string;
+}
+
+export interface WrappedTeamStats {
+  teamId: string;
+  teamName: string;
+  rank: number;
+  finalValueCents: number;
+  returnPercent: number;
+  tradeCount: number;
+  tradedCents: number;
+  realizedCents: number;
+  favoriteSymbol: string | null;
+  peakValueCents: number;
+}
+
+/** Frozen end-of-competition stats, saved once when the host publishes. */
+export interface WrappedSummary {
+  competitionId: string;
+  competitionName: string;
+  publishedAt: string;
+  totalTrades: number;
+  totalTradedCents: number;
+  teams: WrappedTeamStats[];
+  awards: {
+    /** Team awards. */
+    mostTraded: WrappedAward | null;
+    mostTrades: WrappedAward | null;
+    biggestLoss: WrappedAward | null;
+    biggestGain: WrappedAward | null;
+    biggestComeback: WrappedAward | null;
+    mostDiversified: WrappedAward | null;
+    /** Member awards: positive or funny only; losses stay at team level. */
+    topTrader: WrappedAward | null;
+    bestTrade: WrappedAward | null;
+    nightOwl: WrappedAward | null;
+    earlyBird: WrappedAward | null;
+    mostRejected: WrappedAward | null;
+  };
+  /** Most traded symbols across the whole competition, by money traded. */
+  topSymbols: { symbol: string; tradedCents: number; tradeCount: number }[];
+}
+
+/** The signed-in person's own numbers, shown only to them. */
+export interface WrappedPersonal {
+  name: string;
+  teamName: string | null;
+  tradeCount: number;
+  tradedCents: number;
+  realizedCents: number;
+  favoriteSymbol: string | null;
+  bestTrade: { symbol: string; realizedCents: number } | null;
+  /** Share of traders with fewer trades, 0..100. */
+  tradeCountPercentile: number;
+}
+
+export interface WrappedResponse {
+  summary: WrappedSummary;
+  personal: WrappedPersonal | null;
 }
 
 export type AnnouncementTone = "normal" | "urgent";
