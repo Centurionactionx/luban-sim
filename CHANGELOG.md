@@ -5,6 +5,13 @@ Releases before v1.28.0 didn't have numbers, so they're listed by date.
 
 <!-- Generated from lib/changelog.ts by `pnpm changelog`. Edit that file, not this one. -->
 
+## v1.50.2: Lighter on the server (2026-10-18)
+
+### Improved
+
+- The watchlist's trend lines load in one go instead of one row at a time, and refresh every 5 minutes (every 30 while markets are closed).
+- Search suggestions start at the second letter and wait a moment after you stop typing. Pressing Enter still looks up one-letter tickers like F.
+
 ## v1.50.1: Fixes for crypto and waiting orders (2026-10-15)
 
 ### Fixed

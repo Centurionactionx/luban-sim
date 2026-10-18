@@ -33,6 +33,15 @@ export const CHANGE_KIND_LABELS: Record<ChangeKind, string> = {
 
 export const CHANGELOG: readonly ChangelogRelease[] = [
   {
+    version: "1.50.2",
+    date: "2026-10-18",
+    title: "Lighter on the server",
+    changes: [
+      { kind: "changed", text: "The watchlist's trend lines load in one go instead of one row at a time, and refresh every 5 minutes (every 30 while markets are closed)." },
+      { kind: "changed", text: "Search suggestions start at the second letter and wait a moment after you stop typing. Pressing Enter still looks up one-letter tickers like F." },
+    ],
+  },
+  {
     version: "1.50.1",
     date: "2026-10-15",
     title: "Fixes for crypto and waiting orders",

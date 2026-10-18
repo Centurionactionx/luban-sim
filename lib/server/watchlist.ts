@@ -5,7 +5,7 @@ import { getAdminTradingTeamId } from "./admin-trading";
 import type { DbExecutor } from "./database";
 import { getDb } from "./db";
 import { requireSessionUser } from "./queries";
-import { getQuote, normalizeMarketSymbol } from "./quotes";
+import { getQuotes, normalizeMarketSymbol } from "./quotes";
 
 interface WatchlistRow {
   symbol: string;
@@ -66,16 +66,15 @@ export async function listWatchlist(
      ORDER BY w.created_at ASC, w.symbol ASC`,
     [teamId],
   );
+  // An unpriceable watchlist must never break the dashboard.
+  const quotes = await getQuotes(
+    rows.map((row) => row.symbol),
+    at,
+  ).catch(() => null);
   const items: WatchlistItemView[] = [];
 
   for (const row of rows) {
-    let quote: Quote | null = null;
-    try {
-      quote = await getQuote(row.symbol, at);
-    } catch {
-      // One unpriceable symbol must never break the dashboard.
-      quote = null;
-    }
+    const quote: Quote | null = quotes?.get(row.symbol) ?? null;
     items.push({
       symbol: row.symbol,
       name: quote?.name ?? row.name ?? row.symbol,

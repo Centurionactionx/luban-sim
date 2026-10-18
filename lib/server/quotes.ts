@@ -309,6 +309,8 @@ export interface MarketDataProvider {
    * so the refreshes that follow skip the upstream call.
    */
   preloadQuotes?(symbols: string[]): Promise<void>;
+  /** The same for these symbols' preset-range charts. */
+  preloadHistories?(symbols: string[], range: QuoteRange, request: HistoryRequest): Promise<void>;
   search?(query: string): Promise<InstrumentSearchResult[]>;
   /** Today's most actively traded supported stocks, most active first. */
   mostActive?(): Promise<InstrumentSearchResult[]>;
@@ -1536,6 +1538,38 @@ export class YahooFinanceMarketDataProvider implements MarketDataProvider {
     }
   }
 
+  async preloadHistories(
+    symbols: string[],
+    range: QuoteRange,
+    request: HistoryRequest,
+  ): Promise<void> {
+    if (!this.shared) return;
+    const nowMs = this.now();
+    const ttl = isIntradayInterval(request.interval)
+      ? INTRADAY_HISTORY_TTL_MS
+      : DAILY_HISTORY_TTL_MS;
+    const keys = symbols
+      .map((symbol) => `${symbol}:${range}:${request.interval}::`)
+      .filter((key) => {
+        const cached = this.state.histories.get(key);
+        return !cached || nowMs - cached.fetchedAtMs >= ttl || cached.value.isStale;
+      });
+    if (keys.length === 0) return;
+    const entries = await this.readSharedRows(keys.map((key) => `history:${key}`));
+    for (const key of keys) {
+      const entry = entries.get(`history:${key}`);
+      if (!entry || nowMs - entry.fetchedAtMs >= ttl) continue;
+      try {
+        const value = JSON.parse(entry.payload) as QuoteHistory;
+        if (!value.isStale) {
+          boundedSet(this.state.histories, key, { value, fetchedAtMs: entry.fetchedAtMs });
+        }
+      } catch {
+        // A bad row is ignored; the chart is fetched normally.
+      }
+    }
+  }
+
   quote(instrument: MarketInstrument): Quote {
     const cached = this.state.quotes.get(instrument.symbol);
     if (!cached) {
@@ -2260,6 +2294,22 @@ async function readInstrumentSearchResults(
   }));
 }
 
+/** Listed instruments for these symbols in one query, keyed by normalized symbol. */
+async function readListedInstruments(
+  symbols: string[],
+): Promise<Map<string, MarketInstrument>> {
+  const wanted = [...new Set(symbols.map(normalizeMarketSymbol))];
+  if (wanted.length === 0) return new Map();
+  const db = await getDb();
+  const rows = await db.all<InstrumentRow>(
+    `SELECT ${INSTRUMENT_COLUMNS}
+     FROM instruments
+     WHERE is_active = 1 AND symbol IN (${wanted.map(() => "?").join(", ")})`,
+    wanted,
+  );
+  return new Map(rows.map((row) => [row.symbol, rowToInstrument(row)]));
+}
+
 async function readInstrument(
   symbol: string,
   options: { includeInactive?: boolean } = {},
@@ -2535,9 +2585,10 @@ export async function refreshQuotesFor(
     MARKET_SYMBOL_PATTERN.test(symbol),
   );
   if (wanted.length === 0 || !activeProvider.refreshQuote) return;
-  const instruments = (
-    await Promise.all(wanted.map((symbol) => readInstrument(symbol)))
-  ).filter((instrument): instrument is MarketInstrument => instrument !== null);
+  const listed = await readListedInstruments(wanted);
+  const instruments = wanted
+    .map((symbol) => listed.get(symbol))
+    .filter((instrument): instrument is MarketInstrument => instrument !== undefined);
   if (options.onlyMissing) {
     await refreshMissingFor(instruments, quoteAt);
     return;
@@ -2553,7 +2604,24 @@ export async function getQuote(
   at?: Date | string,
 ): Promise<Quote | null> {
   const instrument = await readInstrument(symbol);
-  if (!instrument) return null;
+  return instrument ? quoteFor(instrument, at) : null;
+}
+
+/** getQuote for many symbols with one instrument read, keyed by the symbols as given. */
+export async function getQuotes(
+  symbols: string[],
+  at?: Date | string,
+): Promise<Map<string, Quote | null>> {
+  const instruments = await readListedInstruments(symbols);
+  return new Map(
+    symbols.map((symbol) => {
+      const instrument = instruments.get(normalizeMarketSymbol(symbol));
+      return [symbol, instrument ? quoteFor(instrument, at) : null];
+    }),
+  );
+}
+
+function quoteFor(instrument: MarketInstrument, at?: Date | string): Quote | null {
   try {
     return activeProvider.quote(instrument, normalizeAt(at));
   } catch (error) {
@@ -2618,6 +2686,44 @@ export async function getQuoteHistory(
   const now = normalizeAt(at);
   const request = resolveHistoryRequest(range, now, options);
   return activeProvider.history(instrument, range, now, request);
+}
+
+/**
+ * Preset-range charts for several symbols with one instrument read and one
+ * shared-cache read. A symbol that can't be charted maps to null, so one
+ * missing chart never blanks the rest.
+ */
+export async function getQuoteHistories(
+  symbols: string[],
+  range: QuoteRange,
+  at?: Date | string,
+): Promise<Map<string, QuoteHistory | null>> {
+  const instruments = await readListedInstruments(symbols);
+  const now = normalizeAt(at);
+  const request = resolveHistoryRequest(range, now, {});
+  const listed = [...instruments.values()];
+  await activeProvider.preloadHistories?.(
+    listed.map((instrument) => instrument.symbol),
+    range,
+    request,
+  );
+  return new Map(
+    await Promise.all(
+      symbols.map(async (symbol) => {
+        const instrument = instruments.get(normalizeMarketSymbol(symbol));
+        try {
+          return [
+            symbol,
+            instrument && activeProvider.history
+              ? await activeProvider.history(instrument, range, now, request)
+              : null,
+          ] as const;
+        } catch {
+          return [symbol, null] as const;
+        }
+      }),
+    ),
+  );
 }
 
 export interface HistoryOptions {

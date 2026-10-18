@@ -29,7 +29,7 @@ export async function GET(request: Request): Promise<Response> {
   try {
     const user = await requireAuthenticatedUser();
     // Each dashboard read recomputes the whole leaderboard; cap how fast one
-    // client can force that work. The page polls once a minute, plus once
+    // client can force that work. The page polls every two minutes, plus once
     // after each trade or symbol switch.
     assertRequestAllowed(`poll:${user.id}`, 30);
     const authDone = performance.now();

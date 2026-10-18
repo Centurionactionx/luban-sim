@@ -28,7 +28,7 @@ import { getAdminTradingTeamId } from "./admin-trading";
 import { getSessionUser } from "./auth";
 import type { DbExecutor } from "./database";
 import { getDb, withReadTransaction } from "./db";
-import { getQuote, listQuotesForSymbols, quoteCacheGeneration, withBuyRules } from "./quotes";
+import { getQuotes, listQuotesForSymbols, quoteCacheGeneration, withBuyRules } from "./quotes";
 import { readReservations, workingOrdersAvailableTo } from "./working-order-book";
 import { listWatchlist } from "./watchlist";
 import { listWorkingOrders } from "./working-orders";
@@ -183,10 +183,10 @@ export async function getCompetitionSummary(): Promise<CompetitionSummary> {
   };
 }
 
-export async function getTeamSummary(
+async function readTeamRow(
   teamId: string,
   sandboxOwnerUserId?: string,
-): Promise<TeamSummary> {
+): Promise<TeamRow> {
   const db = await getDb();
   const ownerVisibility = sandboxOwnerUserId
     ? "AND sandbox_owner_user_id = ?"
@@ -205,6 +205,17 @@ export async function getTeamSummary(
     throw new AppError("TEAM_NOT_FOUND", "That team does not exist.", 404);
   }
 
+  return row;
+}
+
+export async function getTeamSummary(
+  teamId: string,
+  sandboxOwnerUserId?: string,
+  /** The team row, when the caller has already read it. */
+  teamRow?: TeamRow,
+): Promise<TeamSummary> {
+  const db = await getDb();
+  const row = teamRow ?? (await readTeamRow(teamId, sandboxOwnerUserId));
   const members = await db.all<{ name: string }>(
     `
       SELECT u.name
@@ -312,29 +323,22 @@ export interface PortfolioCalculation {
   holdings: HoldingView[];
 }
 
+/** Rows a caller already read in the same request, so they aren't read twice. */
+interface Preloaded {
+  user?: SessionUser;
+  competition?: CompetitionSummary;
+  team?: TeamRow;
+}
+
 export async function calculatePortfolio(
   teamId: string,
   at: Date = new Date(),
   sandboxOwnerUserId?: string,
+  preloaded: Preloaded = {},
 ): Promise<PortfolioCalculation> {
   const database = await getDb();
-  const ownerVisibility = sandboxOwnerUserId
-    ? "AND sandbox_owner_user_id = ?"
-    : "AND sandbox_owner_user_id IS NULL";
-  const params = sandboxOwnerUserId
-    ? [teamId, sandboxOwnerUserId]
-    : [teamId];
-  const team = await database.get<TeamRow>(
-    `SELECT id, name, status, cash_cents, version, sandbox_owner_user_id
-     FROM teams WHERE id = ? ${ownerVisibility}`,
-    params,
-  );
-
-  if (!team) {
-    throw new AppError("TEAM_NOT_FOUND", "That team does not exist.", 404);
-  }
-
-  const competition = await getCompetitionSummary();
+  const team = preloaded.team ?? (await readTeamRow(teamId, sandboxOwnerUserId));
+  const competition = preloaded.competition ?? (await getCompetitionSummary());
   const holdingRows = await database.all<HoldingRow>(
     `
       SELECT h.symbol, h.quantity, h.average_cost_cents, i.industry
@@ -357,8 +361,13 @@ export async function calculatePortfolio(
     storedIndustry: string | null;
   }> = [];
 
+  const quotes = await getQuotes(
+    holdingRows.map((row) => row.symbol),
+    at,
+  );
+
   for (const row of holdingRows) {
-    const quote = await getQuote(row.symbol, at);
+    const quote = quotes.get(row.symbol);
 
     if (!quote) {
       throw new AppError(
@@ -612,8 +621,9 @@ export async function listOrders(
   userId: string,
   limit?: number,
   requestedTeamId?: string,
+  sessionUser?: SessionUser,
 ): Promise<OrderView[]> {
-  return readOrders(userId, normalizedLimit(limit, 12), requestedTeamId);
+  return readOrders(userId, normalizedLimit(limit, 12), requestedTeamId, sessionUser);
 }
 
 /** Most fills one export may hold; far beyond any classroom competition. */
@@ -634,8 +644,9 @@ async function readOrders(
   userId: string,
   resultLimit: number,
   requestedTeamId?: string,
+  sessionUser?: SessionUser,
 ): Promise<OrderView[]> {
-  const user = await requireSessionUser(userId);
+  const user = sessionUser ?? (await requireSessionUser(userId));
   // An admin naming a team is overseeing the competition, like a host.
   const overseeing =
     user.role === "host" || (user.role === "platform_admin" && requestedTeamId !== undefined);
@@ -788,10 +799,11 @@ export async function listActivity(
   userId: string,
   limit?: number,
   scope: "portfolio" | "competition" = "portfolio",
+  preloaded: Preloaded = {},
 ): Promise<ActivityItem[]> {
-  const user = await requireSessionUser(userId);
+  const user = preloaded.user ?? (await requireSessionUser(userId));
   const resultLimit = normalizedLimit(limit, 16);
-  const competition = await getCompetitionSummary();
+  const competition = preloaded.competition ?? (await getCompetitionSummary());
   const parameters: Array<string | number> = [competition.id];
   let visibility = "";
 
@@ -838,15 +850,20 @@ export async function listActivity(
 type RankedRow = Omit<LeaderboardRow, "rank" | "isCurrentTeam">;
 
 /**
- * Every dashboard poll needs the leaderboard, and valuing each team costs
- * several queries. The ranking only changes when a team row changes (every
- * trade, cash, status, or name change bumps its version) or a quote changes,
- * so it is memoized per process on exactly those inputs.
+ * Every dashboard poll needs the leaderboard. The ranking only changes when a
+ * team row changes (every trade, cash, status, or name change bumps its
+ * version) or a quote changes, so it is memoized per process on exactly those
+ * inputs. The minute is in the key because simulated quotes move every minute
+ * without a cache write.
  */
 const leaderboardCache = new Map<string, { key: string; rows: RankedRow[] }>();
 
-export async function buildLeaderboard(user: SessionUser, at: Date): Promise<Leaderboard> {
-  const competition = await getCompetitionSummary();
+export async function buildLeaderboard(
+  user: SessionUser,
+  at: Date,
+  preloadedCompetition?: CompetitionSummary,
+): Promise<Leaderboard> {
+  const competition = preloadedCompetition ?? (await getCompetitionSummary());
   const db = await getDb();
   const teams = await db.all<TeamRow>(
     `
@@ -880,20 +897,58 @@ export async function buildLeaderboard(user: SessionUser, at: Date): Promise<Lea
     const tradeCounts = new Map(
       counts.map((row) => [row.team_id, Number(row.count)]),
     );
-    const rows: RankedRow[] = [];
+    // A rank needs only total value: cash plus each holding at its CAD price,
+    // as calculatePortfolio values it, read for every team at once.
+    const holdingRows = await db.all<{ team_id: string; symbol: string; quantity: number }>(
+      `
+        SELECT h.team_id, h.symbol, h.quantity
+        FROM holdings h
+        JOIN teams t ON t.id = h.team_id
+        WHERE t.competition_id = ? AND t.sandbox_owner_user_id IS NULL
+          AND h.quantity <> 0
+        ORDER BY h.team_id ASC, h.symbol ASC
+      `,
+      [competition.id],
+    );
+    const quotes = await getQuotes(
+      [...new Set(holdingRows.map((row) => row.symbol))],
+      at,
+    );
+    const holdingsValueByTeam = new Map<string, number>();
 
-    for (const team of teams) {
-      const portfolio = (await calculatePortfolio(team.id, at)).summary;
-      rows.push({
+    for (const row of holdingRows) {
+      const quote = quotes.get(row.symbol);
+      if (!quote) {
+        throw new AppError(
+          "QUOTE_UNAVAILABLE",
+          `No quote is available for ${row.symbol}.`,
+          503,
+        );
+      }
+      holdingsValueByTeam.set(
+        row.team_id,
+        (holdingsValueByTeam.get(row.team_id) ?? 0) +
+          quote.priceCadCents * Number(row.quantity),
+      );
+    }
+
+    const startingValueCents = competition.startingCashCents;
+    const rows: RankedRow[] = teams.map((team) => {
+      const totalValueCents =
+        Number(team.cash_cents) + (holdingsValueByTeam.get(team.id) ?? 0);
+      return {
         teamId: team.id,
         teamName: team.name,
         teamStatus: team.status,
-        totalValueCents: portfolio.totalValueCents,
-        returnCents: portfolio.totalReturnCents,
-        returnPercent: portfolio.totalReturnPercent,
+        totalValueCents,
+        returnCents: totalValueCents - startingValueCents,
+        returnPercent:
+          startingValueCents > 0
+            ? roundPercent(totalValueCents - startingValueCents, startingValueCents)
+            : 0,
         tradeCount: tradeCounts.get(team.id) ?? 0,
-      });
-    }
+      };
+    });
 
     rows.sort((left, right) => {
       const leftDisqualified = left.teamStatus === "disqualified" ? 1 : 0;
@@ -973,6 +1028,9 @@ async function getPortfolioHistory(
   return history;
 }
 
+/** When this instance last wrote each team's snapshot, so most polls skip the insert. */
+const lastSnapshotAt = new Map<string, number>();
+
 /**
  * Record a portfolio's total value for its history chart, at most once per
  * snapshot interval. The conditional insert keeps concurrent dashboard loads
@@ -983,8 +1041,10 @@ export async function recordPortfolioSnapshot(
   totalValueCents: number,
   at: Date = new Date(),
 ): Promise<void> {
+  const last = lastSnapshotAt.get(teamId);
+  if (last !== undefined && at.getTime() - last < SNAPSHOT_INTERVAL_MS) return;
   const db = await getDb();
-  await db.run(
+  const { changes } = await db.run(
     `
       INSERT INTO portfolio_snapshots (id, team_id, total_value_cents, captured_at)
       SELECT ?, ?, ?, ?
@@ -1002,6 +1062,7 @@ export async function recordPortfolioSnapshot(
       new Date(at.getTime() - SNAPSHOT_INTERVAL_MS).toISOString(),
     ],
   );
+  if (changes > 0) lastSnapshotAt.set(teamId, at.getTime());
 }
 
 export interface DashboardOptions {
@@ -1027,20 +1088,21 @@ export async function getDashboard(
       currentUser.role === "platform_admin"
         ? await getAdminTradingTeamId(currentUser.id)
         : currentUser.teamId;
+    const sandboxOwnerUserId =
+      currentUser.role === "platform_admin" ? currentUser.id : undefined;
+    const teamRow = portfolioTeamId
+      ? await readTeamRow(portfolioTeamId, sandboxOwnerUserId)
+      : undefined;
     const team = portfolioTeamId
-      ? await getTeamSummary(
-          portfolioTeamId,
-          currentUser.role === "platform_admin" ? currentUser.id : undefined,
-        )
+      ? await getTeamSummary(portfolioTeamId, sandboxOwnerUserId, teamRow)
       : null;
     const calculated = portfolioTeamId
-      ? await calculatePortfolio(
-          portfolioTeamId,
-          now,
-          currentUser.role === "platform_admin" ? currentUser.id : undefined,
-        )
+      ? await calculatePortfolio(portfolioTeamId, now, sandboxOwnerUserId, {
+          team: teamRow,
+          competition,
+        })
       : null;
-    const leaderboard = await buildLeaderboard(currentUser, now);
+    const leaderboard = await buildLeaderboard(currentUser, now, competition);
     const historyAfter =
       portfolioTeamId &&
       options.historyTeamId === portfolioTeamId &&
@@ -1076,8 +1138,11 @@ export async function getDashboard(
             )
           : [],
       portfolioHistoryAfter: historyAfter,
-      recentOrders: await listOrders(currentUser.id, 8),
-      recentActivity: await listActivity(currentUser.id, 10),
+      recentOrders: await listOrders(currentUser.id, 8, undefined, currentUser),
+      recentActivity: await listActivity(currentUser.id, 10, "portfolio", {
+        user: currentUser,
+        competition,
+      }),
       // The top five, plus the viewer's own team when it ranks lower so the
       // leaderboard can show where they stand.
       leaderboard: leaderboard.rows.filter((row, index) => index < 5 || row.isCurrentTeam),

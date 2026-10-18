@@ -12,12 +12,13 @@ import {
 
 import { extractError, readJson } from "@/lib/api-client";
 import styles from "@/app/admin/valuation-lab/valuation-lab.module.css";
+import { stockSessionMayBeOpen } from "@/lib/market-calendar";
 import type {
   AdminValuationPortfolio,
   AdminValuationPosition,
 } from "@/lib/backtest-contracts";
 
-const REFRESH_INTERVAL_MS = 60_000;
+const REFRESH_INTERVAL_MS = 300_000;
 const TORONTO_TIME_ZONE = "America/Toronto";
 const MAX_TEST_CASH_CENTS = 100_000_000_000_000;
 
@@ -238,11 +239,13 @@ export function AdminValuationLab({
 
   useEffect(() => {
     let loadedAt = 0;
-    // Hidden tabs sit out; coming back refreshes if a minute has passed. The
-    // 1 s of slack lets a tick that lands just short of a full interval count.
+    // Hidden tabs and closed markets (stocks only here) sit out; coming back
+    // refreshes if an interval has passed. The 1 s of slack lets a tick that
+    // lands just short of a full interval count. The refresh button still works.
     const refreshIfDue = () => {
       if (
         document.hidden ||
+        !stockSessionMayBeOpen(new Date()) ||
         mutationInFlight.current ||
         Date.now() - loadedAt < REFRESH_INTERVAL_MS - 1_000
       ) {

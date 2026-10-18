@@ -1,5 +1,5 @@
-import { getQuoteHistory, watchlistSymbolsFor } from "@/lib";
-import { assertMarketDataBudget } from "@/lib/server/quotes";
+import { watchlistSymbolsFor } from "@/lib";
+import { assertMarketDataBudget, getQuoteHistories } from "@/lib/server/quotes";
 
 import { handleRouteError, json, requireAuthenticatedUser } from "../../_lib/http";
 
@@ -17,18 +17,16 @@ export async function GET(): Promise<Response> {
     assertMarketDataBudget(user.id);
 
     const symbols = await watchlistSymbolsFor(user.id);
-    const entries = await Promise.all(
-      symbols.map(async (symbol) => {
-        try {
-          const history = await getQuoteHistory(symbol, "1D");
-          return [symbol, history.points.map((point) => point.closeCents)] as const;
-        } catch {
-          // One missing chart must not blank the rest; the row shows empty.
-          return [symbol, null] as const;
-        }
-      }),
-    );
-    return json({ sparklines: Object.fromEntries(entries) });
+    const histories = await getQuoteHistories(symbols, "1D");
+    // A missing chart is null, and that row shows empty.
+    return json({
+      sparklines: Object.fromEntries(
+        [...histories].map(([symbol, history]) => [
+          symbol,
+          history?.points.map((point) => point.closeCents) ?? null,
+        ]),
+      ),
+    });
   } catch (error) {
     return handleRouteError(error);
   }

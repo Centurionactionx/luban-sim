@@ -509,7 +509,9 @@ const MAKER_LINKS = [
 // The step-by-step guide lives on the public site.
 const SIM_GUIDE_URL = "https://lubancanada.com/sim-guide";
 const CHART_TOOLTIP_SPACE_PX = 172;
-const SUGGESTION_DELAY_MS = 120;
+const SUGGESTION_DELAY_MS = 250;
+const POPULAR_CACHE_KEY = "luban:popular-picks";
+const POPULAR_CACHE_TTL_MS = 10 * 60_000;
 
 /**
  * Instant suggestions from listings the page already knows, ranked like a
@@ -2386,6 +2388,7 @@ function LeaderboardTable({
 /* ───────────────────────────── Watchlist ───────────────────────────── */
 
 const SPARKLINE_TTL_MS = 5 * 60_000;
+const IDLE_SPARKLINE_TTL_MS = 30 * 60_000;
 
 function Sparkline({ closes }: { closes: number[] | null | undefined }) {
   if (!closes || closes.length < 2) {
@@ -2426,12 +2429,14 @@ function WatchlistTable({
   items,
   selectedSymbol,
   busySymbol,
+  idle,
   onOpen,
   onRemove,
 }: {
   items: WatchlistItemView[];
   selectedSymbol: string;
   busySymbol: string | null;
+  idle: boolean;
   onOpen: (item: WatchlistItemView) => void;
   onRemove: (symbol: string) => void;
 }) {
@@ -2444,12 +2449,18 @@ function WatchlistTable({
   // reloads them if they expired meanwhile.
   const [sparklines, setSparklines] = useState<Record<string, number[] | null>>({});
   const symbolKey = items.map((item) => item.symbol).sort().join(",");
+  // With every market shut the lines can't move, so they refresh less often.
+  // A ref, so the switch itself doesn't restart the load.
+  const ttlRef = useRef(SPARKLINE_TTL_MS);
+  useEffect(() => {
+    ttlRef.current = idle ? IDLE_SPARKLINE_TTL_MS : SPARKLINE_TTL_MS;
+  }, [idle]);
   useEffect(() => {
     if (!symbolKey) return;
     let loadedAt = 0;
     const controller = new AbortController();
     const load = () => {
-      if (document.hidden || Date.now() - loadedAt < SPARKLINE_TTL_MS) return;
+      if (document.hidden || Date.now() - loadedAt < ttlRef.current) return;
       loadedAt = Date.now();
       fetch("/api/quotes/sparklines", {
         cache: "no-store",
@@ -2919,7 +2930,8 @@ export function SimulatorApp({
     if (refreshMarket) lastMarketRefreshAttemptAt.current = Date.now();
     const dashboardParams = new URLSearchParams({
       refreshMarket: refreshMarket ? "1" : "0",
-      symbol: selectedSymbol,
+      // Read through the ref so a symbol switch doesn't restart the poll.
+      symbol: selectedSymbolRef.current,
     });
     const heldHistory = historyCache.current;
     if (heldHistory && heldHistory.points.length >= 2) {
@@ -3019,13 +3031,14 @@ export function SimulatorApp({
     } finally {
       if (dashboardRequest.current === controller) dashboardRequest.current = null;
     }
-  }, [isManaged, router, selectedSymbol]);
+  }, [isManaged, router]);
 
-  // The full history follows the portfolio: every trade bumps its version.
-  const historyVersion = dashboard.team?.version ?? 0;
+  // The full history loads when its panel is on screen. New trades reach it
+  // from dashboard.recentOrders (see tradeRows) instead of a refetch.
   const historyUserId = dashboard.currentUser.id;
+  const tradeHistoryVisible = tradeHistoryOpen && portfolioView === "trades";
   useEffect(() => {
-    if (!tradeHistoryOpen) return;
+    if (!tradeHistoryVisible) return;
     const controller = new AbortController();
     void (async () => {
       try {
@@ -3050,7 +3063,7 @@ export function SimulatorApp({
       }
     })();
     return () => controller.abort();
-  }, [tradeHistoryOpen, historyVersion, historyUserId]);
+  }, [tradeHistoryVisible, historyUserId]);
 
   // Nothing can move while every market on the page is shut, so the poll slows.
   const marketsIdle = allMarketsClosed(dashboard.availableSymbols);
@@ -3420,7 +3433,15 @@ export function SimulatorApp({
   const isWatched = dashboard.watchlist.some((item) => item.symbol === selectedQuote.symbol);
   const watchlistFull = dashboard.watchlist.length >= MAX_WATCHLIST_ITEMS;
   const tradeRows = tradeHistoryOpen
-    ? (tradeHistory ?? dashboard.recentOrders)
+    ? tradeHistory
+      ? [
+          // Trades newer than the loaded page, from the latest dashboard.
+          ...dashboard.recentOrders.filter(
+            (order) => !tradeHistory.some((held) => held.id === order.id),
+          ),
+          ...tradeHistory,
+        ]
+      : dashboard.recentOrders
     : dashboard.recentOrders.slice(0, TRADE_HISTORY_PREVIEW);
   const hasAdminTradingAccount =
     isPlatformAdmin && dashboard.team !== null && dashboard.portfolio !== null;
@@ -3721,12 +3742,30 @@ export function SimulatorApp({
     const controller = new AbortController();
     void (async () => {
       try {
-        const response = await fetch("/api/quotes?popular=1", {
-          signal: controller.signal,
-        });
-        if (!response.ok) return;
-        const payload = (await readJson(response)) as { sections?: PopularSection[] };
-        const sections = payload.sections ?? [];
+        // Kept for ten minutes per tab so reloads don't ask again.
+        let sections: PopularSection[] | undefined;
+        try {
+          const saved = JSON.parse(sessionStorage.getItem(POPULAR_CACHE_KEY) ?? "null");
+          if (saved && Date.now() - saved.at < POPULAR_CACHE_TTL_MS) sections = saved.sections;
+        } catch {
+          // Storage blocked or unreadable: fetch as usual.
+        }
+        if (!sections) {
+          const response = await fetch("/api/quotes?popular=1", {
+            signal: controller.signal,
+          });
+          if (!response.ok) return;
+          const payload = (await readJson(response)) as { sections?: PopularSection[] };
+          sections = payload.sections ?? [];
+          try {
+            sessionStorage.setItem(
+              POPULAR_CACHE_KEY,
+              JSON.stringify({ at: Date.now(), sections }),
+            );
+          } catch {
+            // Over quota or blocked: the cache is optional.
+          }
+        }
         for (const section of sections) {
           for (const result of section.results) {
             knownInstruments.current.set(result.symbol, result);
@@ -3759,7 +3798,8 @@ export function SimulatorApp({
   // the server caches every query, so typing costs few upstream calls.
   useEffect(() => {
     const query = searchQuery.trim();
-    if (!query || suggestionCache.current.has(query.toLowerCase())) return;
+    // One character matches too much to be worth a request; Enter still searches.
+    if (query.length < 2 || suggestionCache.current.has(query.toLowerCase())) return;
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       try {
@@ -3839,17 +3879,21 @@ export function SimulatorApp({
     setSearching(true);
     setSearchResults([]);
     try {
-      const response = await fetch(`/api/quotes?q=${encodeURIComponent(query)}`, {
-        cache: "no-store",
-      });
-      const payload = (await readJson(response)) as {
-        results?: InstrumentSearchResult[];
-      } & ApiErrorShape;
-      if (!response.ok) {
-        throw new Error(extractError(payload, "The symbol search failed."));
+      // The suggestion search may already have fetched this query.
+      let results = suggestionCache.current.get(query.toLowerCase());
+      if (!results) {
+        const response = await fetch(`/api/quotes?q=${encodeURIComponent(query)}`, {
+          cache: "no-store",
+        });
+        const payload = (await readJson(response)) as {
+          results?: InstrumentSearchResult[];
+        } & ApiErrorShape;
+        if (!response.ok) {
+          throw new Error(extractError(payload, "The symbol search failed."));
+        }
+        results = payload.results ?? [];
+        rememberSuggestions(query, results);
       }
-      const results = payload.results ?? [];
-      rememberSuggestions(query, results);
       setSearchResults(results);
       setActiveSuggestion(-1);
       setSuggestionsOpen(true);
@@ -3901,6 +3945,15 @@ export function SimulatorApp({
       message: `Loading ${result.symbol} from the market feed…`,
     });
     try {
+      // A fresh price already on the page saves the lookup; the history
+      // request that follows returns the quote anyway.
+      const held = dashboard.availableSymbols.find(
+        (candidate) => candidate.symbol === result.symbol,
+      );
+      if (held && !held.isStale) {
+        selectQuote(held);
+        return;
+      }
       const response = await fetch(
         `/api/quotes?symbol=${encodeURIComponent(result.symbol)}`,
         { cache: "no-store", credentials: "same-origin" },
@@ -4497,7 +4550,8 @@ export function SimulatorApp({
       setScheduleCashDraft(null);
       setHostFeedback("Competition schedule saved.");
       await fetchDashboard(true, false);
-      await fetchAdminOverview();
+      // The route answers with the fresh overview.
+      setAdminOverview(payload as AdminOverview);
     } catch (error) {
       setHostFeedback(
         error instanceof Error ? error.message : "The schedule could not be saved.",
@@ -4522,7 +4576,7 @@ export function SimulatorApp({
       }
       knownVersion.current = 0;
       await fetchDashboard(true);
-      await fetchAdminOverview();
+      setAdminOverview(payload as AdminOverview);
       setTicketStatus({
         kind: "success",
         message: "Prototype portfolio data reset to its original state.",
@@ -5386,7 +5440,7 @@ export function SimulatorApp({
                 <h3 id="trade-history-heading" className="sr-only">Trade history</h3>
                 <span>
                   {tradeHistoryOpen && tradeHistory
-                    ? `Latest ${number.format(tradeHistory.length)}`
+                    ? `Latest ${number.format(tradeRows.length)}`
                     : "Newest first"}
                 </span>
                 {dashboard.recentOrders.length > 0 ? (
@@ -6747,6 +6801,7 @@ export function SimulatorApp({
                     items={dashboard.watchlist}
                     selectedSymbol={selectedQuote.symbol}
                     busySymbol={watchBusy}
+                    idle={marketsIdle}
                     onOpen={openWatchlistItem}
                     onRemove={(symbol) => void changeWatchlist(symbol, false)}
                   />
