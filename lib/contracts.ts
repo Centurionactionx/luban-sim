@@ -698,6 +698,17 @@ export interface AdminTeamSummary {
   returnCents: number;
   returnPercent: number;
   tradeCount: number;
+  buyCount: number;
+  sellCount: number;
+  shortCount: number;
+  coverCount: number;
+  /** CAD value of every filled trade, buys and sells added together. */
+  tradedCents: number;
+  rejectedCount: number;
+  /** Working orders still waiting: WORKING or PENDING_PARENT. */
+  workingOrderCount: number;
+  positionCount: number;
+  holdingsValueCents: number;
   version: number;
 }
 

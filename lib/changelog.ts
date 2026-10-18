@@ -33,6 +33,15 @@ export const CHANGE_KIND_LABELS: Record<ChangeKind, string> = {
 
 export const CHANGELOG: readonly ChangelogRelease[] = [
   {
+    version: "1.51.1",
+    date: "2026-10-18",
+    title: "Sort teams in team management",
+    changes: [
+      { kind: "added", text: "Hosts can sort teams by portfolio value, holdings, positions, cash, profit, profit margin, trades (buys, sells, shorts, covers), traded value, rejected orders, or open working orders." },
+      { kind: "added", text: "Each team's menu in team management opens its portfolio map." },
+    ],
+  },
+  {
     version: "1.51.0",
     date: "2026-10-18",
     title: "No cap on one holding",

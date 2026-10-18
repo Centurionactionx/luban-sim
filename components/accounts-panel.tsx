@@ -1,5 +1,6 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import {
   type FormEvent,
@@ -26,6 +27,42 @@ import type {
 } from "@/lib/contracts";
 
 import styles from "./accounts-panel.module.css";
+
+const PortfolioMap = dynamic(() => import("./portfolio-map").then((m) => m.PortfolioMap));
+
+type TeamSortKey =
+  | "totalValueCents"
+  | "holdingsValueCents"
+  | "positionCount"
+  | "cashCents"
+  | "returnCents"
+  | "returnPercent"
+  | "tradeCount"
+  | "buyCount"
+  | "sellCount"
+  | "shortCount"
+  | "coverCount"
+  | "tradedCents"
+  | "rejectedCount"
+  | "workingOrderCount";
+
+// Every sort is highest first. Money values show as CAD in the team's detail line.
+const TEAM_SORTS: ReadonlyArray<{ value: TeamSortKey; label: string; money?: boolean }> = [
+  { value: "totalValueCents", label: "Portfolio value", money: true },
+  { value: "holdingsValueCents", label: "Holdings value", money: true },
+  { value: "positionCount", label: "Positions held" },
+  { value: "cashCents", label: "Cash", money: true },
+  { value: "returnCents", label: "Profit", money: true },
+  { value: "returnPercent", label: "Profit margin %" },
+  { value: "tradeCount", label: "Filled trades" },
+  { value: "buyCount", label: "Buys" },
+  { value: "sellCount", label: "Sells" },
+  { value: "shortCount", label: "Shorts" },
+  { value: "coverCount", label: "Covers" },
+  { value: "tradedCents", label: "Traded value", money: true },
+  { value: "rejectedCount", label: "Rejected orders" },
+  { value: "workingOrderCount", label: "Open working orders" },
+];
 
 function stateLabel(state: InvitationSummary["state"]): string {
   return state.charAt(0).toUpperCase() + state.slice(1);
@@ -262,6 +299,9 @@ export function AccountsPanel({
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
   const [renaming, setRenaming] = useState<{ id: string; draft: string } | null>(null);
+  const [teamSort, setTeamSort] = useState<TeamSortKey | "">("");
+  const [mapView, setMapView] = useState<TeamHoldingsView | null>(null);
+  const mapDialogRef = useRef<HTMLDialogElement>(null);
   // One team's holdings panel open at a time.
   const [holdings, setHoldings] = useState<{
     teamId: string;
@@ -635,6 +675,22 @@ export function AccountsPanel({
       );
     } catch (error) {
       setHoldings(null);
+      showToast(error instanceof Error ? error.message : "Holdings could not be loaded.", "error");
+    }
+  };
+
+  const openMap = async (team: AdminTeamSummary) => {
+    setMenuOpen(null);
+    try {
+      const response = await fetch(`/api/teams/${encodeURIComponent(team.id)}/holdings`, {
+        cache: "no-store",
+        credentials: "same-origin",
+      });
+      const payload = await readJson(response);
+      if (!response.ok) throw new Error(extractError(payload, "Holdings could not be loaded."));
+      setMapView(payload as TeamHoldingsView);
+      mapDialogRef.current?.showModal();
+    } catch (error) {
       showToast(error instanceof Error ? error.message : "Holdings could not be loaded.", "error");
     }
   };
@@ -1332,6 +1388,13 @@ export function AccountsPanel({
                 >
                   View holdings
                 </button>
+                <button
+                  type="button"
+                  className={styles.menuItem}
+                  onClick={() => void openMap(team)}
+                >
+                  Portfolio map
+                </button>
                 <a
                   className={styles.menuItem}
                   href={`/api/admin/teams/${encodeURIComponent(team.id)}/export`}
@@ -1620,6 +1683,20 @@ export function AccountsPanel({
                 People · {search ? `${shownCount} of ${people.length}` : people.length}
               </h2>
               <label className={styles.search}>
+                <span className="sr-only">Sort teams</span>
+                <select
+                  value={teamSort}
+                  onChange={(event) => setTeamSort(event.target.value as TeamSortKey | "")}
+                >
+                  <option value="">Sort teams: members first</option>
+                  {TEAM_SORTS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {`Sort teams: ${option.label}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className={styles.search}>
                 <span className="sr-only">Search people</span>
                 <input
                   type="search"
@@ -1644,20 +1721,31 @@ export function AccountsPanel({
               <p className={styles.empty}>Loading accounts…</p>
             ) : (
               <>
-                {/* Teams with people first, then the empty ones. */}
+                {/* Teams with people first, then the empty ones, unless a sort is picked. */}
                 {[...teams]
-                  .sort(
-                    (left, right) =>
-                      Number(!students.some((account) => account.teamId === left.id)) -
-                      Number(!students.some((account) => account.teamId === right.id)),
+                  .sort((left, right) =>
+                    teamSort
+                      ? right[teamSort] - left[teamSort] || left.name.localeCompare(right.name)
+                      : Number(!students.some((account) => account.teamId === left.id)) -
+                        Number(!students.some((account) => account.teamId === right.id)),
                   )
                   .map((team) => {
                     const members = students.filter((account) => account.teamId === team.id);
                     const waiting = openInvitations.filter(
                       (invitation) => invitation.teamId === team.id,
                     ).length;
+                    const sort = TEAM_SORTS.find((option) => option.value === teamSort);
+                    const sortValue = !sort
+                      ? ""
+                      : sort.money
+                        ? formatMoney(team[sort.value])
+                        : sort.value === "returnPercent"
+                          ? `${team.returnPercent.toFixed(2)}%`
+                          : String(team[sort.value]);
                     return renderGroup(team.id, team.name, members, {
-                      detail: teamDetail(members.length, waiting),
+                      detail:
+                        teamDetail(members.length, waiting) +
+                        (sort ? ` · ${sort.label}: ${sortValue}` : ""),
                       badge: "team",
                       invite: { label: "Invite", onClick: () => inviteTo("student", team.id) },
                       team,
@@ -1686,6 +1774,45 @@ export function AccountsPanel({
           </section>
         </div>
       </div>
+
+      <dialog
+        ref={mapDialogRef}
+        className="chart-dialog portfolio-map-dialog"
+        aria-labelledby="admin-map-title"
+        onClose={() => setMapView(null)}
+        onClick={(event) => {
+          // A click on the backdrop lands on the dialog element itself.
+          if (event.target === event.currentTarget) event.currentTarget.close();
+        }}
+      >
+        {mapView ? (
+          <div className="chart-dialog__frame">
+            <header className="chart-dialog__header">
+              <div className="chart-dialog__identity">
+                <h2 id="admin-map-title">{mapView.teamName} · Portfolio map</h2>
+                <span>{`${formatMoney(mapView.totalValueCents)} total`}</span>
+              </div>
+              <button
+                className="chart-dialog__close"
+                type="button"
+                aria-label="Close portfolio map"
+                onClick={() => mapDialogRef.current?.close()}
+              >
+                ✕
+              </button>
+            </header>
+            <div className="portfolio-map-dialog__body">
+              <PortfolioMap
+                holdings={mapView.holdings}
+                cashCents={mapView.cashCents}
+                label={`${mapView.teamName} portfolio map`}
+                // Read-only here: this page has no quote panel to open a symbol in.
+                onSelectSymbol={() => {}}
+              />
+            </div>
+          </div>
+        ) : null}
+      </dialog>
 
       <div className={styles.toastRegion} role="status" aria-live="polite">
         {toast ? (

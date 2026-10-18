@@ -50,6 +50,14 @@ interface AdminTeamRow {
   cash_cents: number;
   version: number;
   trade_count: number;
+  buy_count: number;
+  sell_count: number;
+  short_count: number;
+  cover_count: number;
+  traded_cents: number;
+  rejected_count: number;
+  working_count: number;
+  position_count: number;
 }
 
 interface CashTeamRow {
@@ -193,11 +201,21 @@ export async function listAdminTeams(
     `
       SELECT
         t.id, t.name, t.status, t.cash_cents, t.version,
-        COUNT(o.id) AS trade_count
+        COUNT(o.id) AS trade_count,
+        -- Same side split as the global admin log.
+        COUNT(CASE WHEN o.side = 'BUY' AND o.holding_quantity_after - o.quantity >= 0 THEN 1 END) AS buy_count,
+        COUNT(CASE WHEN o.side = 'SELL' AND o.holding_quantity_after >= 0 THEN 1 END) AS sell_count,
+        COUNT(CASE WHEN o.side = 'SELL' AND o.holding_quantity_after < 0 THEN 1 END) AS short_count,
+        COUNT(CASE WHEN o.side = 'BUY' AND o.holding_quantity_after - o.quantity < 0 THEN 1 END) AS cover_count,
+        COALESCE(SUM(o.gross_cents), 0) AS traded_cents,
+        (SELECT COUNT(*) FROM order_rejections r WHERE r.team_id = t.id) AS rejected_count,
+        (SELECT COUNT(*) FROM working_orders w
+          WHERE w.team_id = t.id AND w.status IN ('WORKING', 'PENDING_PARENT')) AS working_count,
+        (SELECT COUNT(*) FROM holdings h WHERE h.team_id = t.id AND h.quantity <> 0) AS position_count
       FROM teams t
       LEFT JOIN orders o ON o.team_id = t.id AND o.status = 'FILLED'
       WHERE t.competition_id = ? AND t.sandbox_owner_user_id IS NULL
-      GROUP BY t.id
+      GROUP BY t.id, t.name, t.status, t.cash_cents, t.version
       ORDER BY t.name ASC
     `,
     [competition.id],
@@ -219,6 +237,15 @@ export async function listAdminTeams(
       returnCents: portfolio.totalReturnCents,
       returnPercent: portfolio.totalReturnPercent,
       tradeCount: Number(row.trade_count),
+      buyCount: Number(row.buy_count),
+      sellCount: Number(row.sell_count),
+      shortCount: Number(row.short_count),
+      coverCount: Number(row.cover_count),
+      tradedCents: Number(row.traded_cents),
+      rejectedCount: Number(row.rejected_count),
+      workingOrderCount: Number(row.working_count),
+      positionCount: Number(row.position_count),
+      holdingsValueCents: portfolio.holdingsValueCents,
       version: Number(row.version),
     });
   }

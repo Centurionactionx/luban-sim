@@ -5,6 +5,13 @@ Releases before v1.28.0 didn't have numbers, so they're listed by date.
 
 <!-- Generated from lib/changelog.ts by `pnpm changelog`. Edit that file, not this one. -->
 
+## v1.51.1: Sort teams in team management (2026-10-18)
+
+### New
+
+- Hosts can sort teams by portfolio value, holdings, positions, cash, profit, profit margin, trades (buys, sells, shorts, covers), traded value, rejected orders, or open working orders.
+- Each team's menu in team management opens its portfolio map.
+
 ## v1.51.0: No cap on one holding (2026-10-18)
 
 ### Improved

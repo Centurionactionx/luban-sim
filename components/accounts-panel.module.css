@@ -165,7 +165,8 @@
   gap: 12px;
 }
 
-.search input {
+.search input,
+.search select {
   width: min(300px, 100%);
   min-height: 40px;
   padding: 8px 12px;
