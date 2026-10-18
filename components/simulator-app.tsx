@@ -2385,82 +2385,9 @@ function LeaderboardTable({
 
 /* ───────────────────────────── Watchlist ───────────────────────────── */
 
-const SPARKLINE_TTL_MS = 15 * 60_000;
-const SPARKLINE_CONCURRENCY = 2;
-const sparklineCache = new Map<
-  string,
-  { at: number; closes: Promise<number[] | null> }
->();
-let sparklinesInFlight = 0;
-const sparklineQueue: Array<() => void> = [];
+const SPARKLINE_TTL_MS = 5 * 60_000;
 
-function runSparklineJob<T>(job: () => Promise<T>): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const start = () => {
-      sparklinesInFlight += 1;
-      job()
-        .then(resolve, reject)
-        .finally(() => {
-          sparklinesInFlight -= 1;
-          sparklineQueue.shift()?.();
-        });
-    };
-    if (sparklinesInFlight < SPARKLINE_CONCURRENCY) start();
-    else sparklineQueue.push(start);
-  });
-}
-
-/**
- * Today's closes for a watchlist row, remembered for a few minutes and
- * fetched two at a time so a full watchlist never crowds out the main
- * chart's requests. Once its market is closed the day's line is final, so a
- * loaded one is kept until the page reloads.
- */
-function loadSparklineCloses(symbol: string, live: boolean): Promise<number[] | null> {
-  const cached = sparklineCache.get(symbol);
-  if (cached && (!live || Date.now() - cached.at < SPARKLINE_TTL_MS)) return cached.closes;
-  const closes = runSparklineJob(async () => {
-    try {
-      const response = await fetch(
-        `/api/quotes/history?symbol=${encodeURIComponent(symbol)}&range=1D`,
-        { cache: "no-store", credentials: "same-origin" },
-      );
-      if (!response.ok) {
-        sparklineCache.delete(symbol); // retry on the next redraw
-        return null;
-      }
-      const payload = (await response.json()) as { history?: QuoteHistory };
-      return (payload.history?.points ?? []).map((point) => point.closeCents);
-    } catch {
-      sparklineCache.delete(symbol);
-      return null;
-    }
-  });
-  sparklineCache.set(symbol, { at: Date.now(), closes });
-  return closes;
-}
-
-function Sparkline({
-  symbol,
-  live,
-  refreshKey,
-}: {
-  symbol: string;
-  live: boolean;
-  refreshKey: number;
-}) {
-  const [closes, setCloses] = useState<number[] | null>(null);
-
-  useEffect(() => {
-    let live = true;
-    void loadSparklineCloses(symbol, live).then((next) => {
-      if (live) setCloses(next);
-    });
-    return () => {
-      live = false;
-    };
-  }, [symbol, live, refreshKey]);
-
+function Sparkline({ closes }: { closes: number[] | null | undefined }) {
   if (!closes || closes.length < 2) {
     return <span className="sparkline sparkline--empty" aria-hidden="true" />;
   }
@@ -2512,20 +2439,42 @@ function WatchlistTable({
     key: "added",
     descending: false,
   });
-  // Sparklines redraw every few minutes, when their cache runs out. A hidden
-  // tab sits out; coming back redraws any that expired meanwhile.
-  const [sparkKey, setSparkKey] = useState(0);
+  // Every row's sparkline comes from one request, redone every few minutes
+  // and whenever the watchlist changes. A hidden tab sits out; coming back
+  // reloads them if they expired meanwhile.
+  const [sparklines, setSparklines] = useState<Record<string, number[] | null>>({});
+  const symbolKey = items.map((item) => item.symbol).sort().join(",");
   useEffect(() => {
-    const redraw = () => {
-      if (!document.hidden) setSparkKey((key) => key + 1);
+    if (!symbolKey) return;
+    let loadedAt = 0;
+    const controller = new AbortController();
+    const load = () => {
+      if (document.hidden || Date.now() - loadedAt < SPARKLINE_TTL_MS) return;
+      loadedAt = Date.now();
+      fetch("/api/quotes/sparklines", {
+        cache: "no-store",
+        credentials: "same-origin",
+        signal: controller.signal,
+      })
+        .then((response) => (response.ok ? response.json() : null))
+        .then((payload: { sparklines?: Record<string, number[] | null> } | null) => {
+          if (payload?.sparklines) setSparklines(payload.sparklines);
+          else loadedAt = 0; // retry on the next tick
+        })
+        .catch(() => {
+          if (!controller.signal.aborted) loadedAt = 0;
+        });
     };
-    const timer = window.setInterval(redraw, SPARKLINE_TTL_MS);
-    document.addEventListener("visibilitychange", redraw);
+    load();
+    // Checks each minute but only fetches once the last load has expired.
+    const timer = window.setInterval(load, 60_000);
+    document.addEventListener("visibilitychange", load);
     return () => {
+      controller.abort();
       window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", redraw);
+      document.removeEventListener("visibilitychange", load);
     };
-  }, []);
+  }, [symbolKey]);
 
   const sorted = useMemo(() => {
     const rows = items.map((item, index) => ({ item, index }));
@@ -2622,11 +2571,7 @@ function WatchlistTable({
                   {item.quote ? <ChangeValue percent={item.quote.changePercent} /> : "—"}
                 </td>
                 <td data-label="Today" className="watchlist-table__spark">
-                  <Sparkline
-                    symbol={item.symbol}
-                    live={item.quote?.marketOpen ?? true}
-                    refreshKey={sparkKey}
-                  />
+                  <Sparkline closes={sparklines[item.symbol]} />
                 </td>
                 <td data-label="" className="watchlist-table__remove">
                   <button
