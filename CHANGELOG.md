@@ -5,6 +5,12 @@ Releases before v1.28.0 didn't have numbers, so they're listed by date.
 
 <!-- Generated from lib/changelog.ts by `pnpm changelog`. Edit that file, not this one. -->
 
+## v1.51.0: No cap on one holding (2026-10-18)
+
+### Improved
+
+- One holding can now be any share of your team's value. The 25% cap is gone for buys and shorts, and the ticket's Max button goes as far as your buying power (or one order's limit, for a short).
+
 ## v1.50.2: Lighter on the server (2026-10-18)
 
 ### Improved

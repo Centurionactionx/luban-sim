@@ -31,7 +31,6 @@ Hitting a limit returns `429 ORDER_RATE_LIMITED`, with how long to wait.
 
 | Rule | Limit |
 | --- | --- |
-| One holding | no more than 25% of the team's total value, long or short |
 | Different listings | 25 per team, counting holdings and waiting buys |
 | Buying power | cash, minus cash set aside for waiting buys, minus what it would cost to buy back open shorts |
 | Long and short | a team can't be long and short the same listing; close one side first |
@@ -65,4 +64,4 @@ Signed-in users also have per-minute request budgets for things like market data
 
 ## Admin test accounts
 
-A platform admin's private test account skips market hours, the daily order limit, the 25% holding cap and the 25-listing cap, so admins can test at any time. It never touches a competition team.
+A platform admin's private test account skips market hours, the daily order limit and the 25-listing cap, so admins can test at any time. It never touches a competition team.

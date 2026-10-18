@@ -20,9 +20,7 @@ import { workingOrderExpiresAt } from "../market-calendar";
 import {
   MAX_OPEN_WORKING_ORDERS_PER_TEAM,
   MAX_ORDER_QUANTITY,
-  MAX_POSITION_PERCENT,
   applyFill,
-  positionRoomCents,
 } from "../order-math";
 import {
   assertBracketPrices,
@@ -298,16 +296,7 @@ function parseStoredError(value: string | null): AppError {
 }
 
 /**
- * Most of a team's portfolio one holding can reach by buying, in percent.
- * 100 turns the cap off.
- */
-export function maxPositionPercent(): number {
-  const raw = Number(process.env.LUBAN_MAX_POSITION_PERCENT);
-  return Number.isSafeInteger(raw) && raw >= 1 && raw <= 100 ? raw : MAX_POSITION_PERCENT;
-}
-
-/**
- * CAD prices of the listings a student's team holds, for the one-holding cap.
+ * CAD prices of the listings a student's team holds, for buying power.
  * Read before the write transaction, like the order's own quote, so no
  * transaction waits on market data. A listing with no price is left out.
  */
@@ -893,37 +882,10 @@ async function placeOrderNow(input: PlaceOrderInput, options: FillOptions): Prom
             );
           }
         }
-        // No single holding, long or short, may pass maxPositionPercent() of
-        // the portfolio, so a team can't stake everything on one listing. A
-        // team also holds only so many different listings. The admin sandbox
-        // is exempt from both.
-        if (!isAdminSandbox) {
-          if (currentQuantity === 0) {
-            await assertHoldingSlot(tx, account.team_id, normalized.symbol, options.releaseWorkingOrderIds);
-          }
-          const totalValueCents = held.reduce(
-            (total, row) => total + Number(row.quantity) * priceOf(row),
-            Number(account.cash_cents),
-          );
-          const limitPercent = maxPositionPercent();
-          const roomCents = positionRoomCents(
-            totalValueCents,
-            Math.abs(currentQuantity) * quote.priceCadCents,
-            limitPercent,
-          );
-          if (openingCents > roomCents) {
-            const roomQuantity = Math.floor(roomCents / quote.priceCadCents);
-            const action = normalized.side === "BUY" ? "buy" : "short";
-            throw new AppError(
-              "POSITION_LIMIT",
-              `One holding can be at most ${limitPercent}% of the team's portfolio value. ` +
-                (roomQuantity > 0
-                  ? `The team can ${action} up to ${roomQuantity} more ${unitWord(quote.assetClass, roomQuantity)} of ${normalized.symbol}.`
-                  : `The team already holds as much ${normalized.symbol} as that allows.`),
-              409,
-              { maxQuantity: roomQuantity, limitPercent },
-            );
-          }
+        // A team holds only so many different listings. The admin sandbox is
+        // exempt.
+        if (!isAdminSandbox && currentQuantity === 0) {
+          await assertHoldingSlot(tx, account.team_id, normalized.symbol, options.releaseWorkingOrderIds);
         }
       }
 

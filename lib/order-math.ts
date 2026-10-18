@@ -12,12 +12,6 @@ export const MAX_OPEN_WORKING_ORDERS_PER_TEAM = 20;
 /** The highest price an order can name: $100 million per share or lot. */
 export const MAX_ORDER_PRICE_CENTS = 10_000_000_000;
 
-/**
- * Most of a team's total value one holding can reach by buying, in percent.
- * The server can override it with LUBAN_MAX_POSITION_PERCENT.
- */
-export const MAX_POSITION_PERCENT = 25;
-
 /** Most different listings a team can hold or have waiting buys for at once. */
 export const MAX_DISTINCT_HOLDINGS_PER_TEAM = 25;
 
@@ -28,19 +22,6 @@ export const MAX_DISTINCT_HOLDINGS_PER_TEAM = 25;
 export function holdingsLimitReached(symbols: Iterable<string>, symbol: string): boolean {
   const distinct = new Set(symbols);
   return !distinct.has(symbol) && distinct.size >= MAX_DISTINCT_HOLDINGS_PER_TEAM;
-}
-
-/**
- * CAD cents of a listing a team can still buy before that holding passes
- * limitPercent of the portfolio. A buy only swaps cash for shares at
- * the same price, so the total value is the same before and after it.
- */
-export function positionRoomCents(
-  totalValueCents: number,
-  holdingValueCents: number,
-  limitPercent: number = MAX_POSITION_PERCENT,
-): number {
-  return Math.max(0, Math.floor((totalValueCents * limitPercent) / 100) - holdingValueCents);
 }
 
 /** A holding: positive quantity is long, negative is short. */

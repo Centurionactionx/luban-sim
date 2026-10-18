@@ -62,8 +62,6 @@ import {
   MAX_OPEN_WORKING_ORDERS_PER_TEAM,
   MAX_ORDER_PRICE_CENTS,
   MAX_ORDER_QUANTITY,
-  MAX_POSITION_PERCENT,
-  positionRoomCents,
   priceInputToCents,
   reservedCadCentsPerUnit,
 } from "@/lib/order-math";
@@ -3552,39 +3550,22 @@ export function SimulatorApp({
     }
     return rows;
   }, [dashboard.workingOrders]);
-  // The most a single order can be: everything affordable (and within the
-  // one-holding cap, which the admin sandbox skips) when buying, everything
-  // held when selling. Whole units only.
-  const buyLimitCents = isPlatformAdmin
-    ? portfolio.buyingPowerCents
-    : Math.min(
-        portfolio.buyingPowerCents,
-        positionRoomCents(
-          portfolio.totalValueCents,
-          Math.max(0, heldQuantity) * selectedQuote.priceCadCents,
-        ),
-      );
-  // A short has the same one-holding cap as a buy (the admin sandbox skips it).
-  const shortLimitCents = isPlatformAdmin
-    ? Number.POSITIVE_INFINITY
-    : positionRoomCents(
-        portfolio.totalValueCents,
-        shortQuantity * selectedQuote.priceCadCents,
-      );
+  // The most a single order can be: everything affordable when buying,
+  // everything held when selling. Whole units only.
   const maxOrderQuantity =
     action === "COVER"
       ? Math.min(MAX_ORDER_QUANTITY, shortQuantity)
       : action === "SHORT"
         ? heldQuantity > 0 || ticketUnitCadCents <= 0
           ? 0
-          : Math.min(MAX_ORDER_QUANTITY, Math.floor(shortLimitCents / ticketUnitCadCents))
+          : MAX_ORDER_QUANTITY
     : action === "BUY"
       ? heldQuantity < 0
         ? 0
         : ticketUnitCadCents > 0
         ? Math.min(
             MAX_ORDER_QUANTITY,
-            Math.max(0, Math.floor(buyLimitCents / ticketUnitCadCents)),
+            Math.max(0, Math.floor(portfolio.buyingPowerCents / ticketUnitCadCents)),
           )
         : 0
       : freeQuantity;
@@ -6321,7 +6302,7 @@ export function SimulatorApp({
                         action === "COVER"
                           ? `Buy back every ${unitWord(selectedAssetClass, 1)} sold short`
                           : action === "SHORT"
-                            ? `Short as many ${unitWord(selectedAssetClass, 2)} as the one-holding limit allows`
+                            ? `Short as many ${unitWord(selectedAssetClass, 2)} as one order allows`
                             : action === "BUY"
                               ? `Buy as many ${unitWord(selectedAssetClass, 2)} as the cash allows`
                               : `Sell every ${unitWord(selectedAssetClass, 1)} held`
@@ -6365,12 +6346,8 @@ export function SimulatorApp({
                               <strong>{formatMoney(maxOrderQuantity * ticketUnitCadCents)}</strong>.
                               {action === "COVER" ? (
                                 <> That buys back every {unitWord(selectedAssetClass, 1)} sold short.</>
-                              ) : action === "SHORT" ||
-                                buyLimitCents < portfolio.buyingPowerCents ? (
-                                <>
-                                  That&rsquo;s as much as the {MAX_POSITION_PERCENT}% limit on one
-                                  holding allows.
-                                </>
+                              ) : action === "SHORT" ? (
+                                <> That&rsquo;s the most one order can name.</>
                               ) : (
                                 <>
                                   That uses nearly all of the{" "}

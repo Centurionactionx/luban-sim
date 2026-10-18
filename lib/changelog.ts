@@ -33,6 +33,14 @@ export const CHANGE_KIND_LABELS: Record<ChangeKind, string> = {
 
 export const CHANGELOG: readonly ChangelogRelease[] = [
   {
+    version: "1.51.0",
+    date: "2026-10-18",
+    title: "No cap on one holding",
+    changes: [
+      { kind: "changed", text: "One holding can now be any share of your team's value. The 25% cap is gone for buys and shorts, and the ticket's Max button goes as far as your buying power (or one order's limit, for a short)." },
+    ],
+  },
+  {
     version: "1.50.2",
     date: "2026-10-18",
     title: "Lighter on the server",

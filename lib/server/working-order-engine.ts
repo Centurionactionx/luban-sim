@@ -6,7 +6,7 @@ import { acquireAccountReadLock, type DbExecutor } from "./database";
 import { getDb } from "./db";
 import { unitWord } from "../lots";
 import { getMarketDataProvider, marketDataNow, refreshQuote } from "./quotes";
-import { maxPositionPercent, maxQuoteAgeMs, placeOrder } from "./trading";
+import { maxQuoteAgeMs, placeOrder } from "./trading";
 import { stockSessionMayBeOpen } from "../market-calendar";
 import { MAX_DISTINCT_HOLDINGS_PER_TEAM } from "../order-math";
 import {
@@ -97,8 +97,6 @@ function cancellationReason(error: AppError): string {
     case "ASSET_CLASS_DISABLED":
     case "SYMBOL_BLOCKED":
       return "This listing can no longer be bought.";
-    case "POSITION_LIMIT":
-      return `Filling it would have put more than ${maxPositionPercent()}% of the portfolio in one holding.`;
     case "HOLDINGS_LIMIT":
       return `The team already held ${MAX_DISTINCT_HOLDINGS_PER_TEAM} different stocks when the price was reached.`;
     default:
