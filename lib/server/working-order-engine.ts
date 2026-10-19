@@ -17,8 +17,8 @@ import { workingOrderLabel } from "./working-orders";
 
 /**
  * The price checker. Each run expires and cancels what is due, then fills
- * every waiting order whose price has been reached. It runs every minute from
- * Supabase pg_cron (POST /api/cron/working-orders) and, as a backup, after
+ * every waiting order whose price has been reached. It runs every 3 minutes on
+ * weekdays from Supabase pg_cron (POST /api/cron/working-orders) and, as a backup, after
  * dashboard loads. Runs may overlap freely: a fill re-checks, under the team
  * lock and before any money moves, that its order is still waiting, so each
  * order fills at most once.

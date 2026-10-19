@@ -481,6 +481,10 @@ export interface LeaderboardRow {
   totalValueCents: number;
   returnCents: number;
   returnPercent: number;
+  /** Rank and return since this week opened (Monday 9:30 a.m. Toronto). */
+  weekRank: number;
+  weekReturnCents: number;
+  weekReturnPercent: number;
   tradeCount: number;
   isCurrentTeam: boolean;
 }

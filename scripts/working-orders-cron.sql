@@ -2,9 +2,10 @@
 --
 -- Run once in the Supabase SQL editor (Database -> Extensions must have
 -- pg_cron and pg_net enabled). Replace <CRON_SECRET> with the same value set
--- as CRON_SECRET in Vercel (Production). Every minute it calls the app's
--- checker, but only while at least one order is waiting, so quiet periods
--- cost nothing.
+-- as CRON_SECRET in Vercel (Production). Every 3 minutes on weekdays, 13:00
+-- to 21:59 UTC (covering the TSX and US sessions), it calls the app's checker,
+-- but only while at least one order is waiting, so quiet periods cost nothing.
+-- Outside those hours, dashboard loads still run the checker as a backup.
 --
 -- To change it later, run cron.unschedule('luban-working-orders') first.
 -- To check it is running: select * from cron.job_run_details
@@ -13,7 +14,7 @@
 
 select cron.schedule(
   'luban-working-orders',
-  '* * * * *',
+  '*/3 13-21 * * 1-5',
   $job$
     select net.http_post(
       url := 'https://sim.lubancanada.com/api/cron/working-orders',

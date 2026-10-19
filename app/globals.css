@@ -749,6 +749,51 @@ a {
   color: var(--purple-deep);
 }
 
+/* Overall | This week: one joined control, inset to line up with the table. */
+.leaderboard-period-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 18px 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.leaderboard-period {
+  display: inline-flex;
+  padding: 2px;
+  border: 1.5px solid var(--ink);
+  border-radius: 4px;
+  background: var(--paper);
+}
+
+.leaderboard-period button {
+  min-height: 28px;
+  padding: 4px 12px;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.leaderboard-period button:hover {
+  color: var(--ink);
+}
+
+.leaderboard-period button[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.leaderboard-period button:focus-visible {
+  outline: 2px solid var(--purple);
+  outline-offset: 2px;
+}
+
 .chart {
   position: relative;
 }
@@ -7026,4 +7071,21 @@ body {
   .trading-room[data-loading] .room-column {
     animation: none;
   }
+}
+
+/* Shown while live updates are paused for inactivity; never blocks clicks. */
+.idle-notice {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 50;
+  max-width: min(360px, calc(100vw - 24px));
+  margin: 0;
+  padding: 8px 12px;
+  border: 2px solid var(--rule);
+  border-radius: var(--tile-radius);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: var(--type-meta);
+  pointer-events: none;
 }

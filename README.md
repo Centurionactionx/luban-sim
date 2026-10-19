@@ -45,7 +45,7 @@ No API keys are needed for demo mode. Copy `.env.example` to `.env.local` when y
 
 The browser never decides a balance. An order goes to `POST /api/orders`, the server refreshes the quote, and `lib/server/trading.ts` does the rest inside one database transaction: check idempotency and the latest cash and holdings, apply the change, then write the order, ledger entry, activity event and portfolio version together. If the same order is retried with the same idempotency key, the original result comes back and the account is only charged once. Two teammates trading at the same moment can't push cash or shares negative.
 
-Limit, stop loss and take profit orders live in `lib/server/working-orders.ts`. They wait in the database, and a cron job (Supabase `pg_cron` hitting `POST /api/cron/working-orders` every minute with `CRON_SECRET`) checks prices and fills them. The SQL for that job is in `scripts/working-orders-cron.sql`.
+Limit, stop loss and take profit orders live in `lib/server/working-orders.ts`. They wait in the database, and a cron job (Supabase `pg_cron` hitting `POST /api/cron/working-orders` every 3 minutes on weekdays with `CRON_SECRET`) checks prices and fills them. The SQL for that job is in `scripts/working-orders-cron.sql`.
 
 Competitions follow a schedule the host sets. Trading opens and closes on its own at those times, and the window is checked inside the order transaction, so nothing slips through at the boundary.
 

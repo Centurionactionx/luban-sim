@@ -850,6 +850,69 @@ export async function listActivity(
 type RankedRow = Omit<LeaderboardRow, "rank" | "isCurrentTeam">;
 
 /**
+ * The Toronto date of the Monday that opened the leaderboard week holding
+ * `at`. A week opens at Monday's 9:30 a.m. market open, so Monday morning
+ * before the bell still belongs to the week before.
+ */
+export function leaderboardWeekStart(at: Date): string {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Toronto",
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      weekday: "short",
+      hour: "numeric",
+      minute: "numeric",
+      hourCycle: "h23",
+    })
+      .formatToParts(at)
+      .map((part) => [part.type, part.value]),
+  );
+  const weekday = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].indexOf(parts.weekday);
+  const beforeBell =
+    weekday === 0 && Number(parts.hour) * 60 + Number(parts.minute) < 9 * 60 + 30;
+  const daysBack = beforeBell ? 7 : weekday;
+  const monday = new Date(
+    Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day) - daysBack),
+  );
+  return monday.toISOString().slice(0, 10);
+}
+
+/**
+ * Each team's value when the week opened. The first ranking of a week saves
+ * every team's value at that moment, and a team first seen mid-week starts
+ * from its value then. ON CONFLICT keeps whichever instance wrote first.
+ */
+async function readWeekBaselines(
+  values: Array<{ teamId: string; totalValueCents: number }>,
+  weekStart: string,
+): Promise<Map<string, number>> {
+  const db = await getDb();
+  const read = async () =>
+    new Map(
+      (
+        await db.all<{ team_id: string; total_value_cents: number }>(
+          "SELECT team_id, total_value_cents FROM weekly_baselines WHERE week_start = ?",
+          [weekStart],
+        )
+      ).map((row) => [row.team_id, Number(row.total_value_cents)]),
+    );
+  const baselines = await read();
+  const missing = values.filter((value) => !baselines.has(value.teamId));
+  if (missing.length === 0) return baselines;
+  for (const value of missing) {
+    await db.run(
+      `INSERT INTO weekly_baselines (team_id, week_start, total_value_cents)
+       VALUES (?, ?, ?)
+       ON CONFLICT (team_id, week_start) DO NOTHING`,
+      [value.teamId, weekStart, value.totalValueCents],
+    );
+  }
+  return read();
+}
+
+/**
  * Every dashboard poll needs the leaderboard. The ranking only changes when a
  * team row changes (every trade, cash, status, or name change bumps its
  * version) or a quote changes, so it is memoized per process on exactly those
@@ -864,6 +927,33 @@ export async function buildLeaderboard(
   preloadedCompetition?: CompetitionSummary,
 ): Promise<Leaderboard> {
   const competition = preloadedCompetition ?? (await getCompetitionSummary());
+  const ranked = await rankTeams(competition, at);
+
+  return {
+    competitionId: competition.id,
+    asOf: at.toISOString(),
+    rows: ranked.map((row, index): LeaderboardRow => ({
+      rank: index + 1,
+      ...row,
+      isCurrentTeam: row.teamId === user.teamId,
+    })),
+  };
+}
+
+/**
+ * Called by the price-checker cron so a week's baseline is saved right at
+ * Monday's open even when nobody has the site open. Skips once it exists.
+ */
+export async function ensureWeekBaselines(at: Date = new Date()): Promise<void> {
+  const db = await getDb();
+  const saved = await db.get(
+    "SELECT 1 AS found FROM weekly_baselines WHERE week_start = ? LIMIT 1",
+    [leaderboardWeekStart(at)],
+  );
+  if (!saved) await rankTeams(await getCompetitionSummary(), at);
+}
+
+async function rankTeams(competition: CompetitionSummary, at: Date): Promise<RankedRow[]> {
   const db = await getDb();
   const teams = await db.all<TeamRow>(
     `
@@ -933,9 +1023,14 @@ export async function buildLeaderboard(
     }
 
     const startingValueCents = competition.startingCashCents;
-    const rows: RankedRow[] = teams.map((team) => {
-      const totalValueCents =
-        Number(team.cash_cents) + (holdingsValueByTeam.get(team.id) ?? 0);
+    const values = teams.map((team) => ({
+      teamId: team.id,
+      totalValueCents: Number(team.cash_cents) + (holdingsValueByTeam.get(team.id) ?? 0),
+    }));
+    const baselines = await readWeekBaselines(values, leaderboardWeekStart(at));
+    const rows: RankedRow[] = teams.map((team, index) => {
+      const { totalValueCents } = values[index];
+      const weekStartCents = baselines.get(team.id) ?? totalValueCents;
       return {
         teamId: team.id,
         teamName: team.name,
@@ -946,34 +1041,40 @@ export async function buildLeaderboard(
           startingValueCents > 0
             ? roundPercent(totalValueCents - startingValueCents, startingValueCents)
             : 0,
+        weekRank: 0,
+        weekReturnCents: totalValueCents - weekStartCents,
+        weekReturnPercent:
+          weekStartCents > 0 ? roundPercent(totalValueCents - weekStartCents, weekStartCents) : 0,
         tradeCount: tradeCounts.get(team.id) ?? 0,
       };
     });
 
-    rows.sort((left, right) => {
-      const leftDisqualified = left.teamStatus === "disqualified" ? 1 : 0;
-      const rightDisqualified = right.teamStatus === "disqualified" ? 1 : 0;
-      return (
-        leftDisqualified - rightDisqualified ||
+    const disqualifiedLast = (left: RankedRow, right: RankedRow) =>
+      (left.teamStatus === "disqualified" ? 1 : 0) -
+      (right.teamStatus === "disqualified" ? 1 : 0);
+    [...rows]
+      .sort(
+        (left, right) =>
+          disqualifiedLast(left, right) ||
+          right.weekReturnPercent - left.weekReturnPercent ||
+          left.teamName.localeCompare(right.teamName),
+      )
+      .forEach((row, index) => {
+        row.weekRank = index + 1;
+      });
+    rows.sort(
+      (left, right) =>
+        disqualifiedLast(left, right) ||
         right.totalValueCents - left.totalValueCents ||
-        left.teamName.localeCompare(right.teamName)
-      );
-    });
+        left.teamName.localeCompare(right.teamName),
+    );
 
     ranked = { key: cacheKey, rows };
     leaderboardCache.clear();
     leaderboardCache.set(competition.id, ranked);
   }
 
-  return {
-    competitionId: competition.id,
-    asOf: at.toISOString(),
-    rows: ranked.rows.map((row, index): LeaderboardRow => ({
-      rank: index + 1,
-      ...row,
-      isCurrentTeam: row.teamId === user.teamId,
-    })),
-  };
+  return ranked.rows;
 }
 
 export async function getLeaderboard(userId: string): Promise<Leaderboard> {
@@ -1145,7 +1246,9 @@ export async function getDashboard(
       }),
       // The top five, plus the viewer's own team when it ranks lower so the
       // leaderboard can show where they stand.
-      leaderboard: leaderboard.rows.filter((row, index) => index < 5 || row.isCurrentTeam),
+      leaderboard: leaderboard.rows.filter(
+        (row, index) => index < 5 || row.weekRank <= 5 || row.isCurrentTeam,
+      ),
       availableSymbols: await listQuotesForSymbols(
         [
           ...(calculated?.holdings.map((holding) => holding.symbol) ?? []),

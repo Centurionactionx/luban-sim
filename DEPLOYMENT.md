@@ -107,7 +107,7 @@ A buy can be a market or limit order; a sell can be market, limit, stop loss, or
 
 The price checker (`lib/server/working-order-engine.ts`) runs from two places:
 
-- Every minute, Supabase `pg_cron` calls `POST /api/cron/working-orders` with `Authorization: Bearer <CRON_SECRET>`, but only while an order is waiting. Set up once with `scripts/working-orders-cron.sql`.
+- Every 3 minutes on weekdays (13:00 to 21:59 UTC), Supabase `pg_cron` calls `POST /api/cron/working-orders` with `Authorization: Bearer <CRON_SECRET>`, but only while an order is waiting. Set up once with `scripts/working-orders-cron.sql`.
 - As a backup, after dashboard loads and new placements, at most once every 30 seconds per server instance.
 
 Runs may overlap; each order fills at most once. A fill re-checks under the team lock that the order is still waiting, and uses the exact quote that triggered it.
@@ -118,7 +118,7 @@ Runs may overlap; each order fills at most once. A fill re-checks under the team
 2. Deploy the code with `LUBAN_ENABLE_WORKING_ORDERS` unset. Nothing changes for students.
 3. Generate a long random secret, set it as `CRON_SECRET` in Vercel Production, and redeploy.
 4. In the Supabase SQL editor (pg_cron and pg_net enabled), run `scripts/working-orders-cron.sql` with `<CRON_SECRET>` replaced by the same value.
-5. Try the orders from an admin sandbox: a limit buy far below the market stays waiting and can be cancelled; one above the market fills within a minute. `cron.job_run_details` should show calls while it waits.
+5. Try the orders from an admin sandbox: a limit buy far below the market stays waiting and can be cancelled; one above the market fills within 3 minutes. `cron.job_run_details` should show calls while it waits.
 6. Publish the updated contest rules and email participants with the start time.
 7. At that time, set `LUBAN_ENABLE_WORKING_ORDERS=true` in Vercel Production and redeploy.
 

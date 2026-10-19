@@ -14,6 +14,7 @@ import {
   ApiError,
   handleRouteError,
   json,
+  PRIVATE_CACHE_30S,
   requireAuthenticatedUser,
 } from "../../_lib/http";
 
@@ -85,7 +86,10 @@ export async function GET(request: Request): Promise<Response> {
       undefined,
       { interval: intervalValue, from, to },
     );
-    return json({ quote: withBuyRules(quote), history });
+    return json(
+      { quote: withBuyRules(quote), history },
+      { headers: PRIVATE_CACHE_30S },
+    );
   } catch (error) {
     return handleRouteError(error);
   }

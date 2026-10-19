@@ -1,6 +1,6 @@
 {
   "name": "luban-sim",
-  "version": "1.51.1",
+  "version": "1.51.2",
   "description": "A collaborative, real-market-data paper-trading simulator for student teams.",
   "private": true,
   "repository": {

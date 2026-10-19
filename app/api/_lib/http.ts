@@ -22,6 +22,16 @@ const NO_STORE_HEADERS = {
   "X-Content-Type-Options": "nosniff",
 } as const;
 
+/**
+ * Lets the browser reuse a per-user response for 30 s. Expires and Pragma are
+ * cleared so the no-store defaults don't contradict max-age.
+ */
+export const PRIVATE_CACHE_30S = {
+  "Cache-Control": "private, max-age=30",
+  Expires: "",
+  Pragma: "",
+};
+
 export const SESSION_MAX_AGE_SECONDS = SESSION_TTL_SECONDS;
 
 type SessionUser = NonNullable<Awaited<ReturnType<typeof getSessionFromToken>>>;

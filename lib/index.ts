@@ -132,6 +132,7 @@ export {
   getCompetitionSummary,
   getDashboard,
   recordPortfolioSnapshot,
+  ensureWeekBaselines,
   getLeaderboard,
   getOrderByIdempotencyKey,
   getTeamHoldings,

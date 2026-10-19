@@ -21,7 +21,7 @@ import {
 import { postgresConnectionOptions } from "./postgres-config";
 
 const DEFAULT_DATABASE_PATH = join(process.cwd(), "data", "luban.sqlite");
-const SCHEMA_VERSION = 21;
+const SCHEMA_VERSION = 22;
 /** Map grouping within a sector; "Other" until the feed reports one. */
 const INSTRUMENT_INDUSTRY_COLUMN = "industry TEXT NOT NULL DEFAULT 'Other'";
 
@@ -515,6 +515,12 @@ const SHARED_TABLE_BODIES = {
       payload TEXT NOT NULL,
       published_at TEXT NOT NULL,
       published_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL`,
+  // Each team's total value when a leaderboard week opened; weekly returns count from it.
+  weekly_baselines: (big: string) => `
+      team_id TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+      week_start TEXT NOT NULL,
+      total_value_cents ${big} NOT NULL,
+      PRIMARY KEY (team_id, week_start)`,
 } as const;
 
 const WATCHLIST_INDEXES = [
@@ -776,7 +782,7 @@ export async function runPostgresMigrations(tx: DbExecutor): Promise<void> {
 
   // Tables added after v1: valuation lab (v8), working orders (v12), feedback
   // (v14), watchlists (v15), market cache (v16), claims (v17), announcements (v18),
-  // order rejections (v20), wrapped (v21).
+  // order rejections (v20), wrapped (v21), weekly baselines (v22).
   const backfillValuationAccounts = !relations.has("admin_valuation_accounts");
   for (const [name, body] of Object.entries(SHARED_TABLE_BODIES)) {
     if (!relations.has(name)) {
@@ -933,6 +939,7 @@ async function clearDomainData(
     "admin_valuation_positions",
     "admin_valuation_accounts",
     "portfolio_snapshots",
+    "weekly_baselines",
     "activity_events",
     "ledger_entries",
     "idempotency_records",

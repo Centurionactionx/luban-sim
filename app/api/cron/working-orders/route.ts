@@ -1,4 +1,4 @@
-import { hasOpenWorkingOrders, runWorkingOrders } from "@/lib";
+import { ensureWeekBaselines, hasOpenWorkingOrders, runWorkingOrders } from "@/lib";
 
 import { handleRouteError, isCronAuthorized, json } from "../../_lib/http";
 
@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 /**
- * The price checker, called every minute by Supabase pg_cron (see
+ * The price checker, called every 3 minutes on weekdays by Supabase pg_cron (see
  * scripts/working-orders-cron.sql). It needs `Authorization: Bearer
  * <CRON_SECRET>`; without CRON_SECRET configured it refuses every call.
  */
@@ -19,6 +19,8 @@ async function handle(request: Request): Promise<Response> {
         { status: 401 },
       );
     }
+    // Saves the weekly leaderboard starting point at Monday's open; a no-op after.
+    await ensureWeekBaselines().catch((error) => console.error("Weekly baseline failed", error));
     if (!(await hasOpenWorkingOrders())) {
       return json({ ok: true, idle: true });
     }

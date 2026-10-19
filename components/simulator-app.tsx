@@ -342,6 +342,9 @@ const fallbackLeaderboard: LeaderboardRow[] = [
     totalValueCents: 10000000,
     returnCents: 0,
     returnPercent: 0,
+    weekRank: 1,
+    weekReturnCents: 0,
+    weekReturnPercent: 0,
     tradeCount: 0,
     isCurrentTeam: false,
   },
@@ -353,6 +356,9 @@ const fallbackLeaderboard: LeaderboardRow[] = [
     totalValueCents: 10000000,
     returnCents: 0,
     returnPercent: 0,
+    weekRank: 2,
+    weekReturnCents: 0,
+    weekReturnPercent: 0,
     tradeCount: 0,
     isCurrentTeam: false,
   },
@@ -364,6 +370,9 @@ const fallbackLeaderboard: LeaderboardRow[] = [
     totalValueCents: 10000000,
     returnCents: 0,
     returnPercent: 0,
+    weekRank: 3,
+    weekReturnCents: 0,
+    weekReturnPercent: 0,
     tradeCount: 0,
     isCurrentTeam: false,
   },
@@ -375,6 +384,9 @@ const fallbackLeaderboard: LeaderboardRow[] = [
     totalValueCents: 10000000,
     returnCents: 0,
     returnPercent: 0,
+    weekRank: 4,
+    weekReturnCents: 0,
+    weekReturnPercent: 0,
     tradeCount: 0,
     isCurrentTeam: true,
   },
@@ -2267,10 +2279,12 @@ const TEAM_STATUS_LABELS: Record<LeaderboardRow["teamStatus"], string> = {
  */
 function LeaderboardTable({
   rows,
+  returnLabel,
   canOpenAnyMap,
   onOpenMap,
 }: {
   rows: LeaderboardRow[];
+  returnLabel: string;
   canOpenAnyMap: boolean;
   onOpenMap: (row: LeaderboardRow) => void;
 }) {
@@ -2361,7 +2375,7 @@ function LeaderboardTable({
         <tr>
           <th scope="col">#</th>
           <th scope="col">Team</th>
-          <th scope="col">Return since start</th>
+          <th scope="col">{returnLabel}</th>
           <th scope="col">Value</th>
           {hasMapColumn ? (
             <th scope="col">
@@ -2381,6 +2395,67 @@ function LeaderboardTable({
       ) : null}
     </table>
   );
+}
+
+/* ───────────────────────────── Idle pause ───────────────────────────── */
+
+const FAILED_LOOKUP_TTL_MS = 3 * 60_000;
+type FailedLookups = Map<string, { message: string; at: number }>;
+const rememberFailure = (memo: FailedLookups, symbol: string, message: string) =>
+  memo.set(symbol, { message, at: Date.now() });
+// The remembered message while it is still fresh, else undefined.
+const recentFailure = (memo: FailedLookups, symbol: string) => {
+  const failed = memo.get(symbol);
+  return failed && Date.now() - failed.at < FAILED_LOOKUP_TTL_MS ? failed.message : undefined;
+};
+const IDLE_TIMEOUT_MS = 7 * 60_000;
+// Fired on the first activity after idle so each poller can catch up at once.
+const RESUME_EVENT = "luban:resume";
+// Read by the pollers (outside React state) so a tick never races a render.
+let userIdle = false;
+
+// Idle = no input for IDLE_TIMEOUT_MS, even with the tab visible (the user
+// may be in another window). Returns true while live updates are paused.
+function useUserIdle(): boolean {
+  const [idle, setIdle] = useState(false);
+  useEffect(() => {
+    let last = Date.now();
+    let timer = 0;
+    const arm = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(check, Math.max(0, last + IDLE_TIMEOUT_MS - Date.now()));
+    };
+    const check = () => {
+      if (Date.now() - last < IDLE_TIMEOUT_MS) return arm();
+      userIdle = true;
+      setIdle(true);
+    };
+    const onActivity = () => {
+      const now = Date.now();
+      // Throttled: a mouse move fires dozens of events a second.
+      if (!userIdle && now - last < 1_000) return;
+      last = now;
+      if (!userIdle) return;
+      userIdle = false;
+      setIdle(false);
+      window.dispatchEvent(new Event(RESUME_EVENT));
+      arm();
+    };
+    const onVisible = () => {
+      if (!document.hidden) onActivity();
+    };
+    const events = ["pointermove", "mousemove", "pointerdown", "keydown", "wheel", "scroll", "touchstart", "focus"];
+    for (const name of events) window.addEventListener(name, onActivity, { capture: true, passive: true });
+    document.addEventListener("visibilitychange", onVisible);
+    arm();
+    return () => {
+      window.clearTimeout(timer);
+      for (const name of events) window.removeEventListener(name, onActivity, { capture: true });
+      document.removeEventListener("visibilitychange", onVisible);
+      userIdle = false;
+    };
+  }, []);
+  return idle;
 }
 
 /* ───────────────────────────── Watchlist ───────────────────────────── */
@@ -2458,7 +2533,7 @@ function WatchlistTable({
     let loadedAt = 0;
     const controller = new AbortController();
     const load = () => {
-      if (document.hidden || Date.now() - loadedAt < ttlRef.current) return;
+      if (document.hidden || userIdle || Date.now() - loadedAt < ttlRef.current) return;
       loadedAt = Date.now();
       fetch("/api/quotes/sparklines", {
         cache: "no-store",
@@ -2478,10 +2553,12 @@ function WatchlistTable({
     // Checks each minute but only fetches once the last load has expired.
     const timer = window.setInterval(load, 60_000);
     document.addEventListener("visibilitychange", load);
+    window.addEventListener(RESUME_EVENT, load);
     return () => {
       controller.abort();
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", load);
+      window.removeEventListener(RESUME_EVENT, load);
     };
   }, [symbolKey]);
 
@@ -2765,6 +2842,9 @@ export function SimulatorApp({
   // so a slow lookup for an earlier pick can't land on top of a later one.
   const selectedSymbolRef = useRef(selectedSymbol);
   const selectionRequest = useRef(0);
+  // Symbols the server refused (not tradable, unknown), so a repeat click shows
+  // the same error without another request.
+  const failedLookups = useRef<FailedLookups>(new Map());
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<InstrumentSearchResult[]>([]);
   const [searching, setSearching] = useState(false);
@@ -2800,6 +2880,7 @@ export function SimulatorApp({
     message: "Ready for a simulated order.",
   });
   const [portfolioRange, setPortfolioRange] = useState("7D");
+  const [leaderboardWeekly, setLeaderboardWeekly] = useState(false);
   const [portfolioView, setPortfolioView] = useState<PortfolioView>("holdings");
   const [quoteRange, setQuoteRange] = useState<QuoteRange>("1D");
   // Null means the range's own default bar size.
@@ -3065,6 +3146,7 @@ export function SimulatorApp({
 
   // Nothing can move while every market on the page is shut, so the poll slows.
   const marketsIdle = allMarketsClosed(dashboard.availableSymbols);
+  const updatesPaused = useUserIdle();
   const marketsIdleRef = useRef(marketsIdle);
   useEffect(() => {
     marketsIdleRef.current = marketsIdle;
@@ -3073,10 +3155,10 @@ export function SimulatorApp({
   useEffect(() => {
     if (!sessionReady) return;
     let lastPollAt = 0;
-    // Hidden tabs sit out. The 1 s of slack lets a tick that lands just short
-    // of a full interval still count.
+    // Hidden or idle tabs sit out. The 1 s of slack lets a tick that lands
+    // just short of a full interval still count.
     const pollIfDue = (every: number) => {
-      if (document.hidden || Date.now() - lastPollAt < every - 1_000) return;
+      if (document.hidden || userIdle || Date.now() - lastPollAt < every - 1_000) return;
       lastPollAt = Date.now();
       const refreshMarket =
         lastPollAt - lastMarketRefreshAttemptAt.current >= MARKET_REFRESH_INTERVAL_MS;
@@ -3088,11 +3170,14 @@ export function SimulatorApp({
     const onVisible = () => pollIfDue(TEAM_SYNC_INTERVAL_MS);
     const initial = window.setTimeout(() => pollIfDue(0), 0);
     const interval = window.setInterval(onTick, TEAM_SYNC_INTERVAL_MS);
+    const onResume = () => pollIfDue(0);
     document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener(RESUME_EVENT, onResume);
     return () => {
       window.clearTimeout(initial);
       window.clearInterval(interval);
       document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener(RESUME_EVENT, onResume);
       dashboardRequest.current?.abort();
       dashboardRequest.current = null;
     };
@@ -3117,10 +3202,10 @@ export function SimulatorApp({
           params.set("range", quoteRange);
         }
         if (quoteInterval) params.set("interval", quoteInterval);
+        // The server marks this cacheable for 30 s, so repeat views are free.
         const response = await fetch(
           `/api/quotes/history?${params.toString()}`,
           {
-            cache: "no-store",
             credentials: "same-origin",
             signal: controller.signal,
           },
@@ -3192,7 +3277,16 @@ export function SimulatorApp({
 
   const portfolio = dashboard.portfolio ?? emptyPortfolio;
   const teamVersion = dashboard.team?.version ?? 0;
-  const rows = dashboard.leaderboard;
+  const rows = leaderboardWeekly
+    ? dashboard.leaderboard
+        .map((row) => ({
+          ...row,
+          rank: row.weekRank,
+          returnCents: row.weekReturnCents,
+          returnPercent: row.weekReturnPercent,
+        }))
+        .sort((left, right) => left.rank - right.rank)
+    : dashboard.leaderboard;
   const quotePoints = useMemo(
     () =>
       quoteHistory?.points.map((point) => ({
@@ -3935,14 +4029,25 @@ export function SimulatorApp({
         selectQuote(held);
         return;
       }
+      const failed = recentFailure(failedLookups.current, result.symbol);
+      if (failed) throw new Error(failed);
+      // The server marks this cacheable for 30 s, so the browser may reuse it.
       const response = await fetch(
         `/api/quotes?symbol=${encodeURIComponent(result.symbol)}`,
-        { cache: "no-store", credentials: "same-origin" },
+        { credentials: "same-origin" },
       );
       const payload = (await readJson(response)) as { results?: Quote[] } & ApiErrorShape;
       // Another symbol was picked while this one loaded: that pick wins.
       if (request !== selectionRequest.current) return;
       if (!response.ok) {
+        // "Can't be used" answers repeat identically; network and 5xx errors don't.
+        if (response.status === 404 || response.status === 422) {
+          rememberFailure(
+            failedLookups.current,
+            result.symbol,
+            extractError(payload, `Could not load ${result.symbol}.`),
+          );
+        }
         throw new Error(extractError(payload, `Could not load ${result.symbol}.`));
       }
       const quote = payload.results?.find(
@@ -6750,7 +6855,7 @@ export function SimulatorApp({
               <aside className="order-disclosure">
                 Orders are simulated and fill once at the server’s latest available market
                 snapshot.{workingOrdersEnabled
-                  ? " Waiting orders are checked about once a minute while their market is open."
+                  ? " Waiting orders are checked every few minutes while their market is open."
                   : ""}{" "}
                 No brokerage order is sent. Past performance does not predict future results.
               </aside>
@@ -6838,9 +6943,32 @@ export function SimulatorApp({
               onToggle={() => toggleRailSection("leaderboard")}
               data-flash={syncFlash}
             >
+              <div className="leaderboard-period-row">
+                <span id="leaderboard-period-label">Filter by:</span>
+                <div
+                  className="leaderboard-period"
+                  role="group"
+                  aria-labelledby="leaderboard-period-label"
+                >
+                  {[
+                    { weekly: false, label: "Overall" },
+                    { weekly: true, label: "This week" },
+                  ].map((option) => (
+                    <button
+                      key={option.label}
+                      type="button"
+                      aria-pressed={leaderboardWeekly === option.weekly}
+                      onClick={() => setLeaderboardWeekly(option.weekly)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div className="table-scroll">
                 <LeaderboardTable
                   rows={rows}
+                  returnLabel={leaderboardWeekly ? "Return this week" : "Return since start"}
                   canOpenAnyMap={canManageCompetition}
                   onOpenMap={(row) =>
                     canManageCompetition
@@ -6851,6 +6979,7 @@ export function SimulatorApp({
               </div>
               <p className="snapshot-note">
                 Every team is valued from the same cached market-data snapshot.
+                {leaderboardWeekly ? " Weeks start Monday at the 9:30 a.m. ET open." : null}
               </p>
             </AnimatedRailSection>
 
@@ -6918,6 +7047,11 @@ export function SimulatorApp({
             ? `Shared portfolio updated. ${number.format(teamVersion)} ${teamVersion === 1 ? "update" : "updates"} so far.`
             : ""}
         </div>
+        {updatesPaused ? (
+          <p className="idle-notice" role="status" aria-live="polite">
+            Idle: live updates paused. Move your mouse to resume.
+          </p>
+        ) : null}
       </div>
     </main>
   );
