@@ -770,6 +770,8 @@ export interface SetTeamCashInput {
   actorUserId: string;
   teamId: string;
   cashCents: number;
+  /** Why, added to the ledger note and the admin log. Scripts only; the API doesn't take one. */
+  reason?: string;
 }
 
 /** Sets the authenticated platform administrator's private trading cash. */

@@ -874,6 +874,7 @@ export async function setTeamCash(input: SetTeamCashInput): Promise<AdminOvervie
     const actor = await getSessionUser(input.actorUserId);
     const createdAt = new Date().toISOString();
     const adjustmentCents = cashCents - previousCashCents;
+    const reasonText = input.reason ? ` ${input.reason}` : "";
     await tx.run(
       `
         INSERT INTO ledger_entries (
@@ -885,7 +886,7 @@ export async function setTeamCash(input: SetTeamCashInput): Promise<AdminOvervie
         randomUUID(),
         team.id,
         adjustmentCents,
-        `Host cash adjustment from ${formatCad(previousCashCents)} to ${formatCad(cashCents)}`,
+        `Host cash adjustment from ${formatCad(previousCashCents)} to ${formatCad(cashCents)}${reasonText}`,
         createdAt,
       ],
     );
@@ -902,7 +903,7 @@ export async function setTeamCash(input: SetTeamCashInput): Promise<AdminOvervie
         team.id,
         input.actorUserId,
         `${team.name} cash adjusted`,
-        `${actor?.name ?? "Host"} changed ${team.name}'s cash from ${formatCad(previousCashCents)} to ${formatCad(cashCents)}.`,
+        `${actor?.name ?? "Host"} changed ${team.name}'s cash from ${formatCad(previousCashCents)} to ${formatCad(cashCents)}.${reasonText}`,
         createdAt,
       ],
     );

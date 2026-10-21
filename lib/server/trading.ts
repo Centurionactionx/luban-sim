@@ -21,6 +21,7 @@ import {
   MAX_OPEN_WORKING_ORDERS_PER_TEAM,
   MAX_ORDER_QUANTITY,
   applyFill,
+  shortRoomCents,
 } from "../order-math";
 import {
   assertBracketPrices,
@@ -39,6 +40,9 @@ import {
   normalizeMarketSymbol,
   requireQuote,
 } from "./quotes";
+
+const formatCents = (cents: number) =>
+  new Intl.NumberFormat("en-CA", { style: "currency", currency: "CAD" }).format(cents / 100);
 
 const DEFAULT_MAX_ORDERS_PER_MINUTE = 10;
 const ORDER_RATE_WINDOW_MS = 60_000;
@@ -851,13 +855,29 @@ async function placeOrderNow(input: PlaceOrderInput, options: FillOptions): Prom
             ? quote.priceCadCents
             : (heldPrices.get(row.symbol) ?? Number(row.average_cost_cents));
 
-        if (normalized.side === "BUY") {
-          // A short sale's proceeds are owed back (buying the shares back
-          // costs their current price), so they never fund new buys.
-          const shortLiabilityCents = held.reduce(
-            (total, row) => total + Math.max(0, -Number(row.quantity)) * priceOf(row),
-            0,
+        // A short sale's proceeds are owed back (buying the shares back
+        // costs their current price), so they never fund new buys.
+        const shortLiabilityCents = held.reduce(
+          (total, row) => total + Math.max(0, -Number(row.quantity)) * priceOf(row),
+          0,
+        );
+        if (normalized.action === "SHORT") {
+          const portfolioValueCents = held.reduce(
+            (total, row) => total + Number(row.quantity) * priceOf(row),
+            Number(account.cash_cents),
           );
+          const roomCents = shortRoomCents(portfolioValueCents, shortLiabilityCents);
+          if (openingCents > roomCents) {
+            throw new AppError(
+              "SHORT_LIMIT",
+              `All of a team's shorts together can be worth at most its portfolio value. ` +
+                `This short is ${formatCents(openingCents)}; there's room for ${formatCents(roomCents)}.`,
+              409,
+              { availableCents: roomCents, requiredCents: openingCents, shortLiabilityCents },
+            );
+          }
+        }
+        if (normalized.side === "BUY") {
           const buyingPowerCents =
             Number(account.cash_cents) - reservations.cashCents - shortLiabilityCents;
           if (openingCents > buyingPowerCents) {

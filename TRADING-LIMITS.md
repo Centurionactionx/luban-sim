@@ -34,6 +34,7 @@ Hitting a limit returns `429 ORDER_RATE_LIMITED`, with how long to wait.
 | Different listings | 25 per team, counting holdings and waiting buys |
 | Buying power | cash, minus cash set aside for waiting buys, minus what it would cost to buy back open shorts |
 | Long and short | a team can't be long and short the same listing; close one side first |
+| Short size | all of a team's shorts together can be worth at most its portfolio value (`SHORT_LIMIT`); covering is never capped |
 
 Money from a short sale is owed back, so it never pays for new buys.
 

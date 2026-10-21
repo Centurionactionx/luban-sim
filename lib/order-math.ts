@@ -24,6 +24,15 @@ export function holdingsLimitReached(symbols: Iterable<string>, symbol: string):
   return !distinct.has(symbol) && distinct.size >= MAX_DISTINCT_HOLDINGS_PER_TEAM;
 }
 
+/**
+ * How much more a team can short, CAD cents: all its shorts together can be
+ * worth at most its portfolio value (cash plus holdings, shorts counted
+ * negative). About what a real 50% margin account allows.
+ */
+export function shortRoomCents(portfolioValueCents: number, shortLiabilityCents: number): number {
+  return Math.max(0, portfolioValueCents - shortLiabilityCents);
+}
+
 /** A holding: positive quantity is long, negative is short. */
 export interface Position {
   quantity: number;
