@@ -64,7 +64,6 @@ import {
   MAX_ORDER_QUANTITY,
   priceInputToCents,
   reservedCadCentsPerUnit,
-  shortRoomCents,
 } from "@/lib/order-math";
 import {
   DEFAULT_QUOTE_INTERVAL,
@@ -3546,7 +3545,7 @@ export function SimulatorApp({
   const quoteLoaded =
     connection === "connected" &&
     !(selectedQuote.source === "LUBAN_SIMULATED" && selectedQuote.isStale);
-  const shortRoom = shortRoomCents(portfolio.totalValueCents, portfolio.shortLiabilityCents);
+  const shortRoom = Math.max(0, portfolio.buyingPowerCents);
   // What a buy leaves to spend; null until there's a total to subtract.
   const receiptCashLeft =
     action === "BUY" && quoteLoaded && quantityIsValid && (!isWaitingOrder || triggerPriceCents !== null)
@@ -3611,7 +3610,7 @@ export function SimulatorApp({
                           ? `The ${accountName} isn't short ${selectedQuote.symbol}.`
                           : `The ${accountName} is short only ${number.format(shortQuantity)} ${unitWord(selectedAssetClass, shortQuantity)} of ${selectedQuote.symbol}.`
                       : action === "SHORT" && quoteLoaded && quantityIsValid && estimatedValue > shortRoom
-                        ? `All of the ${accountName}'s shorts together can be worth at most its portfolio value. There's room for ${formatMoney(shortRoom)} more.`
+                        ? `The ${accountName}'s longs and shorts together can be worth at most its portfolio value. There's room for ${formatMoney(shortRoom)} more.`
                       : receiptCashLeft !== null && receiptCashLeft < 0
                         ? `This order is larger than the ${accountName}'s available cash${
                             portfolio.reservedCashCents > 0
@@ -3619,7 +3618,7 @@ export function SimulatorApp({
                               : ""
                           }${
                             portfolio.shortLiabilityCents > 0
-                              ? `. Cash from short sales is owed back, so it can't fund buys`
+                              ? `. Cash from short sales is owed back, and open shorts use up buying power too`
                               : ""
                           }.`
                         : action === "SELL" && wholeQuantity > freeQuantity

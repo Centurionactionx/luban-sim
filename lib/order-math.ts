@@ -25,12 +25,17 @@ export function holdingsLimitReached(symbols: Iterable<string>, symbol: string):
 }
 
 /**
- * How much more a team can short, CAD cents: all its shorts together can be
- * worth at most its portfolio value (cash plus holdings, shorts counted
- * negative). About what a real 50% margin account allows.
+ * What a team can still put into new buys or new shorts, CAD cents: longs and
+ * shorts together can be worth at most its portfolio value. A short's proceeds
+ * sit in cash but are owed back, and the short itself uses up the same amount
+ * again, so each short counts twice. With no shorts this is just free cash.
  */
-export function shortRoomCents(portfolioValueCents: number, shortLiabilityCents: number): number {
-  return Math.max(0, portfolioValueCents - shortLiabilityCents);
+export function buyingPowerCents(
+  cashCents: number,
+  reservedCashCents: number,
+  shortLiabilityCents: number,
+): number {
+  return cashCents - reservedCashCents - 2 * shortLiabilityCents;
 }
 
 /** A holding: positive quantity is long, negative is short. */

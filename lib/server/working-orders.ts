@@ -13,6 +13,7 @@ import { AppError } from "../errors";
 import { cryptoTokenSymbol, lotSizeFromExponent, unitWord } from "../lots";
 import { workingOrderExpiresAt } from "../market-calendar";
 import {
+  buyingPowerCents,
   MAX_OPEN_WORKING_ORDERS_PER_TEAM,
   MAX_ORDER_QUANTITY,
   reservedCadCentsPerUnit,
@@ -493,7 +494,12 @@ async function placeWorkingOrderNow(input: PlaceWorkingOrderInput): Promise<Work
     }
     if (order.side === "BUY") {
       if (account.role !== "platform_admin") await assertHoldingSlot(tx, teamId, order.symbol);
-      const spendable = Number(account.cash_cents) - reservations.cashCents;
+      // shortcut: shorts valued at their sale price, not a live quote; the fill re-checks at market.
+      const shorts = await tx.get<{ cents: number }>(
+        "SELECT COALESCE(SUM(-quantity * average_cost_cents), 0) AS cents FROM holdings WHERE team_id = ? AND quantity < 0",
+        [teamId],
+      );
+      const spendable = buyingPowerCents(Number(account.cash_cents), reservations.cashCents, Number(shorts?.cents ?? 0));
       if (reservedCashCents > spendable) {
         throw new AppError(
           "INSUFFICIENT_CASH",

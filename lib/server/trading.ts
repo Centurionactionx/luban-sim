@@ -21,7 +21,7 @@ import {
   MAX_OPEN_WORKING_ORDERS_PER_TEAM,
   MAX_ORDER_QUANTITY,
   applyFill,
-  shortRoomCents,
+  buyingPowerCents as tradeRoomCents,
 } from "../order-math";
 import {
   assertBracketPrices,
@@ -856,30 +856,27 @@ async function placeOrderNow(input: PlaceOrderInput, options: FillOptions): Prom
             : (heldPrices.get(row.symbol) ?? Number(row.average_cost_cents));
 
         // A short sale's proceeds are owed back (buying the shares back
-        // costs their current price), so they never fund new buys.
+        // costs their current price), so they never fund new buys, and buys
+        // and shorts draw on the same buying power.
         const shortLiabilityCents = held.reduce(
           (total, row) => total + Math.max(0, -Number(row.quantity)) * priceOf(row),
           0,
         );
-        if (normalized.action === "SHORT") {
-          const portfolioValueCents = held.reduce(
-            (total, row) => total + Number(row.quantity) * priceOf(row),
-            Number(account.cash_cents),
+        const buyingPowerCents = tradeRoomCents(
+          Number(account.cash_cents),
+          reservations.cashCents,
+          shortLiabilityCents,
+        );
+        if (normalized.action === "SHORT" && openingCents > buyingPowerCents) {
+          throw new AppError(
+            "SHORT_LIMIT",
+            `A team's longs and shorts together can be worth at most its portfolio value. ` +
+              `This short is ${formatCents(openingCents)}; there's room for ${formatCents(Math.max(0, buyingPowerCents))}.`,
+            409,
+            { availableCents: buyingPowerCents, requiredCents: openingCents, shortLiabilityCents },
           );
-          const roomCents = shortRoomCents(portfolioValueCents, shortLiabilityCents);
-          if (openingCents > roomCents) {
-            throw new AppError(
-              "SHORT_LIMIT",
-              `All of a team's shorts together can be worth at most its portfolio value. ` +
-                `This short is ${formatCents(openingCents)}; there's room for ${formatCents(roomCents)}.`,
-              409,
-              { availableCents: roomCents, requiredCents: openingCents, shortLiabilityCents },
-            );
-          }
         }
         if (normalized.side === "BUY") {
-          const buyingPowerCents =
-            Number(account.cash_cents) - reservations.cashCents - shortLiabilityCents;
           if (openingCents > buyingPowerCents) {
             throw new AppError(
               "INSUFFICIENT_CASH",
@@ -890,7 +887,7 @@ async function placeOrderNow(input: PlaceOrderInput, options: FillOptions): Prom
                   ? " Some cash is set aside for waiting orders."
                   : "") +
                 (shortLiabilityCents > 0
-                  ? " Cash from short sales is owed back, so it can't fund buys."
+                  ? " Cash from short sales is owed back, and open shorts use up buying power too."
                   : ""),
               409,
               {

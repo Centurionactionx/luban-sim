@@ -23,7 +23,7 @@ import type {
   TradeSide,
 } from "../contracts";
 import { AppError } from "../errors";
-import { applyFill, type Position } from "../order-math";
+import { applyFill, buyingPowerCents, type Position } from "../order-math";
 import { getAdminTradingTeamId } from "./admin-trading";
 import { getSessionUser } from "./auth";
 import type { DbExecutor } from "./database";
@@ -479,9 +479,7 @@ export async function calculatePortfolio(
           : 0,
       dayChangeCents,
       dayChangePercent: roundPercent(dayChangeCents, priorValueCents),
-      // Cash set aside for waiting buy orders can't be spent twice, and short
-      // sale proceeds are owed back (at today's price), so neither funds buys.
-      buyingPowerCents: cashCents - reservedCashCents - shortLiabilityCents,
+      buyingPowerCents: buyingPowerCents(cashCents, reservedCashCents, shortLiabilityCents),
       shortLiabilityCents,
       reservedCashCents,
       unrealizedGainCents,
